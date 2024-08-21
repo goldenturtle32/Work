@@ -3,7 +3,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { View, Text, ActivityIndicator } from 'react-native';
-import { getUserProfile } from '../services/firestoreService';
+import { getUserProfile } from 'C:/Users/joeke/Desktop/Python/Work/src/services/firestoreService';
+//import { getUserProfile } from '../services/firestoreService';
 import auth from '@react-native-firebase/auth';
 
 export default function ProfileScreen() {

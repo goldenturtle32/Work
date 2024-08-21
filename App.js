@@ -3,12 +3,12 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import auth from '@react-native-firebase/auth';
 
-import HomeScreen from './screens/HomeScreen';
-import ProfileScreen from './screens/ProfileScreen';
-import JobDetailScreen from './screens/JobDetailScreen';
-import Login from './screens/Login'; // Authentication screen
-import SignUp from './screens/SignUp'; // Authentication screen
-import ForgotPassword from './screens/ForgotPassword'; // Password recovery screen
+import HomeScreen from 'C:/Users/joeke/Desktop/Python/Work/src/screens/HomeScreen';
+import ProfileScreen from 'C:/Users/joeke/Desktop/Python/Work/src/screens/ProfileScreen';
+import JobDetailScreen from 'C:/Users/joeke/Desktop/Python/Work/src/screens/JobDetailScreen';
+import Login from 'C:/Users/joeke/Desktop/Python/Work/src/screens/Login'; // Authentication screen
+import SignUp from 'C:/Users/joeke/Desktop/Python/Work/src/screens/SignUp'; // Authentication screen
+import ForgotPassword from 'C:/Users/joeke/Desktop/Python/Work/src/screens/ForgotPassword'; // Password recovery screen
 
 const Stack = createStackNavigator();
 
