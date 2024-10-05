@@ -1,17 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  ActivityIndicator, 
-  View, 
-  StyleSheet, 
-  LogBox 
-} from 'react-native';
+import { ActivityIndicator, View, StyleSheet, LogBox } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 
 // Import Auth Screens
 import LoginScreen from './src/screens/LoginScreen';
 import SignUpScreen from './src/screens/SignUpScreen';
-import AttributeSelectionScreen from './src/screens/AttributeSelectionScreen'; 
+import AttributeSelectionScreen from './src/screens/AttributeSelectionScreen'; // Import AttributeSelectionScreen
 
 // Import App Screens
 import HomeScreen from './src/screens/HomeScreen';
@@ -21,8 +16,8 @@ import MatchesScreen from './src/screens/MatchesScreen';
 import JobList from './src/components/JobList';
 import JobDetailScreen from './src/screens/JobDetailScreen';
 import AvailabilityScreen from './src/screens/AvailabilityScreen';
-import PaymentScreen from './src/screens/PaymentScreen';
-import ChatScreen from './src/screens/ChatScreen'; 
+import PaymentScreen from './src/screens/PaymentScreen'; // Add PaymentScreen
+import ChatScreen from './src/screens/ChatScreen'; // Import ChatScreen
 
 // Import Firebase Auth from firebase.js
 import { auth } from './src/firebase';
@@ -41,6 +36,11 @@ const AuthStack = () => (
       name="SignUp" 
       component={SignUpScreen} 
       options={{ headerShown: false }}
+    />
+    <Stack.Screen 
+      name="AttributeSelection" 
+      component={AttributeSelectionScreen} // Add this screen
+      options={{ headerShown: false }} // Modify options as needed
     />
   </Stack.Navigator>
 );
@@ -93,22 +93,17 @@ const AppStack = () => (
       component={ChatScreen} 
       options={{ title: 'Chat' }}
     />
-    <Stack.Screen 
-      name="AttributeSelection" 
-      component={AttributeSelectionScreen} 
-      options={{ headerShown: false }} 
-    />
   </Stack.Navigator>
 );
 
 export default function App() {
+  // Ignore specific warnings temporarily
   useEffect(() => {
     LogBox.ignoreLogs(['Setting a timer']);
   }, []);
 
   const [initializing, setInitializing] = useState(true);
   const [user, setUser] = useState(null);
-  const [fromSignUp, setFromSignUp] = useState(false);
 
   // Handle user state changes
   function onAuthStateChanged(user) {
@@ -131,26 +126,7 @@ export default function App() {
 
   return (
     <NavigationContainer>
-      {user ? 
-        (!fromSignUp ? 
-          <AppStack /> 
-          : 
-          <Stack.Navigator initialRouteName="AttributeSelection">
-            <Stack.Screen 
-              name="AttributeSelection" 
-              component={AttributeSelectionScreen} 
-              options={{ headerShown: false }} 
-            />
-            <Stack.Screen 
-              name="Home" 
-              component={HomeScreen} 
-              options={{ headerShown: false }}
-            />
-          </Stack.Navigator>
-        ) 
-        : 
-        <AuthStack />
-      }
+      {user ? <AppStack /> : <AuthStack />}
     </NavigationContainer>
   );
 }

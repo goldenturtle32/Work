@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Dimensions, TouchableOpacity, ActivityIndicator, Alert, Button } from 'react-native';
 import Swiper from 'react-native-deck-swiper';
-import { db, auth } from '../firebase'; // Corrected import path assuming firebase.js is in the parent directory
+import { db } from '../firebase'; // Corrected import path assuming firebase.js is in the parent directory
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
