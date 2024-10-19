@@ -1,0 +1,22 @@
+{
+  "name": "Work",
+  "displayName": "Work",
+  "platforms": ["ios", "android", "web"],
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "59cca999-2f62-41c3-bf71-d3397d20c6c3"
+      }
+    },
+    "owner": "goldenturtle",
+    "slug": "work2",
+    "android": {
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+    },
+    "ios": {
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "This app requires access to your location to show nearby jobs."
+      }
+    }
+  }
+}
