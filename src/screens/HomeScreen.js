@@ -7,6 +7,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Job from '../models/Job';
 import User from '../models/User';
 import UserJobPreference from '../models/UserJobPreference';  // Import UserJobPreference
+import { calculateMatchScore } from '../matching/matchAlgorithm';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -23,18 +24,28 @@ export default function HomeScreen({ navigation }) {
       try {
         const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
         const userData = userDoc.data();
-        setCurrentUser(new User({ uid: userDoc.id, ...userData }));
+        const currentUser = new User({ uid: userDoc.id, ...userData });
+        setCurrentUser(currentUser);
 
+        let itemsData = [];
         if (userData.role === 'worker') {
           const jobAttributesSnapshot = await db.collection('job_attributes').get();
-          const jobsData = jobAttributesSnapshot.docs.map(doc => new Job({ id: doc.id, ...doc.data() }));
-          setItems(jobsData);
+          itemsData = jobAttributesSnapshot.docs.map(doc => new Job({ id: doc.id, ...doc.data() }));
         } else if (userData.role === 'employer') {
           const userAttributesSnapshot = await db.collection('user_attributes')
             .where('role', '==', 'worker').get();
-          const candidatesData = userAttributesSnapshot.docs.map(doc => new User({ uid: doc.id, ...doc.data() }));
-          setItems(candidatesData);
+          itemsData = userAttributesSnapshot.docs.map(doc => new User({ uid: doc.id, ...doc.data() }));
         }
+
+        // Calculate match scores and sort items
+        const scoredItems = itemsData.map(item => ({
+          item,
+          score: calculateMatchScore(currentUser, item).userToJobScore
+        }));
+
+        scoredItems.sort((a, b) => b.score - a.score);
+
+        setItems(scoredItems.map(scoredItem => scoredItem.item));
       } catch (error) {
         console.error("Error fetching data:", error);
         setError(`Failed to fetch data: ${error.message}`);
@@ -55,7 +66,9 @@ export default function HomeScreen({ navigation }) {
     console.log(`Current user: ${currentUserUid}, role: ${currentUser.role}`);
 
     try {
-      let matchId, matchData, userJobPrefData;
+      let matchId, matchData;
+      const itemType = currentUser.role === 'worker' ? 'job' : 'worker';
+
       if (currentUser.role === 'worker') {
         matchId = `${currentUserUid}_${itemId}`;
         matchData = {
@@ -63,15 +76,6 @@ export default function HomeScreen({ navigation }) {
           workerId: currentUserUid,
           employerId: itemId,
         };
-        userJobPrefData = new UserJobPreference({
-          userId: currentUserUid,
-          preferences: {
-            [itemId]: {
-              interested: true,
-              timestamp: firebase.firestore.FieldValue.serverTimestamp()
-            }
-          }
-        });
       } else if (currentUser.role === 'employer') {
         matchId = `${itemId}_${currentUserUid}`;
         matchData = {
@@ -79,35 +83,32 @@ export default function HomeScreen({ navigation }) {
           workerId: itemId,
           employerId: currentUserUid,
         };
-        userJobPrefData = new UserJobPreference({
-          userId: currentUserUid,
-          preferences: {
-            [itemId]: {
-              interested: true,
-              timestamp: firebase.firestore.FieldValue.serverTimestamp()
-            }
-          }
-        });
       }
 
       console.log(`Attempting to save match with ID: ${matchId}`);
       console.log('Match data:', matchData);
 
       const matchRef = db.collection('matches').doc(matchId);
-      await matchRef.set({
-        ...matchData,
-        timestamp: firebase.firestore.FieldValue.serverTimestamp()
-      }, { merge: true });
+      await matchRef.set(matchData, { merge: true });
 
       console.log('Match saved successfully');
 
-      console.log(`Updating user_job_preferences for user: ${currentUserUid}`);
-      console.log('User job preference data:', userJobPrefData);
+      // Update user preferences
+      const userPrefRef = db.collection('user_job_preferences').doc(currentUserUid);
+      const userPrefDoc = await userPrefRef.get();
 
-      // Update user_job_preferences
-      await db.collection('user_job_preferences').doc(currentUserUid).set(userJobPrefData.preferences, { merge: true });
+      let userPref;
+      if (userPrefDoc.exists) {
+        userPref = new UserJobPreference(userPrefDoc.data());
+      } else {
+        userPref = new UserJobPreference({ userId: currentUserUid, role: currentUser.role });
+      }
 
-      console.log('User job preferences updated successfully');
+      userPref.addPreference(itemId, true, itemType);
+
+      await userPrefRef.set(userPref, { merge: true });
+
+      console.log('User preferences updated successfully');
 
       const matchDoc = await matchRef.get();
       const existingMatchData = matchDoc.data();

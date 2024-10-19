@@ -51,6 +51,11 @@ export const calculateMatchScore = (user, job) => {
     jobToUserScore += 5;
   }
 
+  // Availability Match
+  const availabilityScore = calculateAvailabilityScore(user.availability, job.availability);
+  userToJobScore += availabilityScore;
+  jobToUserScore += availabilityScore;
+
   return { userToJobScore, jobToUserScore };
 };
 
@@ -104,4 +109,62 @@ const getDistanceFromLatLonInKm = (lat1, lon1, lat2, lon2) => {
 
 const deg2rad = (deg) => {
   return deg * (Math.PI/180);
+};
+
+const calculateAvailabilityScore = (userAvailability, jobAvailability) => {
+  let score = 0;
+  const maxScore = 20; // Maximum score for availability match
+
+  // Convert availabilities to a common format for easier comparison
+  const userSlots = flattenAvailability(userAvailability);
+  const jobSlots = flattenAvailability(jobAvailability);
+
+  // Compare each job slot with user slots
+  jobSlots.forEach(jobSlot => {
+    const matchingUserSlot = userSlots.find(userSlot => 
+      isSameDay(jobSlot.date, userSlot.date) && 
+      isOverlapping(jobSlot, userSlot)
+    );
+
+    if (matchingUserSlot) {
+      // Calculate overlap percentage
+      const overlapPercentage = calculateOverlapPercentage(jobSlot, matchingUserSlot);
+      score += (overlapPercentage / 100) * (maxScore / jobSlots.length);
+    }
+  });
+
+  return Math.min(score, maxScore); // Cap the score at maxScore
+};
+
+const flattenAvailability = (availability) => {
+  return Object.entries(availability).flatMap(([date, dayData]) => 
+    dayData.slots.map(slot => ({
+      date: new Date(date),
+      startTime: new Date(`${date}T${slot.startTime}`),
+      endTime: new Date(`${date}T${slot.endTime}`),
+      repeatType: dayData.repeatType
+    }))
+  );
+};
+
+const isSameDay = (date1, date2) => {
+  return date1.getFullYear() === date2.getFullYear() &&
+         date1.getMonth() === date2.getMonth() &&
+         date1.getDate() === date2.getDate();
+};
+
+const isOverlapping = (slot1, slot2) => {
+  return slot1.startTime < slot2.endTime && slot2.startTime < slot1.endTime;
+};
+
+const calculateOverlapPercentage = (slot1, slot2) => {
+  const overlapStart = new Date(Math.max(slot1.startTime, slot2.startTime));
+  const overlapEnd = new Date(Math.min(slot1.endTime, slot2.endTime));
+  const overlapDuration = overlapEnd - overlapStart;
+
+  const slot1Duration = slot1.endTime - slot1.startTime;
+  const slot2Duration = slot2.endTime - slot2.startTime;
+
+  const overlapPercentage = (overlapDuration / Math.min(slot1Duration, slot2Duration)) * 100;
+  return Math.round(overlapPercentage);
 };

@@ -13,6 +13,7 @@ export default class Job {
     this.salaryRange = this.parseSalaryRange(data.salaryRange);
     this.requiredAvailability = this.parseArray(data.requiredAvailability);
     this.estimatedHours = this.parseNumber(data.estimatedHours);
+    this.availability = this.parseAvailability(data.availability);
   }
 
   parseArray(value) {
@@ -34,5 +35,20 @@ export default class Job {
   parseNumber(value) {
     const parsed = parseFloat(value);
     return isNaN(parsed) ? 0 : parsed;
+  }
+
+  parseAvailability(availability) {
+    if (typeof availability === 'object' && availability !== null) {
+      return Object.entries(availability).reduce((acc, [date, dayData]) => {
+        acc[date] = {
+          repeatType: dayData.repeatType || 'none',
+          slots: Array.isArray(dayData.slots) ? dayData.slots.map(
+            slot => ({ ...slot, id: slot.id || '' })
+          ) : []
+        };
+        return acc;
+      }, {});
+    }
+    return {};
   }
 }

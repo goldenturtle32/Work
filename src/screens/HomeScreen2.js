@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Dimensions, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import Swiper from 'react-native-deck-swiper';
-import { db, auth } from '../firebase';
+import { db, auth, firebase } from '../firebase';  // Import firebase
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Job from '../models/Job';
 import User from '../models/User';
+import UserJobPreference from '../models/UserJobPreference';  // Import UserJobPreference
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -50,6 +51,9 @@ export default function HomeScreen({ navigation }) {
     const currentUserUid = auth.currentUser.uid;
     const itemId = item.id || item.uid;
     
+    console.log(`Swiped right on item: ${itemId}`);
+    console.log(`Current user: ${currentUserUid}, role: ${currentUser.role}`);
+
     try {
       let matchId, matchData, userJobPrefData;
       if (currentUser.role === 'worker') {
@@ -59,12 +63,15 @@ export default function HomeScreen({ navigation }) {
           workerId: currentUserUid,
           employerId: itemId,
         };
-        userJobPrefData = {
-          [itemId]: {
-            interested: true,
-            timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        userJobPrefData = new UserJobPreference({
+          userId: currentUserUid,
+          preferences: {
+            [itemId]: {
+              interested: true,
+              timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            }
           }
-        };
+        });
       } else if (currentUser.role === 'employer') {
         matchId = `${itemId}_${currentUserUid}`;
         matchData = {
@@ -72,13 +79,19 @@ export default function HomeScreen({ navigation }) {
           workerId: itemId,
           employerId: currentUserUid,
         };
-        userJobPrefData = {
-          [itemId]: {
-            interested: true,
-            timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        userJobPrefData = new UserJobPreference({
+          userId: currentUserUid,
+          preferences: {
+            [itemId]: {
+              interested: true,
+              timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            }
           }
-        };
+        });
       }
+
+      console.log(`Attempting to save match with ID: ${matchId}`);
+      console.log('Match data:', matchData);
 
       const matchRef = db.collection('matches').doc(matchId);
       await matchRef.set({
@@ -86,16 +99,25 @@ export default function HomeScreen({ navigation }) {
         timestamp: firebase.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
 
+      console.log('Match saved successfully');
+
+      console.log(`Updating user_job_preferences for user: ${currentUserUid}`);
+      console.log('User job preference data:', userJobPrefData);
+
       // Update user_job_preferences
-      await db.collection('user_job_preferences').doc(currentUserUid).set(userJobPrefData, { merge: true });
+      await db.collection('user_job_preferences').doc(currentUserUid).set(userJobPrefData.preferences, { merge: true });
+
+      console.log('User job preferences updated successfully');
 
       const matchDoc = await matchRef.get();
       const existingMatchData = matchDoc.data();
       if (existingMatchData.worker && existingMatchData.employer) {
+        console.log("It's a match!");
         Alert.alert("It's a Match!", "You've matched with this job/candidate!");
       }
     } catch (error) {
       console.error("Error saving match:", error);
+      Alert.alert('Error', 'Failed to save match. Please try again.');
     }
   };
 
