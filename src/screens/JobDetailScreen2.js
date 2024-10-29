@@ -8,7 +8,7 @@ import User from '../models/User';
 import FirebaseUser from '../models/FirebaseUser';
 
 export default function JobDetailsScreen({ route, navigation }) {
-  const { itemId, userData } = route.params;
+  const { itemId, itemType, currentUserData } = route.params;
   const [item, setItem] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   const [matchScore, setMatchScore] = useState(null);
@@ -18,10 +18,10 @@ export default function JobDetailsScreen({ route, navigation }) {
     const fetchDetails = async () => {
       try {
         // Set current user
-        setCurrentUser(new FirebaseUser(userData));
+        setCurrentUser(new FirebaseUser(currentUserData));
 
         let itemDoc;
-        if (userData.role === 'worker') {
+        if (itemType === 'job') {
           // Fetch job_attributes for the employer
           itemDoc = await db.collection('job_attributes').doc(itemId).get();
           if (itemDoc.exists) {
@@ -29,7 +29,7 @@ export default function JobDetailsScreen({ route, navigation }) {
           } else {
             throw new Error('Job not found');
           }
-        } else if (userData.role === 'employer') {
+        } else if (itemType === 'worker') {
           // Fetch user_attributes for the worker
           itemDoc = await db.collection('user_attributes').doc(itemId).get();
           if (itemDoc.exists) {
@@ -41,7 +41,7 @@ export default function JobDetailsScreen({ route, navigation }) {
 
         // Calculate match score
         if (itemDoc.exists) {
-          const { totalScore } = calculateMatch(userData, itemDoc.data());
+          const { totalScore } = calculateMatch(currentUserData, itemDoc.data());
           setMatchScore(totalScore);
         }
 
@@ -54,12 +54,12 @@ export default function JobDetailsScreen({ route, navigation }) {
     };
 
     fetchDetails();
-  }, [itemId, userData]);
+  }, [itemId, itemType, currentUserData]);
 
   const renderDetails = () => {
     if (!item) return null;
 
-    if (currentUser.role === 'worker') {
+    if (itemType === 'job') {
       // Display job_attributes
       return (
         <>

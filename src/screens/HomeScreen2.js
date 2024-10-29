@@ -50,7 +50,7 @@ export default function HomeScreen({ navigation }) {
     const item = items[cardIndex];
     const currentUserUid = auth.currentUser.uid;
     const itemId = item.id || item.uid;
-    
+
     console.log(`Swiped right on item: ${itemId}`);
     console.log(`Current user: ${currentUserUid}, role: ${currentUser.role}`);
 
@@ -65,50 +65,40 @@ export default function HomeScreen({ navigation }) {
         };
         userJobPrefData = new UserJobPreference({
           userId: currentUserUid,
-          preferences: {
-            [itemId]: {
-              interested: true,
-              timestamp: firebase.firestore.FieldValue.serverTimestamp()
-            }
-          }
+          role: 'worker',
+          swipedUserId: itemId,
+          interested: true,
         });
       } else if (currentUser.role === 'employer') {
         matchId = `${itemId}_${currentUserUid}`;
         matchData = {
           employer: true,
-          workerId: itemId,
           employerId: currentUserUid,
+          workerId: itemId,
         };
         userJobPrefData = new UserJobPreference({
           userId: currentUserUid,
-          preferences: {
-            [itemId]: {
-              interested: true,
-              timestamp: firebase.firestore.FieldValue.serverTimestamp()
-            }
-          }
+          role: 'employer',
+          swipedUserId: itemId,
+          interested: true,
         });
       }
 
-      console.log(`Attempting to save match with ID: ${matchId}`);
-      console.log('Match data:', matchData);
-
+      // Save match data
       const matchRef = db.collection('matches').doc(matchId);
       await matchRef.set({
         ...matchData,
         timestamp: firebase.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
 
-      console.log('Match saved successfully');
-
-      console.log(`Updating user_job_preferences for user: ${currentUserUid}`);
-      console.log('User job preference data:', userJobPrefData);
-
       // Update user_job_preferences
-      await db.collection('user_job_preferences').doc(currentUserUid).set(userJobPrefData.preferences, { merge: true });
+      await db.collection('user_job_preferences').doc(currentUserUid).set({
+        [itemId]: userJobPrefData
+      }, { merge: true });
 
       console.log('User job preferences updated successfully');
 
+      // Check if it's a mutual match
       const matchDoc = await matchRef.get();
       const existingMatchData = matchDoc.data();
       if (existingMatchData.worker && existingMatchData.employer) {

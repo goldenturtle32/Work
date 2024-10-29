@@ -33,13 +33,15 @@ export default function ProfileScreen({ navigation }) {
       },
       onPanResponderMove: (_, gestureState) => {
         const { moveX } = gestureState;
-        const buttonWidth = 300 / 3; // Assuming the total width of the selector is 300
-        const currentButtonIndex = Math.floor(moveX / buttonWidth);
-        
+        const totalWidth = 300; // Adjust this value based on your layout
+        const buttonWidth = totalWidth / 3;
+        const currentIndex = Math.floor(moveX / buttonWidth);
+        const middleIndex = 1;
+
         if (
-          (currentButtonIndex === 0 && gestureState.dx > 0) ||
-          (currentButtonIndex === 1) ||
-          (currentButtonIndex === 2 && gestureState.dx < 0)
+          (currentIndex === 0 && gestureState.dx > 0) ||
+          (currentIndex === 2 && gestureState.dx < 0) ||
+          currentIndex === middleIndex
         ) {
           Animated.event([null, { dx: pan.x }], { useNativeDriver: false })(_, gestureState);
         }
@@ -47,12 +49,14 @@ export default function ProfileScreen({ navigation }) {
       onPanResponderRelease: (_, gestureState) => {
         pan.flattenOffset();
         const { moveX } = gestureState;
-        const buttonWidth = 300 / 3; // Assuming the total width of the selector is 300
-        const currentButtonIndex = Math.floor(moveX / buttonWidth);
-        
-        if (currentButtonIndex !== 1) {
+        const totalWidth = 300; // Adjust this value based on your layout
+        const buttonWidth = totalWidth / 3;
+        const currentIndex = Math.floor(moveX / buttonWidth);
+        const middleIndex = 1;
+
+        if (currentIndex !== middleIndex) {
           const newOrder = [...buttonOrder];
-          [newOrder[currentButtonIndex], newOrder[1]] = [newOrder[1], newOrder[currentButtonIndex]];
+          [newOrder[currentIndex], newOrder[middleIndex]] = [newOrder[middleIndex], newOrder[currentIndex]];
           setButtonOrder(newOrder);
 
           const newImportance = {
@@ -60,7 +64,6 @@ export default function ProfileScreen({ navigation }) {
             [newOrder[1]]: 30,
             [newOrder[2]]: 20,
           };
-          
           setImportance(newImportance);
         }
 

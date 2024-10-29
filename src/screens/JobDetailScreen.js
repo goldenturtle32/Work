@@ -56,63 +56,75 @@ export default function JobDetailsScreen({ route, navigation }) {
     fetchDetails();
   }, [itemId, itemType, currentUserData]);
 
-  const renderDetails = () => {
+  const renderJobDetails = () => {
     if (!item) return null;
 
+    return (
+      <>
+        <Text style={styles.title}>{item.jobTitle}</Text>
+        <Text style={styles.subtitle}>{item.industry}</Text>
+        <Text style={styles.sectionTitle}>Company</Text>
+        <Text style={styles.description}>{item.companyName || 'N/A'}</Text>
+        <Text style={styles.sectionTitle}>Location</Text>
+        <Text style={styles.description}>{item.location}</Text>
+        <Text style={styles.sectionTitle}>Salary</Text>
+        <Text style={styles.description}>{`$${item.salaryRange.min} - $${item.salaryRange.max}`}</Text>
+        <Text style={styles.sectionTitle}>Job Type</Text>
+        <Text style={styles.description}>{item.jobType}</Text>
+        <Text style={styles.sectionTitle}>Job Description</Text>
+        <Text style={styles.description}>{item.jobDescription || 'No description available.'}</Text>
+        <Text style={styles.sectionTitle}>Required Skills</Text>
+        <Text style={styles.description}>{item.requiredSkills.join(', ')}</Text>
+        <Text style={styles.sectionTitle}>Required Experience</Text>
+        <Text style={styles.description}>{`${item.requiredExperience.minYears} years (min), ${item.requiredExperience.preferredYears} years (preferred)`}</Text>
+        <Text style={styles.sectionTitle}>Required Education</Text>
+        <Text style={styles.description}>{item.requiredEducation}</Text>
+        <Text style={styles.sectionTitle}>Required Certifications</Text>
+        <Text style={styles.description}>{item.requiredCertifications.join(', ')}</Text>
+        <Text style={styles.sectionTitle}>Estimated Hours</Text>
+        <Text style={styles.description}>{item.estimatedHours}</Text>
+        <Text style={styles.sectionTitle}>Required Availability</Text>
+        <Text style={styles.description}>{JSON.stringify(item.availability, null, 2)}</Text>
+      </>
+    );
+  };
+
+  const renderUserDetails = () => {
+    if (!item) return null;
+
+    return (
+      <>
+        <Text style={styles.title}>{item.email}</Text>
+        <Text style={styles.subtitle}>{item.role}</Text>
+        <Text style={styles.sectionTitle}>Skills</Text>
+        <Text style={styles.description}>{item.skills.join(', ')}</Text>
+        <Text style={styles.sectionTitle}>Experience</Text>
+        <Text style={styles.description}>{`${item.experience.totalYears} years`}</Text>
+        <Text style={styles.sectionTitle}>Education</Text>
+        <Text style={styles.description}>{item.education}</Text>
+        <Text style={styles.sectionTitle}>Certifications</Text>
+        <Text style={styles.description}>{item.certifications.join(', ')}</Text>
+        <Text style={styles.sectionTitle}>Job Title Preferences</Text>
+        <Text style={styles.description}>{item.jobTitlePrefs.join(', ')}</Text>
+        <Text style={styles.sectionTitle}>Job Type Preferences</Text>
+        <Text style={styles.description}>{item.jobTypePrefs.join(', ')}</Text>
+        <Text style={styles.sectionTitle}>Industry Preferences</Text>
+        <Text style={styles.description}>{item.industryPrefs.join(', ')}</Text>
+        <Text style={styles.sectionTitle}>Salary Preferences</Text>
+        <Text style={styles.description}>{`$${item.salaryPrefs.min} - $${item.salaryPrefs.max}`}</Text>
+        <Text style={styles.sectionTitle}>Category</Text>
+        <Text style={styles.description}>{item.category}</Text>
+        <Text style={styles.sectionTitle}>Average Review</Text>
+        <Text style={styles.description}>{item.reviewsAverage.toFixed(1)}</Text>
+      </>
+    );
+  };
+
+  const renderDetails = () => {
     if (itemType === 'job') {
-      // Display job_attributes
-      return (
-        <>
-          <Text style={styles.title}>{item.jobTitle}</Text>
-          <Text style={styles.subtitle}>{item.industry}</Text>
-          <Text style={styles.sectionTitle}>Location</Text>
-          <Text style={styles.description}>{item.location}</Text>
-          <Text style={styles.sectionTitle}>Required Skills</Text>
-          <Text style={styles.description}>{item.requiredSkills.join(', ')}</Text>
-          <Text style={styles.sectionTitle}>Required Experience</Text>
-          <Text style={styles.description}>{`${item.requiredExperience.minYears} years (min), ${item.requiredExperience.preferredYears} years (preferred)`}</Text>
-          <Text style={styles.sectionTitle}>Required Education</Text>
-          <Text style={styles.description}>{item.requiredEducation}</Text>
-          <Text style={styles.sectionTitle}>Required Certifications</Text>
-          <Text style={styles.description}>{item.requiredCertifications.join(', ')}</Text>
-          <Text style={styles.sectionTitle}>Job Type</Text>
-          <Text style={styles.description}>{item.jobType}</Text>
-          <Text style={styles.sectionTitle}>Salary Range</Text>
-          <Text style={styles.description}>{`$${item.salaryRange.min} - $${item.salaryRange.max}`}</Text>
-          <Text style={styles.sectionTitle}>Estimated Hours</Text>
-          <Text style={styles.description}>{item.estimatedHours}</Text>
-          <Text style={styles.sectionTitle}>Required Availability</Text>
-          <Text style={styles.description}>{item.requiredAvailability.join(', ')}</Text>
-        </>
-      );
+      return renderJobDetails();
     } else {
-      // Display user_attributes
-      return (
-        <>
-          <Text style={styles.title}>{item.email}</Text>
-          <Text style={styles.subtitle}>{item.role}</Text>
-          <Text style={styles.sectionTitle}>Skills</Text>
-          <Text style={styles.description}>{item.skills.join(', ')}</Text>
-          <Text style={styles.sectionTitle}>Experience</Text>
-          <Text style={styles.description}>{`${item.experience.totalYears} years`}</Text>
-          <Text style={styles.sectionTitle}>Education</Text>
-          <Text style={styles.description}>{item.education}</Text>
-          <Text style={styles.sectionTitle}>Certifications</Text>
-          <Text style={styles.description}>{item.certifications.join(', ')}</Text>
-          <Text style={styles.sectionTitle}>Job Title Preferences</Text>
-          <Text style={styles.description}>{item.jobTitlePrefs.join(', ')}</Text>
-          <Text style={styles.sectionTitle}>Job Type Preferences</Text>
-          <Text style={styles.description}>{item.jobTypePrefs.join(', ')}</Text>
-          <Text style={styles.sectionTitle}>Industry Preferences</Text>
-          <Text style={styles.description}>{item.industryPrefs.join(', ')}</Text>
-          <Text style={styles.sectionTitle}>Salary Preferences</Text>
-          <Text style={styles.description}>{`$${item.salaryPrefs.min} - $${item.salaryPrefs.max}`}</Text>
-          <Text style={styles.sectionTitle}>Category</Text>
-          <Text style={styles.description}>{item.category}</Text>
-          <Text style={styles.sectionTitle}>Average Review</Text>
-          <Text style={styles.description}>{item.reviewsAverage.toFixed(1)}</Text>
-        </>
-      );
+      return renderUserDetails();
     }
   };
 
@@ -124,6 +136,9 @@ export default function JobDetailsScreen({ route, navigation }) {
     <ScrollView style={styles.container}>
       {renderDetails()}
       <Text style={styles.matchScore}>Match Score: {(matchScore * 100).toFixed(2)}%</Text>
+      <TouchableOpacity style={styles.applyButton} onPress={() => Alert.alert('Job Applied!', 'You have successfully applied for this job.')}>
+        <Text style={styles.applyButtonText}>Apply for Job</Text>
+      </TouchableOpacity>
     </ScrollView>
   );
 }
@@ -145,46 +160,6 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     color: '#666',
   },
-  detailsContainer: {
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    padding: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  label: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginTop: 8,
-    color: '#444',
-  },
-  value: {
-    fontSize: 16,
-    marginBottom: 8,
-    color: '#666',
-  },
-  actionsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  likeButton: {
-    padding: 8,
-  },
-  applyButton: {
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 4,
-  },
-  applyButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
-  },
   sectionTitle: {
     fontSize: 18,
     fontWeight: 'bold',
@@ -201,5 +176,17 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginBottom: 16,
     color: '#666',
+  },
+  applyButton: {
+    backgroundColor: '#4CAF50',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 4,
+    marginTop: 20,
+  },
+  applyButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    textAlign: 'center',
   },
 });

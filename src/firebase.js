@@ -22,7 +22,7 @@ if (!firebase.apps.length) {
 }
 
 // Export Firebase services
-const auth = firebase.auth();
 const db = firebase.firestore();
+const auth = firebase.auth();
 
-export { auth, db, firebase };  // Export firebase for FieldValueexport { auth, db };
+export { db, auth, firebase };

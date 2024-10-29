@@ -1,13 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Dimensions, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import Swiper from 'react-native-deck-swiper';
-import { db, auth, firebase } from '../firebase';  // Import firebase
+import { db, auth, firebase } from '../firebase';  // Make sure firebase is imported here
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Job from '../models/Job';
 import User from '../models/User';
-import UserJobPreference from '../models/UserJobPreference';  // Import UserJobPreference
-import { calculateMatchScore } from '../matching/matchAlgorithm';
+import UserJobPreference from '../models/UserJobPreference';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -24,28 +23,18 @@ export default function HomeScreen({ navigation }) {
       try {
         const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
         const userData = userDoc.data();
-        const currentUser = new User({ uid: userDoc.id, ...userData });
-        setCurrentUser(currentUser);
+        setCurrentUser(new User({ uid: userDoc.id, ...userData }));
 
-        let itemsData = [];
         if (userData.role === 'worker') {
           const jobAttributesSnapshot = await db.collection('job_attributes').get();
-          itemsData = jobAttributesSnapshot.docs.map(doc => new Job({ id: doc.id, ...doc.data() }));
+          const jobsData = jobAttributesSnapshot.docs.map(doc => new Job({ id: doc.id, ...doc.data() }));
+          setItems(jobsData);
         } else if (userData.role === 'employer') {
           const userAttributesSnapshot = await db.collection('user_attributes')
             .where('role', '==', 'worker').get();
-          itemsData = userAttributesSnapshot.docs.map(doc => new User({ uid: doc.id, ...doc.data() }));
+          const candidatesData = userAttributesSnapshot.docs.map(doc => new User({ uid: doc.id, ...doc.data() }));
+          setItems(candidatesData);
         }
-
-        // Calculate match scores and sort items
-        const scoredItems = itemsData.map(item => ({
-          item,
-          score: calculateMatchScore(currentUser, item).userToJobScore
-        }));
-
-        scoredItems.sort((a, b) => b.score - a.score);
-
-        setItems(scoredItems.map(scoredItem => scoredItem.item));
       } catch (error) {
         console.error("Error fetching data:", error);
         setError(`Failed to fetch data: ${error.message}`);
@@ -57,75 +46,79 @@ export default function HomeScreen({ navigation }) {
     fetchUserAndItems();
   }, []);
 
-  const onSwipedRight = async (cardIndex) => {
+  const handleSwipe = async (cardIndex, interested) => {
     const item = items[cardIndex];
     const currentUserUid = auth.currentUser.uid;
-    const itemId = item.id || item.uid;
-    
-    console.log(`Swiped right on item: ${itemId}`);
+    const itemId = currentUser.role === 'worker' ? item.id : item.uid;
+
+    console.log(`Swiped ${interested ? 'right' : 'left'} on item: ${itemId}`);
     console.log(`Current user: ${currentUserUid}, role: ${currentUser.role}`);
+    console.log('Item being swiped:', item);
 
     try {
-      let matchId, matchData;
-      const itemType = currentUser.role === 'worker' ? 'job' : 'worker';
+      const userJobPrefData = new UserJobPreference({
+        userId: currentUserUid,
+        role: currentUser.role,
+        swipedUserId: itemId,
+        interested: interested,
+      });
 
-      if (currentUser.role === 'worker') {
-        matchId = `${currentUserUid}_${itemId}`;
-        matchData = {
-          worker: true,
-          workerId: currentUserUid,
-          employerId: itemId,
-        };
-      } else if (currentUser.role === 'employer') {
-        matchId = `${itemId}_${currentUserUid}`;
-        matchData = {
-          employer: true,
-          workerId: itemId,
-          employerId: currentUserUid,
-        };
-      }
+      console.log('UserJobPreference data:', userJobPrefData);
 
-      console.log(`Attempting to save match with ID: ${matchId}`);
-      console.log('Match data:', matchData);
+      const userJobPrefObject = {
+        ...userJobPrefData.toObject(),
+        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+      };
 
-      const matchRef = db.collection('matches').doc(matchId);
-      await matchRef.set(matchData, { merge: true });
+      // Update user_job_preferences
+      await db.collection('user_job_preferences').doc(currentUserUid).set({
+        [itemId]: userJobPrefObject
+      }, { merge: true });
 
-      console.log('Match saved successfully');
+      console.log('User job preferences updated successfully');
 
-      // Update user preferences
-      const userPrefRef = db.collection('user_job_preferences').doc(currentUserUid);
-      const userPrefDoc = await userPrefRef.get();
+      // If it's a right swipe, check for a match
+      if (interested) {
+        const matchId = currentUser.role === 'worker' 
+          ? `${currentUserUid}_${itemId}` 
+          : `${itemId}_${currentUserUid}`;
+        
+        const matchRef = db.collection('matches').doc(matchId);
+        const matchDoc = await matchRef.get();
 
-      let userPref;
-      if (userPrefDoc.exists) {
-        userPref = new UserJobPreference(userPrefDoc.data());
-      } else {
-        userPref = new UserJobPreference({ userId: currentUserUid, role: currentUser.role });
-      }
-
-      userPref.addPreference(itemId, true, itemType);
-
-      await userPrefRef.set(userPref, { merge: true });
-
-      console.log('User preferences updated successfully');
-
-      const matchDoc = await matchRef.get();
-      const existingMatchData = matchDoc.data();
-      if (existingMatchData.worker && existingMatchData.employer) {
-        console.log("It's a match!");
-        Alert.alert("It's a Match!", "You've matched with this job/candidate!");
+        if (matchDoc.exists) {
+          const existingMatchData = matchDoc.data();
+          if (
+            (currentUser.role === 'worker' && existingMatchData.employer) ||
+            (currentUser.role === 'employer' && existingMatchData.worker)
+          ) {
+            console.log("It's a match!");
+            Alert.alert("It's a Match!", "You've matched with this job/candidate!");
+            
+            // Update the match document to show it's a full match
+            await matchRef.update({
+              [currentUser.role]: true,
+              [`${currentUser.role}Id`]: currentUserUid,
+              timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            });
+          }
+        } else {
+          // Create a new potential match document
+          await matchRef.set({
+            [currentUser.role]: true,
+            [`${currentUser.role}Id`]: currentUserUid,
+            timestamp: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }
       }
     } catch (error) {
-      console.error("Error saving match:", error);
-      Alert.alert('Error', 'Failed to save match. Please try again.');
+      console.error("Error saving preference:", error);
+      Alert.alert('Error', 'Failed to save preference. Please try again.');
     }
   };
 
-  const onSwipedLeft = (cardIndex) => {
-    const item = items[cardIndex];
-    console.log(`Not interested in: ${currentUser.role === 'worker' ? item.jobTitle : item.email}`);
-  };
+  const onSwipedRight = (cardIndex) => handleSwipe(cardIndex, true);
+  const onSwipedLeft = (cardIndex) => handleSwipe(cardIndex, false);
 
   const onSwipedAll = () => {
     Alert.alert('End of List', 'You have swiped through all available items.');
@@ -208,8 +201,8 @@ export default function HomeScreen({ navigation }) {
           ref={swiperRef}
           cards={items}
           renderCard={renderCard}
-          onSwipedRight={onSwipedRight}
-          onSwipedLeft={onSwipedLeft}
+          onSwipedRight={(cardIndex) => handleSwipe(cardIndex, true)}
+          onSwipedLeft={(cardIndex) => handleSwipe(cardIndex, false)}
           onSwipedAll={onSwipedAll}
           cardIndex={0}
           backgroundColor={'#f0f0f0'}
