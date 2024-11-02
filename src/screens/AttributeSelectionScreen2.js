@@ -10,6 +10,9 @@ import {
   Platform,
   TouchableOpacity,
   FlatList,
+  Animated, // Add this
+  Dimensions, // Add this
+  PanResponder, // Add this
 } from 'react-native';
 import * as Location from 'expo-location';
 import { db, auth } from '../firebase';

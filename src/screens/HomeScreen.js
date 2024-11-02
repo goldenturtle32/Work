@@ -7,9 +7,30 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Job from '../models/Job';
 import User from '../models/User';
 import UserJobPreference from '../models/UserJobPreference';
+import { 
+  useFonts,
+  LibreBodoni_400Regular,
+  LibreBodoni_700Bold,
+} from '@expo-google-fonts/libre-bodoni';
+import { 
+  DMSerifText_400Regular 
+} from '@expo-google-fonts/dm-serif-text';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
+
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
+  const R = 3959; // Radius of the Earth in miles
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const distance = R * c; // Distance in miles
+  return Math.round(distance);
+};
 
 export default function HomeScreen({ navigation }) {
   const [items, setItems] = useState([]);
@@ -18,21 +39,64 @@ export default function HomeScreen({ navigation }) {
   const [error, setError] = useState(null);
   const swiperRef = useRef(null);
 
+  let [fontsLoaded] = useFonts({
+    LibreBodoni_400Regular,
+    LibreBodoni_700Bold,
+    DMSerifText_400Regular,
+  });
+
   useEffect(() => {
     const fetchUserAndItems = async () => {
       try {
         const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
         const userData = userDoc.data();
-        setCurrentUser(new User({ uid: userDoc.id, ...userData }));
+        
+        // Get user's location from user_attributes
+        const userAttributesDoc = await db.collection('user_attributes').doc(auth.currentUser.uid).get();
+        const userLocation = userAttributesDoc.data()?.location;
+        
+        setCurrentUser(new User({ 
+          uid: userDoc.id, 
+          ...userData,
+          location: userLocation 
+        }));
 
         if (userData.role === 'worker') {
           const jobAttributesSnapshot = await db.collection('job_attributes').get();
-          const jobsData = jobAttributesSnapshot.docs.map(doc => new Job({ id: doc.id, ...doc.data() }));
+          const jobsData = jobAttributesSnapshot.docs.map(doc => {
+            const jobData = doc.data();
+            const distance = jobData.location && userLocation ? 
+              calculateDistance(
+                userLocation.latitude,
+                userLocation.longitude,
+                jobData.location.latitude,
+                jobData.location.longitude
+              ) : null;
+            return new Job({ 
+              id: doc.id, 
+              ...jobData,
+              distance 
+            });
+          });
           setItems(jobsData);
         } else if (userData.role === 'employer') {
           const userAttributesSnapshot = await db.collection('user_attributes')
             .where('role', '==', 'worker').get();
-          const candidatesData = userAttributesSnapshot.docs.map(doc => new User({ uid: doc.id, ...doc.data() }));
+          const candidatesData = userAttributesSnapshot.docs.map(doc => {
+            const candidateData = doc.data();
+            const distance = candidateData.location && userLocation ? 
+              calculateDistance(
+                userLocation.latitude,
+                userLocation.longitude,
+                candidateData.location.latitude,
+                candidateData.location.longitude
+              ) : null;
+            return new User({ 
+              uid: doc.id, 
+              ...candidateData,
+              distance 
+            });
+          });
           setItems(candidatesData);
         }
       } catch (error) {
@@ -141,18 +205,49 @@ export default function HomeScreen({ navigation }) {
           style={styles.cardGradient}
         >
           {currentUser && currentUser.role === 'worker' ? (
-            <>
+            <View style={styles.cardContent}>
               <Text style={styles.jobTitle}>{item.jobTitle || 'No Title'}</Text>
-              <Text style={styles.cardText}>Industry: {item.industry || 'N/A'}</Text>
-              <Text style={styles.cardText}>Estimated Hours: {item.estimatedHours || 'N/A'}</Text>
-              <Text style={styles.cardText}>Required Skills: {item.requiredSkills?.join(', ') || 'N/A'}</Text>
-              <Text style={styles.cardText}>Required Experience: {item.requiredExperience?.minYears || 'N/A'} years</Text>
-              <Text style={styles.cardText}>Required Education: {item.requiredEducation || 'N/A'}</Text>
-              <Text style={styles.cardText}>Required Certifications: {item.requiredCertifications?.join(', ') || 'N/A'}</Text>
-              <Text style={styles.cardText}>Job Type: {item.jobType || 'N/A'}</Text>
-              <Text style={styles.cardText}>Salary Range: ${item.salaryRange?.min || 'N/A'} - ${item.salaryRange?.max || 'N/A'}</Text>
-              <Text style={styles.cardText}>Required Availability: {item.requiredAvailability?.join(', ') || 'N/A'}</Text>
-            </>
+              
+              <View style={styles.matchContainer}>
+                <Text style={styles.matchText}>50% Match</Text>
+              </View>
+
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Pay Range</Text>
+                <Text style={styles.value}>${item.salaryRange?.min || 'N/A'} - ${item.salaryRange?.max || 'N/A'}</Text>
+              </View>
+
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Pay Estimates</Text>
+                <Text style={styles.value}>
+                  ${(item.salaryRange?.min * (item.estimatedHours || 0)).toLocaleString()} - 
+                  ${(item.salaryRange?.max * (item.estimatedHours || 0)).toLocaleString()}
+                </Text>
+              </View>
+
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Skills</Text>
+                <View style={styles.skillsContainer}>
+                  {item.requiredSkills?.map((skill, index) => (
+                    <View key={index} style={styles.skillBubble}>
+                      <Text style={styles.skillText}>{skill}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Distance</Text>
+                <Text style={styles.value}>
+                  {item.distance != null ? `${item.distance} miles away` : 'Distance unavailable'}
+                </Text>
+              </View>
+
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Availability</Text>
+                <Text style={styles.value}>{item.requiredAvailability?.join(', ') || 'N/A'}</Text>
+              </View>
+            </View>
           ) : (
             <>
               <Text style={styles.jobTitle}>{item.email || 'No Email'}</Text>
@@ -169,6 +264,10 @@ export default function HomeScreen({ navigation }) {
       </TouchableOpacity>
     );
   };
+
+  if (!fontsLoaded) {
+    return <ActivityIndicator />;
+  }
 
   if (isLoading) {
     return (
@@ -367,5 +466,57 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  cardContent: {
+    flex: 1,
+    padding: 20,
+  },
+  jobTitle: {
+    fontFamily: 'LibreBodoni_700Bold',
+    fontSize: 28,
+    color: '#ffffff',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  matchContainer: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  matchText: {
+    fontFamily: 'LibreBodoni_400Regular',
+    fontSize: 24,
+    color: '#4ade80',
+  },
+  infoContainer: {
+    marginBottom: 15,
+  },
+  label: {
+    fontFamily: 'DMSerifText_400Regular',
+    fontSize: 18,
+    color: '#ffffff',
+    opacity: 0.9,
+    marginBottom: 5,
+  },
+  value: {
+    fontFamily: 'DMSerifText_400Regular',
+    fontSize: 16,
+    color: '#ffffff',
+  },
+  skillsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 5,
+  },
+  skillBubble: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    margin: 4,
+  },
+  skillText: {
+    fontFamily: 'DMSerifText_400Regular',
+    color: '#ffffff',
+    fontSize: 14,
   },
 });

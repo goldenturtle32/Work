@@ -10,9 +10,9 @@ import {
   Platform,
   TouchableOpacity,
   FlatList,
-//  Animated, // Add this
-//  Dimensions, // Add this
-//  PanResponder, // Add this
+  Animated, // Add this
+  Dimensions, // Add this
+  PanResponder, // Add this
 } from 'react-native';
 import * as Location from 'expo-location';
 import { db, auth } from '../firebase';
@@ -61,6 +61,8 @@ export default function AttributeSelectionScreen({ route, navigation }) {
   const currentUser = auth.currentUser;
 
   const [isIndustryInputFocused, setIsIndustryInputFocused] = useState(false);
+
+  const [selectedJobs, setSelectedJobs] = useState([]);
 
   useEffect(() => {
     const fetchUserRole = async () => {
@@ -177,10 +179,49 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     }));
   };
 
+  const handleAddJob = () => {
+    if (selectedJobs.length >= 3) {
+      Alert.alert('Maximum Jobs', 'You can only add up to 3 jobs.');
+      return;
+    }
+
+    if (!attributes.industryPrefs[0] || !attributes.jobTypePrefs || attributes.skills.length === 0) {
+      Alert.alert('Incomplete Job', 'Please select an industry, job type, and at least one skill.');
+      return;
+    }
+
+    const newJob = {
+      industry: attributes.industryPrefs[0],
+      jobType: attributes.jobTypePrefs,
+      skills: [...attributes.skills]
+    };
+
+    setSelectedJobs(prev => [...prev, newJob]);
+
+    // Reset job-related fields
+    setAttributes(prev => ({
+      ...prev,
+      industryPrefs: [],
+      jobTypePrefs: '',
+      skills: []
+    }));
+    setInputValues(prev => ({ ...prev, industryPrefs: '' }));
+    setSuggestions(prev => ({ ...prev, jobTypes: [], skills: [] }));
+  };
+
+  const handleRemoveJob = (index) => {
+    setSelectedJobs(prev => prev.filter((_, i) => i !== index));
+  };
+
   const handleSubmit = async () => {
     try {
       if (!currentUser) {
         throw new Error('User not authenticated');
+      }
+
+      if (userRole === 'worker' && selectedJobs.length === 0) {
+        Alert.alert('No Jobs Selected', 'Please add at least one job before submitting.');
+        return;
       }
 
       const locationData = attributes.location
@@ -189,6 +230,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
 
       let dataToSubmit = {
         ...attributes,
+        selectedJobs,
         location: locationData,
         uid: currentUser.uid,
         email: currentUser.email,
@@ -410,6 +452,41 @@ export default function AttributeSelectionScreen({ route, navigation }) {
           </Text>
         )}
 
+        {userRole === 'worker' && (
+          <>
+            <TouchableOpacity 
+              style={[styles.addJobButton, 
+                (!attributes.industryPrefs[0] || !attributes.jobTypePrefs || attributes.skills.length === 0) && 
+                styles.addJobButtonDisabled
+              ]} 
+              onPress={handleAddJob}
+            >
+              <Text style={styles.addJobButtonText}>Add Job</Text>
+            </TouchableOpacity>
+
+            {selectedJobs.length > 0 && (
+              <View style={styles.selectedJobsContainer}>
+                <Text style={styles.selectedJobsTitle}>Selected Jobs:</Text>
+                {selectedJobs.map((job, index) => (
+                  <View key={index} style={styles.selectedJobItem}>
+                    <View style={styles.selectedJobInfo}>
+                      <Text style={styles.selectedJobText}>
+                        {job.industry} - {job.jobType}
+                      </Text>
+                      <Text style={styles.selectedJobSkills}>
+                        Skills: {job.skills.join(', ')}
+                      </Text>
+                    </View>
+                    <TouchableOpacity onPress={() => handleRemoveJob(index)}>
+                      <Ionicons name="close-circle" size={24} color="#FF4136" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
+          </>
+        )}
+
         <TouchableOpacity style={styles.submitButton} onPress={handleSubmit}>
           <Text style={styles.submitButtonText}>Submit Attributes</Text>
         </TouchableOpacity>
@@ -525,5 +602,58 @@ const styles = StyleSheet.create({
   bubbleText: {
     color: '#fff',
     marginRight: 5,
+  },
+  addJobButton: {
+    backgroundColor: '#28a745',
+    padding: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  addJobButtonDisabled: {
+    backgroundColor: '#cccccc',
+  },
+  addJobButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  selectedJobsContainer: {
+    marginTop: 20,
+    padding: 15,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+  },
+  selectedJobsTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    color: '#333',
+  },
+  selectedJobItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 10,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+  },
+  selectedJobInfo: {
+    flex: 1,
+    marginRight: 10,
+  },
+  selectedJobText: {
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 5,
+  },
+  selectedJobSkills: {
+    fontSize: 14,
+    color: '#666',
   },
 });

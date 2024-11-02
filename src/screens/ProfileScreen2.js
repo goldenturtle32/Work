@@ -153,6 +153,181 @@ export default function ProfileScreen({ navigation }) {
     );
   }
 
+  if (Platform.OS === 'web') {
+    return (
+      <div style={webStyles.container}>
+        <LinearGradient
+          colors={['#1e3a8a', '#3b82f6']}
+          style={styles.header}
+        >
+          <Text style={styles.headerTitle}>Profile Settings</Text>
+          <View style={styles.headerIconContainer}>
+            <Ionicons name="person-circle-outline" size={60} color="#ffffff" />
+          </View>
+        </LinearGradient>
+
+        <div style={webStyles.scrollView}>
+          <View style={styles.formContainer}>
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Email</Text>
+              <TextInput
+                style={[styles.input, styles.disabledInput]}
+                value={user.email}
+                editable={false}
+              />
+            </View>
+
+            <ImportanceSelector />
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Skills</Text>
+              <TextInput
+                style={styles.input}
+                value={user.skills.join(', ')}
+                onChangeText={(text) => handleChange('skills', text.split(', '))}
+                placeholder="Enter your skills (comma-separated)"
+                placeholderTextColor="#A9A9A9"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Location</Text>
+              <TextInput
+                style={styles.input}
+                value={`${user.location.city}, ${user.location.state}, ${user.location.country}`}
+                onChangeText={(text) => {
+                  const [city, state, country] = text.split(', ');
+                  handleChange('location', { city, state, country });
+                }}
+                placeholder="City, State, Country"
+                placeholderTextColor="#A9A9A9"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Total Years of Experience</Text>
+              <TextInput
+                style={styles.input}
+                value={user.experience.totalYears.toString()}
+                onChangeText={(text) => handleChange('experience', { ...user.experience, totalYears: parseInt(text) || 0 })}
+                placeholder="Years of experience"
+                placeholderTextColor="#A9A9A9"
+                keyboardType="numeric"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Specific Roles</Text>
+              <TextInput
+                style={styles.input}
+                value={user.experience.specificRoles.join(', ')}
+                onChangeText={(text) => handleChange('experience', { ...user.experience, specificRoles: text.split(', ') })}
+                placeholder="Enter specific roles (comma-separated)"
+                placeholderTextColor="#A9A9A9"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Education</Text>
+              <TextInput
+                style={styles.input}
+                value={user.education}
+                onChangeText={(text) => handleChange('education', text)}
+                placeholder="Highest level of education"
+                placeholderTextColor="#A9A9A9"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Certifications</Text>
+              <TextInput
+                style={styles.input}
+                value={user.certifications.join(', ')}
+                onChangeText={(text) => handleChange('certifications', text.split(', '))}
+                placeholder="Relevant certifications (comma-separated)"
+                placeholderTextColor="#A9A9A9"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Preferred Job Titles</Text>
+              <TextInput
+                style={styles.input}
+                value={user.jobTitlePrefs.join(', ')}
+                onChangeText={(text) => handleChange('jobTitlePrefs', text.split(', '))}
+                placeholder="Preferred job titles (comma-separated)"
+                placeholderTextColor="#A9A9A9"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Preferred Job Types</Text>
+              <TextInput
+                style={styles.input}
+                value={user.jobTypePrefs.join(', ')}
+                onChangeText={(text) => handleChange('jobTypePrefs', text.split(', '))}
+                placeholder="Full-time, Part-time, Contract, etc. (comma-separated)"
+                placeholderTextColor="#A9A9A9"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Preferred Industries</Text>
+              <TextInput
+                style={styles.input}
+                value={user.industryPrefs.join(', ')}
+                onChangeText={(text) => handleChange('industryPrefs', text.split(', '))}
+                placeholder="Preferred industries (comma-separated)"
+                placeholderTextColor="#A9A9A9"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Salary Preferences</Text>
+              <View style={styles.rowInput}>
+                <TextInput
+                  style={[styles.input, styles.halfInput]}
+                  value={user.salaryPrefs.min.toString()}
+                  onChangeText={(text) => handleChange('salaryPrefs', { ...user.salaryPrefs, min: parseInt(text) || 0 })}
+                  placeholder="Min"
+                  placeholderTextColor="#A9A9A9"
+                  keyboardType="numeric"
+                />
+                <TextInput
+                  style={[styles.input, styles.halfInput]}
+                  value={user.salaryPrefs.max.toString()}
+                  onChangeText={(text) => handleChange('salaryPrefs', { ...user.salaryPrefs, max: parseInt(text) || 0 })}
+                  placeholder="Max"
+                  placeholderTextColor="#A9A9A9"
+                  keyboardType="numeric"
+                />
+              </View>
+            </View>
+
+            <TouchableOpacity style={styles.button} onPress={updateProfile}>
+              <Text style={styles.buttonText}>Update Profile</Text>
+            </TouchableOpacity>
+          </View>
+        </div>
+
+        <View style={[styles.navigation, styles.webNavigation]}>
+          <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Home')}>
+            <Ionicons name="home-outline" size={24} color="#ffffff" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Matches')}>
+            <Ionicons name="heart-outline" size={24} color="#ffffff" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navButton}>
+            <Ionicons name="person" size={24} color="#ffffff" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Settings')}>
+            <Ionicons name="settings-outline" size={24} color="#ffffff" />
+          </TouchableOpacity>
+        </View>
+      </div>
+    );
+  }
+
   return (
     <KeyboardAvoidingView 
       behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -329,6 +504,22 @@ export default function ProfileScreen({ navigation }) {
   );
 }
 
+const webStyles = {
+  container: {
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100vh',
+    width: '100%',
+    backgroundColor: '#f8fafc',
+  },
+  scrollView: {
+    flex: 1,
+    overflowY: 'auto',
+    padding: '20px',
+    paddingBottom: '90px', // Space for navigation
+  },
+};
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -336,10 +527,11 @@ const styles = StyleSheet.create({
   },
   header: {
     padding: 20,
-    paddingTop: 60,
+    paddingTop: Platform.OS === 'ios' ? 60 : 40,
     paddingBottom: 30,
     borderBottomLeftRadius: 30,
     borderBottomRightRadius: 30,
+    zIndex: 1,
   },
   headerTitle: {
     fontSize: 28,
@@ -356,7 +548,10 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   formContainer: {
-    flex: 1,
+    width: '100%',
+    maxWidth: 800,
+    marginLeft: 'auto',
+    marginRight: 'auto',
   },
   inputGroup: {
     marginBottom: 20,
@@ -442,5 +637,12 @@ const styles = StyleSheet.create({
   },
   navButton: {
     padding: 10,
+  },
+  webNavigation: {
+    position: 'fixed',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 2,
   },
 });

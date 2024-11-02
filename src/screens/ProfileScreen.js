@@ -4,6 +4,11 @@ import { db, auth } from '../firebase';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import User from '../models/User';
+import { 
+  useFonts,
+  Domine_400Regular,
+  Domine_700Bold
+} from '@expo-google-fonts/domine';
 
 export default function ProfileScreen({ navigation }) {
   const [user, setUser] = useState(new User({}));
@@ -145,11 +150,207 @@ export default function ProfileScreen({ navigation }) {
     </View>
   );
 
+  let [fontsLoaded] = useFonts({
+    Domine_400Regular,
+    Domine_700Bold
+  });
+
+  const [skillInput, setSkillInput] = useState('');
+  const [roleInput, setRoleInput] = useState('');
+
+  const handleSkillRemoval = (skillToRemove) => {
+    handleChange('skills', user.skills.filter(skill => skill !== skillToRemove));
+  };
+
+  const handleRoleRemoval = (roleToRemove) => {
+    handleChange('experience', {
+      ...user.experience,
+      specificRoles: user.experience.specificRoles.filter(role => role !== roleToRemove)
+    });
+  };
+
+  const renderSkillBubbles = () => (
+    <View style={styles.bubblesContainer}>
+      {user.skills.map((skill, index) => (
+        <View key={index} style={styles.bubble}>
+          <Text style={styles.bubbleText}>{skill}</Text>
+          <TouchableOpacity onPress={() => handleSkillRemoval(skill)}>
+            <Ionicons name="close-circle" size={20} color="#ffffff" />
+          </TouchableOpacity>
+        </View>
+      ))}
+    </View>
+  );
+
+  const renderRoleBubbles = () => (
+    <View style={styles.bubblesContainer}>
+      {user.experience.specificRoles.map((role, index) => (
+        <View key={index} style={styles.bubble}>
+          <Text style={styles.bubbleText}>{role}</Text>
+          <TouchableOpacity onPress={() => handleRoleRemoval(role)}>
+            <Ionicons name="close-circle" size={20} color="#ffffff" />
+          </TouchableOpacity>
+        </View>
+      ))}
+    </View>
+  );
+
+  const [certificationInput, setCertificationInput] = useState('');
+
+  const handleCertificationRemoval = (certToRemove) => {
+    handleChange('certifications', user.certifications.filter(cert => cert !== certToRemove));
+  };
+
+  const renderCertificationBubbles = () => (
+    <View style={styles.bubblesContainer}>
+      {user.certifications.map((cert, index) => (
+        <View key={index} style={styles.bubble}>
+          <Text style={styles.bubbleText}>{cert}</Text>
+          <TouchableOpacity onPress={() => handleCertificationRemoval(cert)}>
+            <Ionicons name="close-circle" size={20} color="#ffffff" />
+          </TouchableOpacity>
+        </View>
+      ))}
+    </View>
+  );
+
   if (loading) {
     return (
       <View style={styles.loaderContainer}>
         <ActivityIndicator size="large" color="#3b82f6" />
       </View>
+    );
+  }
+
+  if (Platform.OS === 'web') {
+    return (
+      <div style={webStyles.container}>
+        <LinearGradient
+          colors={['#1e3a8a', '#3b82f6']}
+          style={styles.header}
+        >
+          <Text style={styles.headerTitle}>Profile Settings</Text>
+          <View style={styles.headerIconContainer}>
+            <Ionicons name="person-circle-outline" size={60} color="#ffffff" />
+          </View>
+        </LinearGradient>
+
+        <div style={webStyles.scrollView}>
+          <View style={styles.formContainer}>
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Email</Text>
+              <TextInput
+                style={[styles.input, styles.disabledInput]}
+                value={user.email}
+                editable={false}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Skills</Text>
+              <TextInput
+                style={styles.input}
+                value={skillInput}
+                onChangeText={setSkillInput}
+                onSubmitEditing={() => {
+                  if (skillInput.trim()) {
+                    handleChange('skills', [...user.skills, skillInput.trim()]);
+                    setSkillInput('');
+                  }
+                }}
+                placeholder="Type a skill and press enter"
+                placeholderTextColor="#A9A9A9"
+              />
+              {renderSkillBubbles()}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Specific Roles</Text>
+              <TextInput
+                style={styles.input}
+                value={roleInput}
+                onChangeText={setRoleInput}
+                onSubmitEditing={() => {
+                  if (roleInput.trim()) {
+                    handleChange('experience', {
+                      ...user.experience,
+                      specificRoles: [...user.experience.specificRoles, roleInput.trim()]
+                    });
+                    setRoleInput('');
+                  }
+                }}
+                placeholder="Type a role and press enter"
+                placeholderTextColor="#A9A9A9"
+              />
+              {renderRoleBubbles()}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Education</Text>
+              <TextInput
+                style={styles.input}
+                value={user.education}
+                onChangeText={(text) => handleChange('education', text)}
+                placeholder="Highest level of education"
+                placeholderTextColor="#A9A9A9"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Certifications</Text>
+              <TextInput
+                style={styles.input}
+                value={certificationInput}
+                onChangeText={setCertificationInput}
+                onSubmitEditing={() => {
+                  if (certificationInput.trim()) {
+                    handleChange('certifications', [...user.certifications, certificationInput.trim()]);
+                    setCertificationInput('');
+                  }
+                }}
+                placeholder="Type a certification and press enter"
+                placeholderTextColor="#A9A9A9"
+              />
+              {renderCertificationBubbles()}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Selected Jobs</Text>
+              <View style={styles.selectedJobsContainer}>
+                {user.selectedJobs?.map((job, index) => (
+                  <View key={index} style={styles.selectedJobItem}>
+                    <Text style={styles.selectedJobText}>
+                      {job.industry} - {job.jobType}
+                    </Text>
+                    <Text style={styles.selectedJobSkills}>
+                      Skills: {job.skills.join(', ')}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+
+            <TouchableOpacity style={styles.button} onPress={updateProfile}>
+              <Text style={styles.buttonText}>Update Profile</Text>
+            </TouchableOpacity>
+          </View>
+        </div>
+
+        <View style={[styles.navigation, styles.webNavigation]}>
+          <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Home')}>
+            <Ionicons name="home-outline" size={24} color="#ffffff" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Matches')}>
+            <Ionicons name="heart-outline" size={24} color="#ffffff" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navButton}>
+            <Ionicons name="person" size={24} color="#ffffff" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Settings')}>
+            <Ionicons name="settings-outline" size={24} color="#ffffff" />
+          </TouchableOpacity>
+        </View>
+      </div>
     );
   }
 
@@ -178,54 +379,43 @@ export default function ProfileScreen({ navigation }) {
             />
           </View>
 
-          <ImportanceSelector />
-
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Skills</Text>
             <TextInput
               style={styles.input}
-              value={user.skills.join(', ')}
-              onChangeText={(text) => handleChange('skills', text.split(', '))}
-              placeholder="Enter your skills (comma-separated)"
-              placeholderTextColor="#A9A9A9"
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Location</Text>
-            <TextInput
-              style={styles.input}
-              value={`${user.location.city}, ${user.location.state}, ${user.location.country}`}
-              onChangeText={(text) => {
-                const [city, state, country] = text.split(', ');
-                handleChange('location', { city, state, country });
+              value={skillInput}
+              onChangeText={setSkillInput}
+              onSubmitEditing={() => {
+                if (skillInput.trim()) {
+                  handleChange('skills', [...user.skills, skillInput.trim()]);
+                  setSkillInput('');
+                }
               }}
-              placeholder="City, State, Country"
+              placeholder="Type a skill and press enter"
               placeholderTextColor="#A9A9A9"
             />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Total Years of Experience</Text>
-            <TextInput
-              style={styles.input}
-              value={user.experience.totalYears.toString()}
-              onChangeText={(text) => handleChange('experience', { ...user.experience, totalYears: parseInt(text) || 0 })}
-              placeholder="Years of experience"
-              placeholderTextColor="#A9A9A9"
-              keyboardType="numeric"
-            />
+            {renderSkillBubbles()}
           </View>
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Specific Roles</Text>
             <TextInput
               style={styles.input}
-              value={user.experience.specificRoles.join(', ')}
-              onChangeText={(text) => handleChange('experience', { ...user.experience, specificRoles: text.split(', ') })}
-              placeholder="Enter specific roles (comma-separated)"
+              value={roleInput}
+              onChangeText={setRoleInput}
+              onSubmitEditing={() => {
+                if (roleInput.trim()) {
+                  handleChange('experience', {
+                    ...user.experience,
+                    specificRoles: [...user.experience.specificRoles, roleInput.trim()]
+                  });
+                  setRoleInput('');
+                }
+              }}
+              placeholder="Type a role and press enter"
               placeholderTextColor="#A9A9A9"
             />
+            {renderRoleBubbles()}
           </View>
 
           <View style={styles.inputGroup}>
@@ -243,65 +433,33 @@ export default function ProfileScreen({ navigation }) {
             <Text style={styles.label}>Certifications</Text>
             <TextInput
               style={styles.input}
-              value={user.certifications.join(', ')}
-              onChangeText={(text) => handleChange('certifications', text.split(', '))}
-              placeholder="Relevant certifications (comma-separated)"
+              value={certificationInput}
+              onChangeText={setCertificationInput}
+              onSubmitEditing={() => {
+                if (certificationInput.trim()) {
+                  handleChange('certifications', [...user.certifications, certificationInput.trim()]);
+                  setCertificationInput('');
+                }
+              }}
+              placeholder="Type a certification and press enter"
               placeholderTextColor="#A9A9A9"
             />
+            {renderCertificationBubbles()}
           </View>
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Preferred Job Titles</Text>
-            <TextInput
-              style={styles.input}
-              value={user.jobTitlePrefs.join(', ')}
-              onChangeText={(text) => handleChange('jobTitlePrefs', text.split(', '))}
-              placeholder="Preferred job titles (comma-separated)"
-              placeholderTextColor="#A9A9A9"
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Preferred Job Types</Text>
-            <TextInput
-              style={styles.input}
-              value={user.jobTypePrefs.join(', ')}
-              onChangeText={(text) => handleChange('jobTypePrefs', text.split(', '))}
-              placeholder="Full-time, Part-time, Contract, etc. (comma-separated)"
-              placeholderTextColor="#A9A9A9"
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Preferred Industries</Text>
-            <TextInput
-              style={styles.input}
-              value={user.industryPrefs.join(', ')}
-              onChangeText={(text) => handleChange('industryPrefs', text.split(', '))}
-              placeholder="Preferred industries (comma-separated)"
-              placeholderTextColor="#A9A9A9"
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Salary Preferences</Text>
-            <View style={styles.rowInput}>
-              <TextInput
-                style={[styles.input, styles.halfInput]}
-                value={user.salaryPrefs.min.toString()}
-                onChangeText={(text) => handleChange('salaryPrefs', { ...user.salaryPrefs, min: parseInt(text) || 0 })}
-                placeholder="Min"
-                placeholderTextColor="#A9A9A9"
-                keyboardType="numeric"
-              />
-              <TextInput
-                style={[styles.input, styles.halfInput]}
-                value={user.salaryPrefs.max.toString()}
-                onChangeText={(text) => handleChange('salaryPrefs', { ...user.salaryPrefs, max: parseInt(text) || 0 })}
-                placeholder="Max"
-                placeholderTextColor="#A9A9A9"
-                keyboardType="numeric"
-              />
+            <Text style={styles.label}>Selected Jobs</Text>
+            <View style={styles.selectedJobsContainer}>
+              {user.selectedJobs?.map((job, index) => (
+                <View key={index} style={styles.selectedJobItem}>
+                  <Text style={styles.selectedJobText}>
+                    {job.industry} - {job.jobType}
+                  </Text>
+                  <Text style={styles.selectedJobSkills}>
+                    Skills: {job.skills.join(', ')}
+                  </Text>
+                </View>
+              ))}
             </View>
           </View>
 
@@ -329,43 +487,63 @@ export default function ProfileScreen({ navigation }) {
   );
 }
 
+const webStyles = {
+  container: {
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100vh',
+    width: '100%',
+    backgroundColor: '#f8fafc',
+  },
+  scrollView: {
+    flex: 1,
+    overflowY: 'auto',
+    padding: '20px',
+    paddingBottom: '90px', // Space for navigation
+  },
+};
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
   },
   header: {
-    padding: 20,
-    paddingTop: 60,
-    paddingBottom: 30,
-    borderBottomLeftRadius: 30,
-    borderBottomRightRadius: 30,
+    padding: 5,
+    paddingTop: Platform.OS === 'ios' ? 20 : 10,
+    paddingBottom: 8,
+    borderBottomLeftRadius: 10,
+    borderBottomRightRadius: 10,
+    zIndex: 1,
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
+    fontFamily: 'Domine_700Bold',
+    fontSize: 16,
     color: '#ffffff',
     textAlign: 'center',
-    marginBottom: 10,
   },
   headerIconContainer: {
     alignItems: 'center',
+    marginBottom: 2,
   },
   scrollContainer: {
     flexGrow: 1,
     padding: 20,
   },
   formContainer: {
-    flex: 1,
+    width: '100%',
+    maxWidth: 800,
+    marginLeft: 'auto',
+    marginRight: 'auto',
   },
   inputGroup: {
     marginBottom: 20,
   },
   label: {
+    fontFamily: 'Domine_700Bold',
     fontSize: 16,
-    fontWeight: 'bold',
-    color: '#1e3a8a',
     marginBottom: 5,
+    color: '#555',
   },
   input: {
     height: 50,
@@ -376,6 +554,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     fontSize: 16,
     color: '#1e3a8a',
+    fontFamily: 'Domine_400Regular',
   },
   disabledInput: {
     backgroundColor: '#f3f4f6',
@@ -427,6 +606,7 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 18,
     fontWeight: 'bold',
+    fontFamily: 'Domine_700Bold',
   },
   loaderContainer: {
     flex: 1,
@@ -442,5 +622,54 @@ const styles = StyleSheet.create({
   },
   navButton: {
     padding: 10,
+  },
+  webNavigation: {
+    position: 'fixed',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 2,
+  },
+  bubblesContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 10,
+    gap: 8,
+  },
+  bubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#3b82f6',
+    borderRadius: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    gap: 8,
+  },
+  bubbleText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontFamily: 'Domine_400Regular',
+  },
+  selectedJobsContainer: {
+    marginTop: 10,
+  },
+  selectedJobItem: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+  },
+  selectedJobText: {
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 4,
+    fontFamily: 'Domine_700Bold',
+  },
+  selectedJobSkills: {
+    fontSize: 14,
+    color: '#666',
+    fontFamily: 'Domine_400Regular',
   },
 });

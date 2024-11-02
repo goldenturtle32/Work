@@ -1,4 +1,4 @@
-package com.Work
+package com.goldenturtle.work2
 
 import android.app.Application
 import com.facebook.react.ReactApplication

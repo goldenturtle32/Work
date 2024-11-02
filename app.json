@@ -1,7 +1,11 @@
 {
   "name": "Work",
   "displayName": "Work",
-  "platforms": ["ios", "android", "web"],
+  "platforms": [
+    "ios",
+    "android",
+    "web"
+  ],
   "expo": {
     "extra": {
       "eas": {
@@ -11,12 +15,19 @@
     "owner": "goldenturtle",
     "slug": "work2",
     "android": {
-      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"]
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ],
+      "package": "com.goldenturtle.work2"
     },
     "ios": {
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "This app requires access to your location to show nearby jobs."
       }
-    }
+    },
+    "plugins": [
+      "expo-font"
+    ]
   }
 }

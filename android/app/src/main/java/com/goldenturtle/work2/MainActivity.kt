@@ -1,4 +1,4 @@
-package com.Work
+package com.goldenturtle.work2
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate

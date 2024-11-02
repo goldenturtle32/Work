@@ -1,12 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Dimensions, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import Swiper from 'react-native-deck-swiper';
-import { db, auth, firebase } from '../firebase';  // Import firebase
+import { db, auth, firebase } from '../firebase';  // Make sure firebase is imported here
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Job from '../models/Job';
 import User from '../models/User';
-import UserJobPreference from '../models/UserJobPreference';  // Import UserJobPreference
+import UserJobPreference from '../models/UserJobPreference';
+import { 
+  useFonts,
+  LibreBodoni_400Regular,
+  LibreBodoni_700Bold,
+} from '@expo-google-fonts/libre-bodoni';
+import { 
+  DMSerifText_400Regular 
+} from '@expo-google-fonts/dm-serif-text';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -17,6 +25,12 @@ export default function HomeScreen({ navigation }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const swiperRef = useRef(null);
+
+  let [fontsLoaded] = useFonts({
+    LibreBodoni_400Regular,
+    LibreBodoni_700Bold,
+    DMSerifText_400Regular,
+  });
 
   useEffect(() => {
     const fetchUserAndItems = async () => {
@@ -46,75 +60,79 @@ export default function HomeScreen({ navigation }) {
     fetchUserAndItems();
   }, []);
 
-  const onSwipedRight = async (cardIndex) => {
+  const handleSwipe = async (cardIndex, interested) => {
     const item = items[cardIndex];
     const currentUserUid = auth.currentUser.uid;
-    const itemId = item.id || item.uid;
+    const itemId = currentUser.role === 'worker' ? item.id : item.uid;
 
-    console.log(`Swiped right on item: ${itemId}`);
+    console.log(`Swiped ${interested ? 'right' : 'left'} on item: ${itemId}`);
     console.log(`Current user: ${currentUserUid}, role: ${currentUser.role}`);
+    console.log('Item being swiped:', item);
 
     try {
-      let matchId, matchData, userJobPrefData;
-      if (currentUser.role === 'worker') {
-        matchId = `${currentUserUid}_${itemId}`;
-        matchData = {
-          worker: true,
-          workerId: currentUserUid,
-          employerId: itemId,
-        };
-        userJobPrefData = new UserJobPreference({
-          userId: currentUserUid,
-          role: 'worker',
-          swipedUserId: itemId,
-          interested: true,
-        });
-      } else if (currentUser.role === 'employer') {
-        matchId = `${itemId}_${currentUserUid}`;
-        matchData = {
-          employer: true,
-          employerId: currentUserUid,
-          workerId: itemId,
-        };
-        userJobPrefData = new UserJobPreference({
-          userId: currentUserUid,
-          role: 'employer',
-          swipedUserId: itemId,
-          interested: true,
-        });
-      }
+      const userJobPrefData = new UserJobPreference({
+        userId: currentUserUid,
+        role: currentUser.role,
+        swipedUserId: itemId,
+        interested: interested,
+      });
 
-      // Save match data
-      const matchRef = db.collection('matches').doc(matchId);
-      await matchRef.set({
-        ...matchData,
+      console.log('UserJobPreference data:', userJobPrefData);
+
+      const userJobPrefObject = {
+        ...userJobPrefData.toObject(),
         timestamp: firebase.firestore.FieldValue.serverTimestamp()
-      }, { merge: true });
+      };
 
       // Update user_job_preferences
       await db.collection('user_job_preferences').doc(currentUserUid).set({
-        [itemId]: userJobPrefData
+        [itemId]: userJobPrefObject
       }, { merge: true });
 
       console.log('User job preferences updated successfully');
 
-      // Check if it's a mutual match
-      const matchDoc = await matchRef.get();
-      const existingMatchData = matchDoc.data();
-      if (existingMatchData.worker && existingMatchData.employer) {
-        console.log("It's a match!");
-        Alert.alert("It's a Match!", "You've matched with this job/candidate!");
+      // If it's a right swipe, check for a match
+      if (interested) {
+        const matchId = currentUser.role === 'worker' 
+          ? `${currentUserUid}_${itemId}` 
+          : `${itemId}_${currentUserUid}`;
+        
+        const matchRef = db.collection('matches').doc(matchId);
+        const matchDoc = await matchRef.get();
+
+        if (matchDoc.exists) {
+          const existingMatchData = matchDoc.data();
+          if (
+            (currentUser.role === 'worker' && existingMatchData.employer) ||
+            (currentUser.role === 'employer' && existingMatchData.worker)
+          ) {
+            console.log("It's a match!");
+            Alert.alert("It's a Match!", "You've matched with this job/candidate!");
+            
+            // Update the match document to show it's a full match
+            await matchRef.update({
+              [currentUser.role]: true,
+              [`${currentUser.role}Id`]: currentUserUid,
+              timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            });
+          }
+        } else {
+          // Create a new potential match document
+          await matchRef.set({
+            [currentUser.role]: true,
+            [`${currentUser.role}Id`]: currentUserUid,
+            timestamp: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }
       }
     } catch (error) {
-      console.error("Error saving match:", error);
-      Alert.alert('Error', 'Failed to save match. Please try again.');
+      console.error("Error saving preference:", error);
+      Alert.alert('Error', 'Failed to save preference. Please try again.');
     }
   };
 
-  const onSwipedLeft = (cardIndex) => {
-    const item = items[cardIndex];
-    console.log(`Not interested in: ${currentUser.role === 'worker' ? item.jobTitle : item.email}`);
-  };
+  const onSwipedRight = (cardIndex) => handleSwipe(cardIndex, true);
+  const onSwipedLeft = (cardIndex) => handleSwipe(cardIndex, false);
 
   const onSwipedAll = () => {
     Alert.alert('End of List', 'You have swiped through all available items.');
@@ -137,18 +155,47 @@ export default function HomeScreen({ navigation }) {
           style={styles.cardGradient}
         >
           {currentUser && currentUser.role === 'worker' ? (
-            <>
+            <View style={styles.cardContent}>
               <Text style={styles.jobTitle}>{item.jobTitle || 'No Title'}</Text>
-              <Text style={styles.cardText}>Industry: {item.industry || 'N/A'}</Text>
-              <Text style={styles.cardText}>Estimated Hours: {item.estimatedHours || 'N/A'}</Text>
-              <Text style={styles.cardText}>Required Skills: {item.requiredSkills?.join(', ') || 'N/A'}</Text>
-              <Text style={styles.cardText}>Required Experience: {item.requiredExperience?.minYears || 'N/A'} years</Text>
-              <Text style={styles.cardText}>Required Education: {item.requiredEducation || 'N/A'}</Text>
-              <Text style={styles.cardText}>Required Certifications: {item.requiredCertifications?.join(', ') || 'N/A'}</Text>
-              <Text style={styles.cardText}>Job Type: {item.jobType || 'N/A'}</Text>
-              <Text style={styles.cardText}>Salary Range: ${item.salaryRange?.min || 'N/A'} - ${item.salaryRange?.max || 'N/A'}</Text>
-              <Text style={styles.cardText}>Required Availability: {item.requiredAvailability?.join(', ') || 'N/A'}</Text>
-            </>
+              
+              <View style={styles.matchContainer}>
+                <Text style={styles.matchText}>50% Match</Text>
+              </View>
+
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Pay Range</Text>
+                <Text style={styles.value}>${item.salaryRange?.min || 'N/A'} - ${item.salaryRange?.max || 'N/A'}</Text>
+              </View>
+
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Pay Estimates</Text>
+                <Text style={styles.value}>
+                  ${(item.salaryRange?.min * (item.estimatedHours || 0)).toLocaleString()} - 
+                  ${(item.salaryRange?.max * (item.estimatedHours || 0)).toLocaleString()}
+                </Text>
+              </View>
+
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Skills</Text>
+                <View style={styles.skillsContainer}>
+                  {item.requiredSkills?.map((skill, index) => (
+                    <View key={index} style={styles.skillBubble}>
+                      <Text style={styles.skillText}>{skill}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Distance</Text>
+                <Text style={styles.value}>Est 2 miles</Text>
+              </View>
+
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Availability</Text>
+                <Text style={styles.value}>{item.requiredAvailability?.join(', ') || 'N/A'}</Text>
+              </View>
+            </View>
           ) : (
             <>
               <Text style={styles.jobTitle}>{item.email || 'No Email'}</Text>
@@ -165,6 +212,10 @@ export default function HomeScreen({ navigation }) {
       </TouchableOpacity>
     );
   };
+
+  if (!fontsLoaded) {
+    return <ActivityIndicator />;
+  }
 
   if (isLoading) {
     return (
@@ -197,8 +248,8 @@ export default function HomeScreen({ navigation }) {
           ref={swiperRef}
           cards={items}
           renderCard={renderCard}
-          onSwipedRight={onSwipedRight}
-          onSwipedLeft={onSwipedLeft}
+          onSwipedRight={(cardIndex) => handleSwipe(cardIndex, true)}
+          onSwipedLeft={(cardIndex) => handleSwipe(cardIndex, false)}
           onSwipedAll={onSwipedAll}
           cardIndex={0}
           backgroundColor={'#f0f0f0'}
@@ -363,5 +414,57 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  cardContent: {
+    flex: 1,
+    padding: 20,
+  },
+  jobTitle: {
+    fontFamily: 'LibreBodoni_700Bold',
+    fontSize: 28,
+    color: '#ffffff',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  matchContainer: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  matchText: {
+    fontFamily: 'LibreBodoni_400Regular',
+    fontSize: 24,
+    color: '#4ade80',
+  },
+  infoContainer: {
+    marginBottom: 15,
+  },
+  label: {
+    fontFamily: 'DMSerifText_400Regular',
+    fontSize: 18,
+    color: '#ffffff',
+    opacity: 0.9,
+    marginBottom: 5,
+  },
+  value: {
+    fontFamily: 'DMSerifText_400Regular',
+    fontSize: 16,
+    color: '#ffffff',
+  },
+  skillsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 5,
+  },
+  skillBubble: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    margin: 4,
+  },
+  skillText: {
+    fontFamily: 'DMSerifText_400Regular',
+    color: '#ffffff',
+    fontSize: 14,
   },
 });
