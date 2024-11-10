@@ -7,12 +7,10 @@ import {
   StyleSheet,
   Alert,
   KeyboardAvoidingView,
-  Platform,
   TouchableOpacity,
   FlatList,
-  Animated, // Add this
-  Dimensions, // Add this
-  PanResponder, // Add this
+  Animated,
+  Platform,
 } from 'react-native';
 import * as Location from 'expo-location';
 import { db, auth } from '../firebase';
@@ -20,6 +18,65 @@ import firebase from 'firebase/compat/app';
 import { data } from '../data';
 import { debounce } from 'lodash';
 import { Ionicons } from '@expo/vector-icons';
+
+const isWeb = typeof document !== 'undefined';
+let WebMap;
+if (isWeb) {
+  WebMap = require('../components/WebMap').default;
+}
+
+const stateAbbreviations = {
+  'alabama': 'AL',
+  'alaska': 'AK',
+  'arizona': 'AZ',
+  'arkansas': 'AR',
+  'california': 'CA',
+  'colorado': 'CO',
+  'connecticut': 'CT',
+  'delaware': 'DE',
+  'florida': 'FL',
+  'georgia': 'GA',
+  'hawaii': 'HI',
+  'idaho': 'ID',
+  'illinois': 'IL',
+  'indiana': 'IN',
+  'iowa': 'IA',
+  'kansas': 'KS',
+  'kentucky': 'KY',
+  'louisiana': 'LA',
+  'maine': 'ME',
+  'maryland': 'MD',
+  'massachusetts': 'MA',
+  'michigan': 'MI',
+  'minnesota': 'MN',
+  'mississippi': 'MS',
+  'missouri': 'MO',
+  'montana': 'MT',
+  'nebraska': 'NE',
+  'nevada': 'NV',
+  'new hampshire': 'NH',
+  'new jersey': 'NJ',
+  'new mexico': 'NM',
+  'new york': 'NY',
+  'north carolina': 'NC',
+  'north dakota': 'ND',
+  'ohio': 'OH',
+  'oklahoma': 'OK',
+  'oregon': 'OR',
+  'pennsylvania': 'PA',
+  'rhode island': 'RI',
+  'south carolina': 'SC',
+  'south dakota': 'SD',
+  'tennessee': 'TN',
+  'texas': 'TX',
+  'utah': 'UT',
+  'vermont': 'VT',
+  'virginia': 'VA',
+  'washington': 'WA',
+  'west virginia': 'WV',
+  'wisconsin': 'WI',
+  'wyoming': 'WY'
+};
 
 export default function AttributeSelectionScreen({ route, navigation }) {
   const { isNewUser } = route.params;
@@ -64,6 +121,12 @@ export default function AttributeSelectionScreen({ route, navigation }) {
 
   const [selectedJobs, setSelectedJobs] = useState([]);
 
+  const [cityName, setCityName] = useState('');
+  const [radius, setRadius] = useState(5000); // 5km default
+  const [pulseAnimation] = useState(new Animated.Value(0));
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [stateCode, setStateCode] = useState('');
+
   useEffect(() => {
     const fetchUserRole = async () => {
       try {
@@ -83,6 +146,35 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     fetchLocation();
   }, []);
 
+  useEffect(() => {
+    // Start pulse animation
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnimation, {
+          toValue: 1,
+          duration: 2000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnimation, {
+          toValue: 0,
+          duration: 0,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      // Load Google Maps script
+      const script = document.createElement('script');
+      script.src = `https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_API_KEY`;
+      script.async = true;
+      script.onload = () => setMapLoaded(true);
+      document.body.appendChild(script);
+    }
+  }, []);
+
   const fetchLocation = async () => {
     try {
       let { status } = await Location.requestForegroundPermissionsAsync();
@@ -94,6 +186,19 @@ export default function AttributeSelectionScreen({ route, navigation }) {
       let location = await Location.getCurrentPositionAsync({});
       const { latitude, longitude } = location.coords;
 
+      // Get city name and state from coordinates
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`
+      );
+      const data = await response.json();
+      const city = data.address.city || data.address.town || data.address.village;
+      const state = data.address.state;
+      
+      // Get state abbreviation from mapping
+      const stateAbbrev = stateAbbreviations[state?.toLowerCase()] || '';
+      
+      setCityName(city);
+      setStateCode(stateAbbrev);
       setAttributes(prev => ({ ...prev, location: { latitude, longitude } }));
     } catch (error) {
       setError('Error fetching location: ' + error.message);
@@ -276,9 +381,31 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     setSuggestions(prev => ({ ...prev, industries: data.industries }));
   };
 
+  const renderMap = () => {
+    if (!attributes.location) return null;
+
+    if (isWeb && WebMap) {
+      return (
+        <WebMap 
+          location={attributes.location}
+          cityName={cityName}
+          stateCode={stateCode}
+        />
+      );
+    }
+
+    return (
+      <View style={styles.mapContainer}>
+        <Text style={styles.locationText}>
+          Current Location: {cityName}{stateCode ? `, ${stateCode}` : ''}
+        </Text>
+      </View>
+    );
+  };
+
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      behavior={isWeb ? undefined : "padding"}
       style={styles.container}
     >
       <ScrollView contentContainerStyle={styles.scrollContent}>
@@ -446,11 +573,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
           </>
         )}
 
-        {attributes.location && (
-          <Text style={styles.dynamicLocation}>
-            Current Location: {attributes.location.latitude.toFixed(4)}, {attributes.location.longitude.toFixed(4)}
-          </Text>
-        )}
+        {renderMap()}
 
         {userRole === 'worker' && (
           <>
@@ -655,5 +778,46 @@ const styles = StyleSheet.create({
   selectedJobSkills: {
     fontSize: 14,
     color: '#666',
+  },
+  mapContainer: {
+    height: 300,
+    marginVertical: 20,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  map: {
+    flex: 1,
+  },
+  locationText: {
+    fontSize: 16,
+    marginBottom: 10,
+    color: '#007BFF',
+  },
+  radiusControl: {
+    position: 'absolute',
+    bottom: 20,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    padding: 10,
+    borderRadius: 8,
+    zIndex: 1000,
+  },
+  slider: {
+    width: '100%',
+    height: 40,
+    ...(isWeb && {
+      appearance: 'none',
+      height: 5,
+      background: '#ddd',
+      borderRadius: 5,
+      outline: 'none',
+    }),
+  },
+  pulseCircle: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#007BFF',
   },
 });

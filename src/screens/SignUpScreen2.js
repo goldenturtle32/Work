@@ -40,17 +40,6 @@ export default function SignUpScreen({ navigation }) {
       const userCredential = await auth.createUserWithEmailAndPassword(email, password);
       const user = userCredential.user;
 
-      const newUser = new User(
-        user.uid,
-        user.email,
-        role,
-        new firebase.firestore.GeoPoint(37.78825, -122.4324),
-        [],
-        [],
-        '',
-        0
-      );
-
       // Create document in 'users' collection
       await db.collection('users').doc(user.uid).set({
         id: user.uid,
@@ -61,24 +50,55 @@ export default function SignUpScreen({ navigation }) {
         category: '',
         reviewsAverage: 0,
         skills: [],
-        isNewUser: true  // Add this flag
+        isNewUser: true
       });
 
-      // Create document in 'user_attributes' collection
-      await db.collection('user_attributes').doc(user.uid).set({
-        uid: user.uid,
-        email: user.email,
-        role: role,
-        location: new firebase.firestore.GeoPoint(37.78825, -122.4324),
-        availability: '',
-        certifications: '',
-        education: '',
-        experience: '',
-        industryPrefs: [],
-        jobTypePrefs: '',
-        salaryPrefs: '',
-        skills: []
-      });
+      // Create document in 'user_attributes' or 'job_attributes' collection based on role
+      if (role === 'worker') {
+        await db.collection('user_attributes').doc(user.uid).set({
+          uid: user.uid,
+          email: user.email,
+          role: role,
+          location: new firebase.firestore.GeoPoint(37.78825, -122.4324),
+          availability: {},
+          certifications: '',
+          education: '',
+          experience: '',
+          industryPrefs: [],
+          jobTypePrefs: '',
+          salaryPrefs: '',
+          skills: [],
+          importance: {
+            availabilityImportance: 5,
+            certificationsImportance: 5,
+            educationImportance: 5,
+            experienceImportance: 5,
+            industryPrefsImportance: 5,
+            jobTitlePrefsImportance: 5,
+            jobTypePrefsImportance: 5,
+            locationImportance: 5,
+            roleImportance: 5,
+            salaryPrefsImportance: 5,
+            skillsImportance: 5
+          }
+        });
+      } else if (role === 'employer') {
+        await db.collection('job_attributes').doc(user.uid).set({
+          id: user.uid,
+          email: user.email,
+          industry: '',
+          jobTitle: '',
+          jobType: '',
+          location: '',
+          requiredAvailability: '',
+          requiredCertifications: '',
+          requiredEducation: '',
+          requiredExperience: '',
+          requiredSkills: '',
+          salaryRange: '',
+          estimatedHours: ''
+        });
+      }
 
       Alert.alert('Success', 'Account created successfully!');
       navigation.navigate('AttributeSelection', { userId: user.uid, isNewUser: true });

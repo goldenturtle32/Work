@@ -197,7 +197,8 @@ export default function HomeScreen({ navigation }) {
         onPress={() => navigation.navigate('JobDetail', { 
           itemId: item.id || item.uid, 
           itemType: currentUser.role === 'worker' ? 'job' : 'worker',
-          currentUserData: currentUser 
+          currentUserData: currentUser,
+          item: item
         })}
       >
         <LinearGradient
@@ -214,15 +215,35 @@ export default function HomeScreen({ navigation }) {
 
               <View style={styles.infoContainer}>
                 <Text style={styles.label}>Pay Range</Text>
-                <Text style={styles.value}>${item.salaryRange?.min || 'N/A'} - ${item.salaryRange?.max || 'N/A'}</Text>
+                <Text style={styles.value}>${item.salaryRange?.min || 'N/A'}/hr - ${item.salaryRange?.max || 'N/A'}/hr</Text>
               </View>
 
               <View style={styles.infoContainer}>
-                <Text style={styles.label}>Pay Estimates</Text>
+                <Text style={styles.label}>Weekly Hours</Text>
+                <Text style={styles.value}>{item.weeklyHours || 0} hours</Text>
+              </View>
+
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Estimated Weekly Pay</Text>
                 <Text style={styles.value}>
-                  ${(item.salaryRange?.min * (item.estimatedHours || 0)).toLocaleString()} - 
-                  ${(item.salaryRange?.max * (item.estimatedHours || 0)).toLocaleString()}
+                  ${((item.salaryRange?.min || 0) * (item.weeklyHours || 0)).toLocaleString()} - 
+                  ${((item.salaryRange?.max || 0) * (item.weeklyHours || 0)).toLocaleString()}
                 </Text>
+              </View>
+
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Availability Schedule</Text>
+                <View style={styles.availabilityContainer}>
+                  {item.getFormattedAvailability().length > 0 ? (
+                    item.getFormattedAvailability().map((schedule, index) => (
+                      <View key={index} style={styles.scheduleRow}>
+                        <Text style={[styles.value, styles.scheduleText]}>{schedule}</Text>
+                      </View>
+                    ))
+                  ) : (
+                    <Text style={styles.value}>No recurring availability set</Text>
+                  )}
+                </View>
               </View>
 
               <View style={styles.infoContainer}>
@@ -241,11 +262,6 @@ export default function HomeScreen({ navigation }) {
                 <Text style={styles.value}>
                   {item.distance != null ? `${item.distance} miles away` : 'Distance unavailable'}
                 </Text>
-              </View>
-
-              <View style={styles.infoContainer}>
-                <Text style={styles.label}>Availability</Text>
-                <Text style={styles.value}>{item.requiredAvailability?.join(', ') || 'N/A'}</Text>
               </View>
             </View>
           ) : (
@@ -518,5 +534,16 @@ const styles = StyleSheet.create({
     fontFamily: 'DMSerifText_400Regular',
     color: '#ffffff',
     fontSize: 14,
+  },
+  availabilityContainer: {
+    marginTop: 5,
+  },
+  scheduleRow: {
+    marginBottom: 4,
+    paddingVertical: 2,
+  },
+  scheduleText: {
+    fontSize: 15,
+    lineHeight: 20,
   },
 });

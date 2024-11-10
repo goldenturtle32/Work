@@ -19,11 +19,28 @@
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION"
       ],
-      "package": "com.goldenturtle.work2"
+      "package": "com.goldenturtle.work2",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyAE0JeoZzUNIo3r-BM_nCaJOM9aDhbnC1w"
+        }
+      }
     },
     "ios": {
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "This app requires access to your location to show nearby jobs."
+      },
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyAE0JeoZzUNIo3r-BM_nCaJOM9aDhbnC1w"
+        }
+      }
+    },
+    "web": {
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyAE0JeoZzUNIo3r-BM_nCaJOM9aDhbnC1w"
+        }
       }
     },
     "plugins": [

@@ -5,6 +5,53 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { db, auth } from '../firebase';
 import { Ionicons } from '@expo/vector-icons';
 
+// Replace the existing WebTimePicker component with this enhanced version
+const WebTimePicker = ({ value, onChange }) => {
+  if (Platform.OS !== 'web') return null;
+
+  // Generate time options in 30-minute increments
+  const generateTimeOptions = () => {
+    const options = [];
+    for (let hour = 0; hour < 24; hour++) {
+      for (let minute of [0, 30]) {
+        const timeString = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+        options.push(timeString);
+      }
+    }
+    return options;
+  };
+
+  return (
+    <select
+      value={value || ''}
+      onChange={(e) => {
+        const [hours, minutes] = e.target.value.split(':');
+        const newDate = new Date();
+        newDate.setHours(parseInt(hours, 10));
+        newDate.setMinutes(parseInt(minutes, 10));
+        onChange({ type: 'set', nativeEvent: { timestamp: newDate.getTime() }}, newDate);
+      }}
+      style={{
+        height: 40,
+        marginVertical: 10,
+        padding: 10,
+        borderRadius: 8,
+        borderColor: '#d1d5db',
+        borderWidth: 1,
+        backgroundColor: '#ffffff',
+        minWidth: 120,
+      }}
+    >
+      <option value="">Select Time</option>
+      {generateTimeOptions().map((time) => (
+        <option key={time} value={time}>
+          {time}
+        </option>
+      ))}
+    </select>
+  );
+};
+
 export default function AvailabilityScreen({ navigation }) {
   const [user, setUser] = useState(null);
   const [selectedDay, setSelectedDay] = useState('');
@@ -69,19 +116,29 @@ export default function AvailabilityScreen({ navigation }) {
     setTempTime(currentTime);
   };
 
-  const handleTimeChange = (event, selectedTime) => {
-    const { index, field } = showPickerModal;
-    if (Platform.OS === 'android') {
+  const handleTimeChange = (event, selectedTime, index, field) => {
+    if (event.type === 'dismissed') {
       setShowPickerModal({ show: false, index: null, field: '' });
+      return;
     }
+
     if (selectedTime) {
+      const timeString = selectedTime.toLocaleTimeString([], { 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        hour12: false 
+      });
+
       const updatedSlots = [...timeSlots];
       updatedSlots[index] = {
         ...updatedSlots[index],
-        [field]: selectedTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+        [field]: timeString
       };
       setTimeSlots(updatedSlots);
-      setTempTime(selectedTime);
+
+      if (Platform.OS !== 'web') {
+        setShowPickerModal({ show: false, index: null, field: '' });
+      }
     }
   };
 
@@ -106,12 +163,20 @@ export default function AvailabilityScreen({ navigation }) {
   };
 
   const saveAvailability = async () => {
-    if (!user) return;
+    if (!user || !selectedDay) return;
 
     try {
+      // Format the day to lowercase for consistency
+      const dayOfWeek = new Date(selectedDay)
+        .toLocaleDateString('en-US', { weekday: 'long' })
+        .toLowerCase();
+
       const updatedAvailability = {
         ...user.availability,
-        [selectedDay]: { repeatType, slots: timeSlots },
+        [dayOfWeek]: { 
+          repeatType, 
+          slots: timeSlots.filter(slot => slot.startTime && slot.endTime)
+        },
       };
 
       const userDocRef = db.collection('user_attributes').doc(auth.currentUser.uid);
@@ -127,6 +192,7 @@ export default function AvailabilityScreen({ navigation }) {
       }
 
       Alert.alert('Success', 'Availability updated successfully!');
+      navigation.setParams({ availabilityUpdated: Date.now() });
     } catch (error) {
       console.error('Error saving availability:', error);
       Alert.alert('Error', 'Failed to update availability');
@@ -174,19 +240,41 @@ export default function AvailabilityScreen({ navigation }) {
             <View key={index} style={styles.slotContainer}>
               <Text style={styles.slotTitle}>Time Slot {index + 1}</Text>
               <View style={styles.timeContainer}>
-                <TouchableOpacity
-                  style={styles.timeButton}
-                  onPress={() => openTimePickerModal(index, 'startTime')}
-                >
-                  <Text>{slot.startTime || 'Start Time'}</Text>
-                </TouchableOpacity>
-                <Text style={styles.toText}>to</Text>
-                <TouchableOpacity
-                  style={styles.timeButton}
-                  onPress={() => openTimePickerModal(index, 'endTime')}
-                >
-                  <Text>{slot.endTime || 'End Time'}</Text>
-                </TouchableOpacity>
+                {Platform.OS === 'web' ? (
+                  <>
+                    <View style={styles.webTimePickerContainer}>
+                      <Text style={styles.timeLabel}>Start:</Text>
+                      <WebTimePicker
+                        value={slot.startTime}
+                        onChange={(event, selectedTime) => handleTimeChange(event, selectedTime, index, 'startTime')}
+                      />
+                    </View>
+                    <Text style={styles.toText}>to</Text>
+                    <View style={styles.webTimePickerContainer}>
+                      <Text style={styles.timeLabel}>End:</Text>
+                      <WebTimePicker
+                        value={slot.endTime}
+                        onChange={(event, selectedTime) => handleTimeChange(event, selectedTime, index, 'endTime')}
+                      />
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    <TouchableOpacity
+                      style={styles.timeButton}
+                      onPress={() => openTimePickerModal(index, 'startTime')}
+                    >
+                      <Text>{slot.startTime || 'Start Time'}</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.toText}>to</Text>
+                    <TouchableOpacity
+                      style={styles.timeButton}
+                      onPress={() => openTimePickerModal(index, 'endTime')}
+                    >
+                      <Text>{slot.endTime || 'End Time'}</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
                 <TouchableOpacity onPress={() => removeSlot(index)} style={styles.removeButton}>
                   <Ionicons name="close-circle" size={24} color="red" />
                 </TouchableOpacity>
@@ -409,5 +497,16 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  webTimePickerContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  timeLabel: {
+    fontSize: 14,
+    color: '#4b5563',
+    minWidth: 45,
   },
 });

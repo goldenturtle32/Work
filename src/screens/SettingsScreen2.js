@@ -4,11 +4,19 @@ import { Picker } from '@react-native-picker/picker';
 import { auth } from '../firebase';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import ChangePasswordModal from '../components/settings/ChangePasswordModal';
+import UpdateEmailModal from '../components/settings/UpdateEmailModal';
+import NotificationsModal from '../components/settings/NotificationsModal';
+import PrivacySettingsModal from '../components/settings/PrivacySettingsModal';
 
 export default function SettingsScreen({ navigation }) {
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('');
   const [darkMode, setDarkMode] = useState(false);
   const [pushNotifications, setPushNotifications] = useState(true);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
 
   const handleLogout = () => {
     auth.signOut()
@@ -41,9 +49,9 @@ export default function SettingsScreen({ navigation }) {
       <ScrollView style={styles.scrollView}>
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account Settings</Text>
-          {renderSettingItem('key-outline', 'Change Password', () => { /* Implement Change Password */ })}
-          {renderSettingItem('mail-outline', 'Update Email', () => { /* Implement Update Email */ })}
-          {renderSettingItem('notifications-outline', 'Manage Notifications', () => { /* Implement Manage Notifications */ })}
+          {renderSettingItem('key-outline', 'Change Password', () => setShowPasswordModal(true))}
+          {renderSettingItem('mail-outline', 'Update Email', () => setShowEmailModal(true))}
+          {renderSettingItem('notifications-outline', 'Manage Notifications', () => setShowNotificationsModal(true))}
         </View>
 
         <View style={styles.section}>
@@ -59,7 +67,7 @@ export default function SettingsScreen({ navigation }) {
               thumbColor={darkMode ? "#1e3a8a" : "#f4f3f4"}
             />
           </View>
-          {renderSettingItem('shield-checkmark-outline', 'Privacy Settings', () => { /* Implement Privacy Settings */ })}
+          {renderSettingItem('shield-checkmark-outline', 'Privacy Settings', () => setShowPrivacyModal(true))}
           {renderSettingItem('calendar-outline', 'Edit Availability', () => navigation.navigate('Availability'))}
         </View>
 
@@ -82,6 +90,23 @@ export default function SettingsScreen({ navigation }) {
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
           <Text style={styles.logoutButtonText}>Logout</Text>
         </TouchableOpacity>
+
+        <ChangePasswordModal 
+          visible={showPasswordModal} 
+          onClose={() => setShowPasswordModal(false)} 
+        />
+        <UpdateEmailModal 
+          visible={showEmailModal} 
+          onClose={() => setShowEmailModal(false)} 
+        />
+        <NotificationsModal 
+          visible={showNotificationsModal} 
+          onClose={() => setShowNotificationsModal(false)} 
+        />
+        <PrivacySettingsModal 
+          visible={showPrivacyModal} 
+          onClose={() => setShowPrivacyModal(false)} 
+        />
       </ScrollView>
 
       <View style={styles.navigation}>
