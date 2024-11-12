@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, Image } from 'react-native';
+import { View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, Image, Alert } from 'react-native';
 import { db, auth } from '../firebase';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -14,46 +14,64 @@ export default function MatchesScreen({ navigation }) {
   useEffect(() => {
     const fetchMatches = async () => {
       try {
+        setLoading(true);
         const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
         const userData = userDoc.data();
         setUserRole(userData.role);
 
-        const matchesSnapshot = await db.collection('matches')
-          .where(`${userData.role}Id`, '==', auth.currentUser.uid)
-          .where('worker', '==', true)
-          .where('employer', '==', true)
-          .get();
+        console.log('Current user ID:', auth.currentUser.uid);
+        console.log('Current user role:', userData.role);
+
+        // Query matches where the current user is either the worker or employer
+        const matchesQuery = db.collection('matches').where(
+          `${userData.role}Id`,
+          '==',
+          auth.currentUser.uid
+        );
+
+        console.log('Match query:', `${userData.role}Id`, '==', auth.currentUser.uid);
+
+        const matchesSnapshot = await matchesQuery.get();
+        console.log(`Found ${matchesSnapshot.size} matches`);
 
         const matchesData = await Promise.all(matchesSnapshot.docs.map(async (doc) => {
-          const matchData = new Match({ id: doc.id, ...doc.data() });
-          const otherUserId = userData.role === 'worker' ? matchData.employerId : matchData.workerId;
-          const otherUserDoc = await db.collection(userData.role === 'worker' ? 'job_attributes' : 'user_attributes').doc(otherUserId).get();
+          const matchData = doc.data();
+          console.log('Processing match:', doc.id, matchData);
+
+          // Determine the other user's ID
+          const otherUserId = userData.role === 'worker' 
+            ? matchData.employerId 
+            : matchData.workerId;
+
+          // Get the other user's data from the appropriate collection
+          const otherUserCollection = userData.role === 'worker' 
+            ? 'job_attributes' 
+            : 'user_attributes';
           
-          // Fetch last message
-          const lastMessageDoc = await db.collection('messages')
-            .where('matchId', '==', matchData.id)
-            .orderBy('timestamp', 'desc')
-            .limit(1)
+          const otherUserDoc = await db.collection(otherUserCollection)
+            .doc(otherUserId)
             .get();
 
-          const lastMessage = lastMessageDoc.docs[0]?.data() || null;
+          if (!otherUserDoc.exists) {
+            console.log(`Other user doc not found in ${otherUserCollection}:`, otherUserId);
+            return null;
+          }
 
           return {
+            id: doc.id,
             ...matchData,
             otherUser: otherUserDoc.data(),
-            lastMessage,
+            timestamp: matchData.timestamp?.toDate() || new Date(),
           };
         }));
 
-        // Sort matches by last message timestamp
-        matchesData.sort((a, b) => {
-          if (!a.lastMessage && !b.lastMessage) return 0;
-          if (!a.lastMessage) return 1;
-          if (!b.lastMessage) return -1;
-          return b.lastMessage.timestamp.toDate() - a.lastMessage.timestamp.toDate();
-        });
+        // Filter out any null results and sort by timestamp
+        const validMatches = matchesData
+          .filter(match => match !== null)
+          .sort((a, b) => b.timestamp - a.timestamp);
 
-        setMatches(matchesData);
+        console.log(`Processing complete. Found ${validMatches.length} valid matches`);
+        setMatches(validMatches);
       } catch (error) {
         console.error("Error fetching matches:", error);
       } finally {
@@ -71,22 +89,107 @@ export default function MatchesScreen({ navigation }) {
     return true;
   });
 
-  const renderItem = ({ item }) => (
-    <TouchableOpacity
-      style={styles.matchItem}
-      onPress={() => navigation.navigate('Chat', { matchId: item.id, itemTitle: userRole === 'worker' ? item.otherUser.jobTitle : item.otherUser.name })}
-    >
-      <Image
-        source={{ uri: item.otherUser.profilePicture || 'https://via.placeholder.com/50' }}
-        style={styles.profilePicture}
-      />
-      <View style={styles.matchInfo}>
-        <Text style={styles.name}>{userRole === 'worker' ? item.otherUser.jobTitle : item.otherUser.name}</Text>
-        <Text style={styles.lastMessage}>{item.lastMessage ? item.lastMessage.text : 'No messages yet'}</Text>
-      </View>
-      {item.jobAccepted && <Ionicons name="checkmark-circle" size={24} color="#4CAF50" />}
-    </TouchableOpacity>
-  );
+  const renderMatchItem = ({ item }) => {
+    const matchDetails = item.otherUser;
+    const otherUserId = userRole === 'worker' ? item.employerId : item.workerId;
+    
+    return (
+      <TouchableOpacity
+        style={styles.matchItem}
+        onPress={() => navigation.navigate('Chat', {
+          jobTitle: matchDetails.jobTitle || 'Job',
+          company: matchDetails.company || 'Company',
+          role: userRole,
+          matchId: item.id
+        })}
+        onLongPress={async () => {
+          try {
+            let detailsCollection;
+            let detailsId;
+
+            if (userRole === 'worker') {
+              // Worker viewing employer's job
+              detailsCollection = 'job_attributes';
+              // Get the job_attributes id that matches the employer's user id
+              const jobQuery = await db.collection('job_attributes')
+                .where('userId', '==', otherUserId)
+                .get();
+                
+              if (jobQuery.empty) {
+                console.error('No job found for employer:', otherUserId);
+                Alert.alert('Error', 'Could not find job details');
+                return;
+              }
+              
+              detailsId = jobQuery.docs[0].id;
+            } else {
+              // Employer viewing worker's profile
+              detailsCollection = 'user_attributes';
+              detailsId = otherUserId; // Worker's user ID directly maps to user_attributes
+            }
+
+            console.log('Fetching details from:', detailsCollection, 'with ID:', detailsId);
+            
+            const docRef = db.collection(detailsCollection).doc(detailsId);
+            const doc = await docRef.get();
+
+            if (!doc.exists) {
+              console.error('Document not found in', detailsCollection);
+              Alert.alert('Error', 'Could not find details for this match');
+              return;
+            }
+
+            const detailData = doc.data();
+            
+            navigation.navigate('JobDetail', {
+              itemId: detailsId,
+              itemType: userRole === 'worker' ? 'job' : 'worker',
+              fromMatches: true,
+              item: detailData
+            });
+          } catch (error) {
+            console.error('Error fetching details:', error);
+            Alert.alert('Error', 'Failed to load details');
+          }
+        }}
+        delayLongPress={500}
+      >
+        <View style={styles.matchInfo}>
+          {userRole === 'worker' ? (
+            <>
+              <Text style={styles.name}>{matchDetails.jobTitle || 'Job Title'}</Text>
+              <Text style={styles.subtitle}>{matchDetails.company || 'Company'}</Text>
+              <Text style={styles.details}>
+                {matchDetails.salaryRange ? 
+                  `$${matchDetails.salaryRange.min}-${matchDetails.salaryRange.max}/hr` : 'Salary not specified'}
+                {matchDetails.location && ` • ${matchDetails.location}`}
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.name}>{matchDetails.name || matchDetails.email || 'Candidate'}</Text>
+              <Text style={styles.subtitle}>
+                {matchDetails.experience?.totalYears 
+                  ? `${matchDetails.experience.totalYears} years experience` 
+                  : 'Experience not specified'}
+              </Text>
+              <Text style={styles.details}>
+                {matchDetails.skills?.length > 0 
+                  ? `Skills: ${matchDetails.skills.slice(0,3).join(', ')}` 
+                  : 'Skills not specified'}
+              </Text>
+            </>
+          )}
+          {item.lastMessage && (
+            <Text style={styles.lastMessage} numberOfLines={1}>
+              Last message: {item.lastMessage}
+            </Text>
+          )}
+        </View>
+        <Ionicons name="chevron-forward" size={24} color="#666" />
+      </TouchableOpacity>
+    );
+  };
 
   if (loading) {
     return (
@@ -127,7 +230,7 @@ export default function MatchesScreen({ navigation }) {
       <FlatList
         data={filteredMatches}
         keyExtractor={(item) => item.id}
-        renderItem={renderItem}
+        renderItem={renderMatchItem}
         style={styles.list}
         contentContainerStyle={styles.listContent}
       />
@@ -196,22 +299,17 @@ const styles = StyleSheet.create({
   },
   matchItem: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#ffffff',
     padding: 15,
-    marginBottom: 15,
-    borderRadius: 12,
-    elevation: 3,
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    marginBottom: 10,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
-  },
-  profilePicture: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    marginRight: 15,
+    elevation: 3,
   },
   matchInfo: {
     flex: 1,
@@ -219,8 +317,23 @@ const styles = StyleSheet.create({
   name: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#1e3a8a',
-    marginBottom: 5,
+    color: '#333',
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 2,
+  },
+  details: {
+    fontSize: 14,
+    color: '#888',
+    marginTop: 4,
+  },
+  profilePicture: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    marginRight: 15,
   },
   lastMessage: {
     fontSize: 14,

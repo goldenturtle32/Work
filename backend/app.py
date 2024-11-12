@@ -3,13 +3,14 @@ from flask_cors import CORS
 from openai import OpenAI
 import os
 from dotenv import load_dotenv
+import json
 
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
 
-client = OpenAI(api_key=os.getenv('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'))
+client = OpenAI(api_key=os.getenv('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'))  # Make sure to use env variable
 
 def generate_fallback_analysis(job_data, user_data):
     """Generate a basic analysis without using OpenAI"""
@@ -62,6 +63,95 @@ def analyze_job_match():
             "analysis": analysis
         })
         
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"Error: {str(e)}"
+        }), 500
+
+def parse_llm_response(response_text):
+    """Parse the LLM response into a list of suggestions"""
+    try:
+        # Try to parse JSON from the response
+        if isinstance(response_text, str):
+            suggestions = json.loads(response_text)
+            if isinstance(suggestions, list):
+                return suggestions
+        
+        # If we got a string, split it into lines
+        return [s.strip() for s in response_text.split('\n') if s.strip()]
+    except:
+        # Fallback suggestions
+        return [
+            "What are the next steps in the process?",
+            "Could you tell me more about the role?",
+            "What does a typical day look like?",
+            "What are the main responsibilities?"
+        ]
+
+@app.route('/generate-chat-suggestions', methods=['POST'])
+def generate_chat_suggestions():
+    try:
+        data = request.json
+        role = data['role']
+        job_title = data['jobTitle']
+        company = data['company']
+        recent_messages = data.get('recentMessages', [])
+
+        # Create the prompt
+        prompt = f"""Generate 4 relevant questions/messages for a {role} chatting about a {job_title} position at {company}.
+        Recent messages in the chat: {recent_messages}
+        
+        The suggestions should be:
+        - Natural and conversational
+        - Relevant to the context
+        - Professional but friendly
+        - Specific to the role/company when possible
+        
+        Return the suggestions as a JSON array of strings. For example:
+        ["What benefits does this position offer?", "Could you describe the team culture?"]"""
+
+        try:
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant generating chat suggestions for a job matching platform."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=200
+            )
+            
+            suggestions = parse_llm_response(response.choices[0].message.content)
+            
+            return jsonify({
+                "success": True,
+                "suggestions": suggestions
+            })
+            
+        except Exception as e:
+            print(f"OpenAI API error: {e}")
+            # Fallback suggestions based on role
+            if role == 'worker':
+                suggestions = [
+                    "What benefits does this position offer?",
+                    "Is there flexibility in the work schedule?",
+                    "What growth opportunities are available?",
+                    "Can you describe the team I'd be working with?"
+                ]
+            else:
+                suggestions = [
+                    "What relevant experience do you have for this role?",
+                    "When would you be able to start?",
+                    "What interests you most about this position?",
+                    "Tell me about your biggest professional achievement"
+                ]
+            
+            return jsonify({
+                "success": True,
+                "suggestions": suggestions
+            })
+            
     except Exception as e:
         return jsonify({
             "success": False,

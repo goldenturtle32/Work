@@ -1,118 +1,87 @@
-import React, { useState } from 'react';
-import { View, TextInput, Button, FlatList, Text, StyleSheet } from 'react-native';
-
-export default function ChatScreen({ route }) {
-  const { jobTitle, company } = route.params;
-  const [message, setMessage] = useState('');
-  const [messages, setMessages] = useState([]);
-
-  const sendMessage = () => {
-    if (message.trim()) {
-      setMessages([...messages, { id: Date.now().toString(), text: message }]);
-      setMessage('');  // Clear the input field
-    }
-  };
-
-  const renderMessageItem = ({ item }) => (
-    <View style={styles.messageContainer}>
-      <Text style={styles.messageText}>{item.text}</Text>
-    </View>
-  );
-
-  return (
-    <View style={styles.container}>
-      <Text style={styles.header}>Chat with {company} about {jobTitle}</Text>
-      <FlatList
-        data={messages}
-        keyExtractor={(item) => item.id}
-        renderItem={renderMessageItem}
-        style={styles.chatArea}
-      />
-      <View style={styles.inputContainer}>
-        <TextInput
-          value={message}
-          onChangeText={setMessage}
-          placeholder="Type your message..."
-          style={styles.input}
-        />
-        <Button title="Send" onPress={sendMessage} />
-      </View>
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: 20,
-  },
-  header: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 10,
-  },
-  chatArea: {
-    flex: 1,
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  input: {
-    flex: 1,
-    borderColor: '#ccc',
-    borderWidth: 1,
-    borderRadius: 5,
-    padding: 10,
-    marginRight: 10,
-  },
-  messageContainer: {
-    backgroundColor: '#f1f1f1',
-    padding: 10,
-    borderRadius: 5,
-    marginVertical: 5,
-  },
-  messageText: {
-    fontSize: 16,
-  },
-});
-
-
-
-
-
-
-
-
-
 import React, { useState, useEffect } from 'react';
-import { View, TextInput, TouchableOpacity, FlatList, Text, StyleSheet, Alert } from 'react-native';
+import { View, TextInput, TouchableOpacity, FlatList, Text, StyleSheet, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePickerModal from "react-native-modal-datetime-picker";
+import { db, auth, firebase } from '../firebase';
 
 export default function ChatScreen({ route, navigation }) {
-  const { jobTitle, company, role } = route.params;
+  const { jobTitle, company, role, matchId } = route.params;
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState([]);
   const [isDatePickerVisible, setDatePickerVisibility] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Simulating initial message from the job
-    if (role === 'worker') {
-      setMessages([
-        { id: '1', text: `How can I help you with the ${jobTitle} position?`, sender: 'employer' }
-      ]);
-    }
-  }, []);
+    const unsubscribe = db.collection('chats')
+      .doc(matchId)
+      .collection('messages')
+      .orderBy('timestamp', 'desc')
+      .onSnapshot(snapshot => {
+        try {
+          const newMessages = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data(),
+            timestamp: doc.data().timestamp?.toDate() || new Date()
+          }));
+          setMessages(newMessages);
+          setLoading(false);
+        } catch (error) {
+          console.error("Error processing messages:", error);
+          setLoading(false);
+        }
+      }, error => {
+        console.error("Error fetching messages:", error);
+        Alert.alert(
+          'Error',
+          'Unable to load messages. Please check your connection and try again.'
+        );
+        setLoading(false);
+      });
 
-  const sendMessage = () => {
+    return () => unsubscribe();
+  }, [matchId]);
+
+  const sendMessage = async () => {
     if (message.trim()) {
-      const newMessage = { id: Date.now().toString(), text: message, sender: role };
-      setMessages([...messages, newMessage]);
-      setMessage('');
-      
-      if (role === 'worker') {
-        setTimeout(() => simulateEmployerResponse(newMessage), 1000);
+      try {
+        const currentUser = auth.currentUser;
+        if (!currentUser) {
+          throw new Error('No authenticated user');
+        }
+
+        // First create the chat document if it doesn't exist
+        await db.collection('chats').doc(matchId).set({
+          participants: [currentUser.uid, role === 'worker' ? matchId.split('_')[1] : matchId.split('_')[0]],
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+
+        // Then add the message
+        const messageData = {
+          text: message,
+          senderId: currentUser.uid,
+          sender: role,
+          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          read: false
+        };
+
+        await db.collection('chats')
+          .doc(matchId)
+          .collection('messages')
+          .add(messageData);
+        
+        await db.collection('matches').doc(matchId).update({
+          lastMessage: message,
+          lastMessageTimestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          [`${role}LastRead`]: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        setMessage('');
+      } catch (error) {
+        console.error('Error sending message:', error);
+        Alert.alert(
+          'Error',
+          'Failed to send message. Please check your connection and try again.'
+        );
       }
     }
   };
@@ -128,31 +97,58 @@ export default function ChatScreen({ route, navigation }) {
     } else {
       response = `Thank you for your interest in the ${jobTitle} position. Is there anything specific you'd like to know about the role or ${company}?`;
     }
-    setMessages(prev => [...prev, { id: Date.now().toString(), text: response, sender: 'employer' }]);
+    
+    db.collection('chats')
+      .doc(matchId)
+      .collection('messages')
+      .add({
+        text: response,
+        sender: 'employer',
+        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+        simulated: true
+      });
   };
 
   const renderMessageItem = ({ item }) => (
-    <View style={[styles.messageContainer, item.sender === 'employer' ? styles.employerMessage : styles.userMessage]}>
-      <Text style={styles.messageText}>{item.text}</Text>
+    <View style={[
+      styles.messageContainer,
+      item.sender === role ? styles.userMessage : styles.employerMessage
+    ]}>
+      <Text style={[
+        styles.messageText,
+        item.sender === role ? styles.userMessageText : styles.employerMessageText
+      ]}>
+        {item.text}
+      </Text>
+      <Text style={styles.timestamp}>
+        {item.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+      </Text>
     </View>
   );
 
-  const showDatePicker = () => {
-    setDatePickerVisibility(true);
-  };
+  const showDatePicker = () => setDatePickerVisibility(true);
+  const hideDatePicker = () => setDatePickerVisibility(false);
 
-  const hideDatePicker = () => {
-    setDatePickerVisibility(false);
-  };
-
-  const handleConfirm = (date) => {
+  const handleConfirm = async (date) => {
     hideDatePicker();
     const formattedDate = date.toLocaleString();
-    const scheduleMessage = { id: Date.now().toString(), text: `Call scheduled for ${formattedDate}`, sender: 'system' };
-    setMessages([...messages, scheduleMessage]);
+    const scheduleMessage = {
+      text: `Call scheduled for ${formattedDate}`,
+      sender: 'system',
+      timestamp: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    
+    try {
+      await db.collection('chats')
+        .doc(matchId)
+        .collection('messages')
+        .add(scheduleMessage);
+    } catch (error) {
+      console.error('Error saving schedule:', error);
+    }
   };
 
-  const suggestAction = (action) => {
+  const suggestAction = async (action) => {
     let actionMessage;
     switch(action) {
       case 'call':
@@ -167,29 +163,50 @@ export default function ChatScreen({ route, navigation }) {
       default:
         actionMessage = "Is there anything specific you'd like to know about the role?";
     }
-    setMessages([...messages, { id: Date.now().toString(), text: actionMessage, sender: role }]);
+    
+    try {
+      await db.collection('chats')
+        .doc(matchId)
+        .collection('messages')
+        .add({
+          text: actionMessage,
+          sender: role,
+          timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        });
+    } catch (error) {
+      console.error('Error suggesting action:', error);
+    }
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.header}>Chat with {company} about {jobTitle}</Text>
+    <KeyboardAvoidingView 
+      style={styles.container}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
+    >
+      <Text style={styles.header}>Chat with {role === 'worker' ? company : 'Applicant'} about {jobTitle}</Text>
+      
       <FlatList
         data={messages}
         keyExtractor={(item) => item.id}
         renderItem={renderMessageItem}
+        inverted
         style={styles.chatArea}
       />
+
       <View style={styles.inputContainer}>
         <TextInput
           value={message}
           onChangeText={setMessage}
           placeholder="Type your message..."
           style={styles.input}
+          multiline
         />
         <TouchableOpacity onPress={sendMessage} style={styles.sendButton}>
           <Ionicons name="send" size={24} color="#007AFF" />
         </TouchableOpacity>
       </View>
+
       {role === 'employer' && (
         <View style={styles.actionContainer}>
           <TouchableOpacity onPress={showDatePicker} style={styles.actionButton}>
@@ -203,13 +220,14 @@ export default function ChatScreen({ route, navigation }) {
           </TouchableOpacity>
         </View>
       )}
+
       <DateTimePickerModal
         isVisible={isDatePickerVisible}
         mode="datetime"
         onConfirm={handleConfirm}
         onCancel={hideDatePicker}
       />
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -271,5 +289,17 @@ const styles = StyleSheet.create({
     padding: 10,
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
+  },
+  userMessageText: {
+    color: '#FFFFFF',
+  },
+  employerMessageText: {
+    color: '#333333',
+  },
+  timestamp: {
+    fontSize: 12,
+    color: '#94a3b8',
+    marginTop: 4,
+    alignSelf: 'flex-end',
   },
 });

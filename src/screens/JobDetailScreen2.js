@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { db, auth } from '../firebase';
 import { calculateMatch } from '../utils/matchUtils';
 import Icon from 'react-native-vector-icons/MaterialIcons';
@@ -10,7 +10,26 @@ import { analyzeProfileMatch } from '../utils/matchAnalysis';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 
-export default function JobDetailsScreen({ route, navigation }) {
+const BACKEND_URL = 'http://127.0.0.1:5000';
+
+const QuickMatchOverview = ({ analysis }) => {
+  if (!analysis) return null;
+  
+  return (
+    <View style={styles.matchOverview}>
+      <Text style={styles.matchScore}>
+        {((analysis.overallFit?.score || 0) * 100).toFixed(0)}% Match
+      </Text>
+      <View style={styles.matchDetails}>
+        <Text style={styles.matchDetail}>Skills: {((analysis.skillsMatch?.score || 0) * 100).toFixed(0)}%</Text>
+        <Text style={styles.matchDetail}>Schedule: {((analysis.scheduleMatch?.score || 0) * 100).toFixed(0)}%</Text>
+        <Text style={styles.matchDetail}>Location: {((analysis.locationMatch?.score || 0) * 100).toFixed(0)}%</Text>
+      </View>
+    </View>
+  );
+};
+
+export default function JobDetailScreen({ route, navigation }) {
   const { itemId, itemType, currentUserData, item: initialItem } = route.params;
   const [item, setItem] = useState(initialItem);
   const [currentUser, setCurrentUser] = useState(null);
@@ -18,6 +37,7 @@ export default function JobDetailsScreen({ route, navigation }) {
   const [loading, setLoading] = useState(true);
   const [analysis, setAnalysis] = useState(null);
   const [locationDisplay, setLocationDisplay] = useState('Loading location...');
+  const [llmAnalysis, setLlmAnalysis] = useState('');
 
   // Helper functions
   const getBenefits = () => {
@@ -157,53 +177,73 @@ export default function JobDetailsScreen({ route, navigation }) {
     return 'Location unavailable';
   };
 
-  useEffect(() => {
-    const fetchDetails = async () => {
-      try {
-        // Set current user
-        setCurrentUser(new FirebaseUser(currentUserData));
+  const getJobAnalysis = async (jobData, userData) => {
+    try {
+      console.log('Sending data for analysis:', { job: jobData, user: userData });
+      
+      const response = await fetch(`${BACKEND_URL}/analyze-job-match`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          job: jobData,
+          user: userData
+        })
+      });
 
-        let itemDoc;
-        if (itemType === 'job') {
-          // Fetch job_attributes for the employer
-          itemDoc = await db.collection('job_attributes').doc(itemId).get();
-          if (itemDoc.exists) {
-            const jobData = new Job({ id: itemDoc.id, ...itemDoc.data() });
-            setItem(jobData);
-            
-            // Perform detailed analysis
-            const matchAnalysis = analyzeProfileMatch(jobData, currentUserData);
-            setAnalysis(matchAnalysis);
-            setMatchScore(matchAnalysis.overallFit.score);
-          } else {
-            throw new Error('Job not found');
-          }
-        } else if (itemType === 'worker') {
-          // Fetch user_attributes for the worker
-          itemDoc = await db.collection('user_attributes').doc(itemId).get();
-          if (itemDoc.exists) {
-            setItem(new User({ uid: itemDoc.id, ...itemDoc.data() }));
-          } else {
-            throw new Error('Worker not found');
-          }
-        }
+      console.log('Response status:', response.status);
+      const data = await response.json();
+      console.log('Server response:', data);
 
-        // Calculate match score
-        if (itemDoc.exists) {
-          const { totalScore } = calculateMatch(currentUserData, itemDoc.data());
-          setMatchScore(totalScore);
-        }
-
-      } catch (error) {
-        console.error("Error fetching details:", error);
-        Alert.alert('Error', error.message);
-      } finally {
-        setLoading(false);
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to get analysis');
       }
-    };
 
+      return data.analysis;
+    } catch (error) {
+      console.error('Error getting job analysis:', error);
+      // Return a basic analysis instead of throwing
+      return `This ${jobData.jobTitle} position matches your profile in several ways. You have relevant experience and skills that align with the job requirements.`;
+    }
+  };
+
+  const fetchDetails = async () => {
+    try {
+      setLoading(true);
+      
+      if (route.params?.itemId) {
+        const itemDoc = await db.collection('job_attributes').doc(route.params.itemId).get();
+        
+        if (itemDoc.exists) {
+          const jobData = itemDoc.data();
+          setItem(jobData);
+          
+          // Get basic match analysis
+          const matchAnalysis = analyzeProfileMatch(jobData, currentUserData);
+          setAnalysis(matchAnalysis);
+
+          try {
+            // Get LLM analysis
+            const llmResult = await getJobAnalysis(jobData, currentUserData);
+            setLlmAnalysis(llmResult);
+          } catch (error) {
+            console.error('LLM Analysis error:', error);
+            setLlmAnalysis('Unable to generate detailed analysis at this time.');
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching details:", error);
+      Alert.alert('Error', 'Failed to load job details');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchDetails();
-  }, [itemId, itemType, currentUserData]);
+  }, [route.params?.itemId]);
 
   useEffect(() => {
     const loadJobDetails = async () => {
@@ -307,6 +347,12 @@ export default function JobDetailsScreen({ route, navigation }) {
             <Text style={styles.description}>No matching availability found</Text>
           )}
         </View>
+
+        {/* LLM Analysis Section */}
+        <Text style={styles.sectionTitle}>Why This Is a Great Match</Text>
+        <View style={styles.infoContainer}>
+          <Text style={styles.description}>{llmAnalysis}</Text>
+        </View>
       </>
     );
   };
@@ -350,66 +396,98 @@ export default function JobDetailsScreen({ route, navigation }) {
     }
   };
 
-  const QuickMatchOverview = () => (
-    <View style={styles.quickMatchContainer}>
-      <View style={styles.matchScoreCircle}>
-        <Text style={styles.matchScoreText}>
-          {analysis ? `${(analysis.overallFit.score * 100).toFixed(0)}%` : '-%'}
-        </Text>
-        <Text style={styles.matchScoreLabel}>Match</Text>
+  const renderAnalysis = () => {
+    if (loading) {
+      return <Text style={styles.analysisText}>Loading analysis...</Text>;
+    }
+
+    return (
+      <View style={styles.analysisContainer}>
+        <Text style={styles.sectionTitle}>Why This Is a Great Match</Text>
+        <Text style={styles.analysisText}>{llmAnalysis || 'Analysis not available'}</Text>
       </View>
-      
-      <View style={styles.matchMetrics}>
-        <View style={styles.matchMetric}>
-          <Ionicons name="checkmark-circle" size={20} color="#1e3a8a" />
-          <Text style={styles.matchMetricText}>
-            Skills: {analysis ? `${(analysis.skillsMatch.score * 100).toFixed(0)}%` : '-'}
-          </Text>
-        </View>
-        <View style={styles.matchMetric}>
-          <Ionicons name="time" size={20} color="#1e3a8a" />
-          <Text style={styles.matchMetricText}>
-            Schedule: {analysis ? `${(analysis.scheduleMatch.score * 100).toFixed(0)}%` : '-'}
-          </Text>
-        </View>
-        <View style={styles.matchMetric}>
-          <Ionicons name="location" size={20} color="#1e3a8a" />
-          <Text style={styles.matchMetricText}>
-            Location: {analysis ? `${(analysis.locationMatch.score * 100).toFixed(0)}%` : '-'}
-          </Text>
-        </View>
-      </View>
-    </View>
-  );
+    );
+  };
 
   if (loading) {
-    return <View style={styles.container}><Text>Loading...</Text></View>;
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#0000ff" />
+      </View>
+    );
   }
 
   return (
     <ScrollView style={styles.container}>
-      {itemType === 'job' && <QuickMatchOverview />}
-      {renderDetails()}
-      
-      {itemType === 'job' && analysis && (
-        <TouchableOpacity 
-          style={styles.analysisButton}
-          onPress={() => navigation.navigate('MatchAnalysis', {
-            jobData: item,
-            userData: currentUser,
-          })}
-        >
-          <Ionicons name="analytics" size={24} color="#fff" />
-          <Text style={styles.analysisButtonText}>View Detailed Match Analysis</Text>
-        </TouchableOpacity>
+      {item && (
+        <>
+          {/* Job Title Section */}
+          <View style={styles.jobDetails}>
+            <Text style={styles.jobTitle}>{item.jobTitle}</Text>
+          </View>
+
+          {/* Location Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Location</Text>
+            <Text style={styles.sectionText}>
+              {item.formattedLocation || 'Location unavailable'}
+            </Text>
+          </View>
+
+          {/* Compensation Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Compensation</Text>
+            <Text style={styles.sectionText}>Pay Range: ${item.salaryRange?.min}/hr - ${item.salaryRange?.max}/hr</Text>
+            <Text style={styles.sectionText}>Weekly Hours: {item.weeklyHours || 0} hours</Text>
+            <Text style={styles.sectionText}>
+              Estimated Weekly Pay: ${(item.salaryRange?.min * (item.weeklyHours || 0)).toFixed(0)} - 
+              ${(item.salaryRange?.max * (item.weeklyHours || 0)).toFixed(0)}
+            </Text>
+          </View>
+
+          {/* Benefits Section */}
+          {item.benefits && item.benefits.length > 0 && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Benefits</Text>
+              {item.benefits.map((benefit, index) => (
+                <Text key={index} style={styles.sectionText}>{benefit}</Text>
+              ))}
+            </View>
+          )}
+
+          {/* Required Skills Section */}
+          {item.requiredSkills && item.requiredSkills.length > 0 && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Required Skills</Text>
+              {item.requiredSkills.map((skill, index) => (
+                <Text key={index} style={styles.sectionText}>{skill}</Text>
+              ))}
+            </View>
+          )}
+
+          {/* Match Analysis Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Match Analysis</Text>
+            <QuickMatchOverview analysis={analysis} />
+          </View>
+
+          {/* Schedule Compatibility Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Schedule Compatibility</Text>
+            <Text style={styles.sectionText}>
+              {analysis?.scheduleMatch?.details || 'No matching availability found'}
+            </Text>
+          </View>
+
+          {/* LLM Analysis Section */}
+          <View style={styles.analysisContainer}>
+            <Text style={styles.sectionTitle}>Why This Is a Great Match</Text>
+            <Text style={styles.analysisText}>
+              {llmAnalysis || 'Analysis not available'}
+            </Text>
+          </View>
+        </>
       )}
-      
-      <TouchableOpacity 
-        style={[styles.applyButton, { marginTop: 10 }]} 
-        onPress={() => Alert.alert('Job Applied!', 'You have successfully applied for this job.')}
-      >
-        <Text style={styles.applyButtonText}>Apply for Job</Text>
-      </TouchableOpacity>
     </ScrollView>
   );
 }
@@ -417,36 +495,68 @@ export default function JobDetailsScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#f3f4f6',
+  },
+  section: {
+    backgroundColor: '#fff',
     padding: 16,
-    backgroundColor: '#f5f5f5',
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 8,
-    color: '#333',
-  },
-  subtitle: {
-    fontSize: 18,
-    marginBottom: 16,
-    color: '#666',
+    marginVertical: 8,
+    marginHorizontal: 16,
+    borderRadius: 8,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    marginTop: 16,
+    color: '#1f2937',
     marginBottom: 8,
-    color: '#333',
   },
-  description: {
+  sectionText: {
     fontSize: 16,
-    marginBottom: 16,
-    color: '#666',
+    color: '#4b5563',
+    marginBottom: 4,
+  },
+  jobDetails: {
+    backgroundColor: '#fff',
+    padding: 16,
+    marginBottom: 8,
+  },
+  jobTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#111827',
+  },
+  matchOverview: {
+    marginVertical: 8,
   },
   matchScore: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#059669',
+    marginBottom: 8,
+  },
+  matchDetails: {
+    marginTop: 8,
+  },
+  matchDetail: {
     fontSize: 16,
-    marginBottom: 16,
-    color: '#666',
+    color: '#4b5563',
+    marginBottom: 4,
+  },
+  analysisContainer: {
+    backgroundColor: '#fff',
+    padding: 16,
+    margin: 16,
+    borderRadius: 8,
+  },
+  analysisText: {
+    fontSize: 16,
+    lineHeight: 24,
+    color: '#374151',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   applyButton: {
     backgroundColor: '#4CAF50',
@@ -547,5 +657,39 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#4b5563',
     marginBottom: 4,
+  },
+  infoContainer: {
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 8,
+    color: '#333',
+  },
+  subtitle: {
+    fontSize: 18,
+    marginBottom: 16,
+    color: '#666',
+  },
+  description: {
+    fontSize: 16,
+    marginBottom: 16,
+    color: '#666',
+  },
+  matchScore: {
+    fontSize: 16,
+    marginBottom: 16,
+    color: '#666',
+  },
+  benefitsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  matchAnalysisContainer: {
+    marginBottom: 16,
+  },
+  scheduleMatchContainer: {
+    marginBottom: 16,
   },
 });

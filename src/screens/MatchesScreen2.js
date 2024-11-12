@@ -1,39 +1,77 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, Image } from 'react-native';
 import { db, auth } from '../firebase';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import Match from '../models/Match';
 
 export default function MatchesScreen({ navigation }) {
   const [matches, setMatches] = useState([]);
   const [userRole, setUserRole] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('all'); // 'all', 'messaged', 'accepted'
 
   useEffect(() => {
     const fetchMatches = async () => {
       try {
+        setLoading(true);
         const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
         const userData = userDoc.data();
         setUserRole(userData.role);
 
-        const matchesSnapshot = await db.collection('matches')
-          .where(`${userData.role}Id`, '==', auth.currentUser.uid)
-          .where('worker', '==', true)
-          .where('employer', '==', true)
-          .get();
+        console.log('Current user ID:', auth.currentUser.uid);
+        console.log('Current user role:', userData.role);
+
+        // Query matches where the current user is either the worker or employer
+        const matchesQuery = db.collection('matches').where(
+          `${userData.role}Id`,
+          '==',
+          auth.currentUser.uid
+        );
+
+        console.log('Match query:', `${userData.role}Id`, '==', auth.currentUser.uid);
+
+        const matchesSnapshot = await matchesQuery.get();
+        console.log(`Found ${matchesSnapshot.size} matches`);
 
         const matchesData = await Promise.all(matchesSnapshot.docs.map(async (doc) => {
           const matchData = doc.data();
-          const otherUserId = userData.role === 'worker' ? matchData.employerId : matchData.workerId;
-          const otherUserDoc = await db.collection(userData.role === 'worker' ? 'job_attributes' : 'user_attributes').doc(otherUserId).get();
+          console.log('Processing match:', doc.id, matchData);
+
+          // Determine the other user's ID
+          const otherUserId = userData.role === 'worker' 
+            ? matchData.employerId 
+            : matchData.workerId;
+
+          // Get the other user's data from the appropriate collection
+          const otherUserCollection = userData.role === 'worker' 
+            ? 'job_attributes' 
+            : 'user_attributes';
+          
+          const otherUserDoc = await db.collection(otherUserCollection)
+            .doc(otherUserId)
+            .get();
+
+          if (!otherUserDoc.exists) {
+            console.log(`Other user doc not found in ${otherUserCollection}:`, otherUserId);
+            return null;
+          }
+
           return {
             id: doc.id,
             ...matchData,
-            otherUser: otherUserDoc.data()
+            otherUser: otherUserDoc.data(),
+            timestamp: matchData.timestamp?.toDate() || new Date(),
           };
         }));
 
-        setMatches(matchesData);
+        // Filter out any null results and sort by timestamp
+        const validMatches = matchesData
+          .filter(match => match !== null)
+          .sort((a, b) => b.timestamp - a.timestamp);
+
+        console.log(`Processing complete. Found ${validMatches.length} valid matches`);
+        setMatches(validMatches);
       } catch (error) {
         console.error("Error fetching matches:", error);
       } finally {
@@ -44,32 +82,69 @@ export default function MatchesScreen({ navigation }) {
     fetchMatches();
   }, []);
 
-  const handlePress = (item) => {
-    navigation.navigate('Chat', { matchId: item.id, itemTitle: userRole === 'worker' ? item.otherUser.jobTitle : item.otherUser.name });
-  };
+  const filteredMatches = matches.filter(match => {
+    if (filter === 'all') return true;
+    if (filter === 'messaged') return match.lastMessage !== null;
+    if (filter === 'accepted') return match.jobAccepted;
+    return true;
+  });
 
-  const handleLongPress = (item) => {
-    navigation.navigate('JobDetail', { itemId: item.id });
+  const renderMatchItem = ({ item }) => {
+    const matchDetails = item.otherUser;
+    const otherUserId = userRole === 'worker' ? item.employerId : item.workerId;
+    
+    return (
+      <TouchableOpacity
+        style={styles.matchItem}
+        onPress={() => navigation.navigate('Chat', {
+          jobTitle: matchDetails.jobTitle || 'Job',
+          company: matchDetails.company || 'Company',
+          role: userRole,
+          matchId: item.id
+        })}
+        onLongPress={() => navigation.navigate('JobDetail', {
+          itemId: otherUserId,
+          itemType: userRole === 'worker' ? 'job' : 'worker',
+          fromMatches: true
+        })}
+        delayLongPress={500}
+      >
+        <View style={styles.matchInfo}>
+          {userRole === 'worker' ? (
+            <>
+              <Text style={styles.name}>{matchDetails.jobTitle || 'Job Title'}</Text>
+              <Text style={styles.subtitle}>{matchDetails.company || 'Company'}</Text>
+              <Text style={styles.details}>
+                {matchDetails.salaryRange ? 
+                  `$${matchDetails.salaryRange.min}-${matchDetails.salaryRange.max}/hr` : 'Salary not specified'}
+                {matchDetails.location && ` • ${matchDetails.location}`}
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.name}>{matchDetails.name || matchDetails.email || 'Candidate'}</Text>
+              <Text style={styles.subtitle}>
+                {matchDetails.experience?.totalYears 
+                  ? `${matchDetails.experience.totalYears} years experience` 
+                  : 'Experience not specified'}
+              </Text>
+              <Text style={styles.details}>
+                {matchDetails.skills?.length > 0 
+                  ? `Skills: ${matchDetails.skills.slice(0,3).join(', ')}` 
+                  : 'Skills not specified'}
+              </Text>
+            </>
+          )}
+          {item.lastMessage && (
+            <Text style={styles.lastMessage} numberOfLines={1}>
+              Last message: {item.lastMessage}
+            </Text>
+          )}
+        </View>
+        <Ionicons name="chevron-forward" size={24} color="#666" />
+      </TouchableOpacity>
+    );
   };
-
-  const renderItem = ({ item }) => (
-    <TouchableOpacity
-      style={styles.matchItem}
-      onPress={() => navigation.navigate('JobDetail', { jobId: item.otherUser.id })}
-    >
-      {userRole === 'worker' ? (
-        <>
-          <Text style={styles.jobTitle}>{item.otherUser.jobTitle}</Text>
-          <Text style={styles.companyName}>{item.otherUser.industry}</Text>
-        </>
-      ) : (
-        <>
-          <Text style={styles.name}>{item.otherUser.name}</Text>
-          <Text style={styles.skills}>Skills: {item.otherUser.skills?.join(', ')}</Text>
-        </>
-      )}
-    </TouchableOpacity>
-  );
 
   if (loading) {
     return (
@@ -87,19 +162,33 @@ export default function MatchesScreen({ navigation }) {
       >
         <Text style={styles.headerTitle}>Your Matches</Text>
       </LinearGradient>
+      <View style={styles.filterContainer}>
+        <TouchableOpacity
+          style={[styles.filterButton, filter === 'all' && styles.activeFilter]}
+          onPress={() => setFilter('all')}
+        >
+          <Text style={[styles.filterText, filter === 'all' && styles.activeFilterText]}>All</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.filterButton, filter === 'messaged' && styles.activeFilter]}
+          onPress={() => setFilter('messaged')}
+        >
+          <Text style={[styles.filterText, filter === 'messaged' && styles.activeFilterText]}>Messaged</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.filterButton, filter === 'accepted' && styles.activeFilter]}
+          onPress={() => setFilter('accepted')}
+        >
+          <Text style={[styles.filterText, filter === 'accepted' && styles.activeFilterText]}>Accepted</Text>
+        </TouchableOpacity>
+      </View>
       <FlatList
-        data={matches}
+        data={filteredMatches}
         keyExtractor={(item) => item.id}
-        renderItem={renderItem}
+        renderItem={renderMatchItem}
         style={styles.list}
         contentContainerStyle={styles.listContent}
       />
-      <TouchableOpacity
-        style={styles.paymentButton}
-        onPress={() => navigation.navigate('Payment')}
-      >
-        <Text style={styles.paymentButtonText}>Proceed to Payment</Text>
-      </TouchableOpacity>
       <View style={styles.navigation}>
         <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Home')}>
           <Ionicons name="home-outline" size={24} color="#ffffff" />
@@ -134,6 +223,29 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     textAlign: 'center',
   },
+  filterContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingVertical: 10,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  filterButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+  },
+  activeFilter: {
+    backgroundColor: '#3b82f6',
+  },
+  filterText: {
+    fontSize: 14,
+    color: '#4b5563',
+  },
+  activeFilterText: {
+    color: '#ffffff',
+  },
   list: {
     flex: 1,
   },
@@ -141,49 +253,46 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   matchItem: {
-    backgroundColor: '#ffffff',
-    padding: 20,
-    marginBottom: 15,
-    borderRadius: 8,
-    elevation: 3,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 15,
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    marginBottom: 10,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
+    elevation: 3,
   },
-  jobTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#1e3a8a',
-    marginBottom: 5,
-  },
-  companyName: {
-    fontSize: 16,
-    color: '#4b5563',
-    marginBottom: 3,
+  matchInfo: {
+    flex: 1,
   },
   name: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#1e3a8a',
-    marginBottom: 5,
+    color: '#333',
   },
-  skills: {
+  subtitle: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 2,
+  },
+  details: {
+    fontSize: 14,
+    color: '#888',
+    marginTop: 4,
+  },
+  profilePicture: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    marginRight: 15,
+  },
+  lastMessage: {
     fontSize: 14,
     color: '#4b5563',
-  },
-  paymentButton: {
-    backgroundColor: '#1e3a8a',
-    paddingVertical: 15,
-    marginHorizontal: 20,
-    marginBottom: 20,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  paymentButtonText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: 'bold',
   },
   navigation: {
     flexDirection: 'row',

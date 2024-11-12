@@ -91,8 +91,15 @@ export default function HomeScreen({ navigation }) {
                 candidateData.location.latitude,
                 candidateData.location.longitude
               ) : null;
+            
+            console.log('Creating worker candidate:', {
+              docId: doc.id,
+              candidateData: candidateData
+            });
+            
             return new User({ 
-              uid: doc.id, 
+              id: doc.id,
+              uid: doc.id,
               ...candidateData,
               distance 
             });
@@ -113,9 +120,41 @@ export default function HomeScreen({ navigation }) {
   const handleSwipe = async (cardIndex, interested) => {
     const item = items[cardIndex];
     const currentUserUid = auth.currentUser.uid;
-    const itemId = currentUser.role === 'worker' ? item.id : item.uid;
+    
+    // Debug logging
+    console.log('Item full object:', item);
+    console.log('Item properties:', Object.keys(item));
+    
+    // Fix the swipedUserId determination based on role and item type
+    let swipedUserId;
+    if (currentUser.role === 'worker') {
+      swipedUserId = item.id; // For jobs
+    } else {
+      // For employers swiping on workers
+      swipedUserId = item.uid || item.id;
+      
+      // Debug logging
+      console.log('Worker candidate item:', {
+        uid: item.uid,
+        id: item.id,
+        determined_swipedUserId: swipedUserId
+      });
+    }
 
-    console.log(`Swiped ${interested ? 'right' : 'left'} on item: ${itemId}`);
+    // Validation check with more detailed logging
+    if (!swipedUserId) {
+      console.error('Failed to determine swipedUserId:', {
+        role: currentUser.role,
+        itemId: item.id,
+        itemUid: item.uid,
+        item: JSON.stringify(item, null, 2), // Pretty print the item
+        itemType: item.constructor.name
+      });
+      Alert.alert('Error', 'Could not process swipe. Please try again.');
+      return;
+    }
+
+    console.log(`Swiped ${interested ? 'right' : 'left'} on item:`, swipedUserId);
     console.log(`Current user: ${currentUserUid}, role: ${currentUser.role}`);
     console.log('Item being swiped:', item);
 
@@ -123,7 +162,7 @@ export default function HomeScreen({ navigation }) {
       const userJobPrefData = new UserJobPreference({
         userId: currentUserUid,
         role: currentUser.role,
-        swipedUserId: itemId,
+        swipedUserId: swipedUserId,
         interested: interested,
       });
 
@@ -134,45 +173,81 @@ export default function HomeScreen({ navigation }) {
         timestamp: firebase.firestore.FieldValue.serverTimestamp()
       };
 
-      // Update user_job_preferences
-      await db.collection('user_job_preferences').doc(currentUserUid).set({
-        [itemId]: userJobPrefObject
-      }, { merge: true });
+      // Create a separate document for each swipe preference using the correct IDs
+      const prefDocId = `${currentUserUid}_${swipedUserId}`;
+      
+      // Update user_job_preferences with a unique document ID
+      await db.collection('user_job_preferences').doc(prefDocId).set(userJobPrefObject);
 
       console.log('User job preferences updated successfully');
 
       // If it's a right swipe, check for a match
       if (interested) {
+        // For worker->employer matches: workerId_employerId
+        // For employer->worker matches: workerId_employerId
         const matchId = currentUser.role === 'worker' 
-          ? `${currentUserUid}_${itemId}` 
-          : `${itemId}_${currentUserUid}`;
+          ? `${currentUserUid}_${swipedUserId}` // worker_employer
+          : `${swipedUserId}_${currentUserUid}`; // worker_employer (same format)
         
-        const matchRef = db.collection('matches').doc(matchId);
-        const matchDoc = await matchRef.get();
+        console.log('Checking for match with ID:', matchId);
+        
+        // Check if the other person has already swiped right
+        const otherUserPrefId = currentUser.role === 'worker'
+          ? `${swipedUserId}_${currentUserUid}` // employer_worker
+          : `${currentUserUid}_${swipedUserId}`; // worker_employer
+        
+        const otherUserPref = await db.collection('user_job_preferences')
+          .doc(otherUserPrefId)
+          .get();
 
-        if (matchDoc.exists) {
-          const existingMatchData = matchDoc.data();
-          if (
-            (currentUser.role === 'worker' && existingMatchData.employer) ||
-            (currentUser.role === 'employer' && existingMatchData.worker)
-          ) {
-            console.log("It's a match!");
-            Alert.alert("It's a Match!", "You've matched with this job/candidate!");
+        if (otherUserPref.exists && otherUserPref.data().interested) {
+          console.log("Found matching preference! Creating match...");
+          
+          try {
+            // Create match document...
+            await matchRef.set(matchData);
             
-            // Update the match document to show it's a full match
-            await matchRef.update({
-              [currentUser.role]: true,
-              [`${currentUser.role}Id`]: currentUserUid,
-              timestamp: firebase.firestore.FieldValue.serverTimestamp()
-            });
+            // Get additional details for the popup
+            const matchedItemDetails = currentUser.role === 'worker' 
+              ? await db.collection('job_attributes').doc(swipedUserId).get()
+              : await db.collection('user_attributes').doc(swipedUserId).get();
+            
+            const matchDetails = matchedItemDetails.data();
+            
+            Alert.alert(
+              "It's a Match! 🎉",
+              currentUser.role === 'worker' 
+                ? `You matched with ${matchDetails.jobTitle} at ${matchDetails.company}!\n\nSalary: $${matchDetails.salaryRange?.min}-${matchDetails.salaryRange?.max}/hr`
+                : `You matched with a candidate!\n\nSkills: ${matchDetails.skills?.slice(0,3).join(', ')}\nExperience: ${matchDetails.experience?.totalYears} years`,
+              [
+                {
+                  text: "Message",
+                  onPress: () => navigation.navigate('Chat', {
+                    jobTitle: matchDetails.jobTitle || 'Job',
+                    company: matchDetails.company || 'Company',
+                    role: currentUser.role
+                  })
+                },
+                {
+                  text: "View Profile",
+                  onPress: () => navigation.navigate('JobDetail', {
+                    itemId: swipedUserId,
+                    itemType: currentUser.role === 'worker' ? 'job' : 'worker',
+                    currentUserData: currentUser,
+                    item: matchDetails
+                  })
+                },
+                {
+                  text: "Keep Swiping",
+                  style: "cancel"
+                }
+              ]
+            );
+          } catch (error) {
+            console.error("Error creating match:", error);
           }
         } else {
-          // Create a new potential match document
-          await matchRef.set({
-            [currentUser.role]: true,
-            [`${currentUser.role}Id`]: currentUserUid,
-            timestamp: firebase.firestore.FieldValue.serverTimestamp()
-          });
+          console.log("No match yet - waiting for other user to swipe right");
         }
       }
     } catch (error) {
