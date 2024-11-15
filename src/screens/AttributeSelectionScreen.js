@@ -18,6 +18,7 @@ import firebase from 'firebase/compat/app';
 import { data } from '../data';
 import { debounce } from 'lodash';
 import { Ionicons } from '@expo/vector-icons';
+import { fetchTrendingIndustries, fetchTrendingJobs, fetchTrendingSkills } from '../services/trendsService';
 
 const isWeb = typeof document !== 'undefined';
 let WebMap;
@@ -78,6 +79,8 @@ const stateAbbreviations = {
   'wyoming': 'WY'
 };
 
+const BACKEND_URL = 'http://127.0.0.1:5000';  // or your Flask server URL
+
 export default function AttributeSelectionScreen({ route, navigation }) {
   const { isNewUser } = route.params;
   const [userRole, setUserRole] = useState(null);
@@ -127,6 +130,16 @@ export default function AttributeSelectionScreen({ route, navigation }) {
   const [mapLoaded, setMapLoaded] = useState(false);
   const [stateCode, setStateCode] = useState('');
 
+  const [overviewQuestions, setOverviewQuestions] = useState([]);
+  const [overviewResponses, setOverviewResponses] = useState({});
+  const [generatedOverview, setGeneratedOverview] = useState('');
+  const [isEditingOverview, setIsEditingOverview] = useState(false);
+
+  const [trendingData, setTrendingData] = useState({
+    industries: [],
+    jobs: {}
+  });
+
   useEffect(() => {
     const fetchUserRole = async () => {
       try {
@@ -175,6 +188,32 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     }
   }, []);
 
+  useEffect(() => {
+    if (userRole) {
+      fetchOverviewQuestions();
+    }
+  }, [userRole]);
+
+  useEffect(() => {
+    const fetchInitialTrends = async () => {
+      try {
+        const industries = await fetchTrendingIndustries();
+        setTrendingData(prev => ({
+          ...prev,
+          industries: industries
+        }));
+        setSuggestions(prev => ({
+          ...prev,
+          industries: industries
+        }));
+      } catch (error) {
+        console.error('Error fetching trending industries:', error);
+      }
+    };
+
+    fetchInitialTrends();
+  }, []);
+
   const fetchLocation = async () => {
     try {
       let { status } = await Location.requestForegroundPermissionsAsync();
@@ -206,47 +245,147 @@ export default function AttributeSelectionScreen({ route, navigation }) {
   };
 
   const handleInputChange = (field, value) => {
-    if (field === 'industryPrefs') {
-      setInputValues(prev => ({ ...prev, [field]: value }));
-      updateIndustrySuggestions(value);
-    } else if (field === 'jobTypePrefs') {
-      setAttributes(prev => ({ ...prev, [field]: value, skills: [] }));
-      updateSkillSuggestions(value);
-    } else {
-      setAttributes(prev => ({ ...prev, [field]: value }));
+    setAttributes(prev => ({
+        ...prev,
+        [field]: value
+    }));
+
+    // If changing job type, update skills
+    if (field === 'jobTypePrefs') {
+        console.log(`Updating skills for job type: ${value}`);
+        updateSkillSuggestions(value);
     }
   };
 
   const updateIndustrySuggestions = useCallback(
-    debounce((input) => {
-      const filteredIndustries = data.industries.filter(industry =>
-        industry.name.toLowerCase().includes(input.toLowerCase())
-      );
-      setSuggestions(prev => ({ ...prev, industries: filteredIndustries }));
+    debounce(async (searchTerm) => {
+        try {
+            // Get trending industries that match the search term
+            const trendingIndustries = await fetchTrendingIndustries(searchTerm);
+            
+            // Get all industries that start with the search term
+            const startsWith = data.industries.filter(industry => 
+                industry.toLowerCase().startsWith(searchTerm.toLowerCase())
+            );
+            
+            // Get industries that contain the search term (but don't start with it)
+            const contains = data.industries.filter(industry => 
+                industry.toLowerCase().includes(searchTerm.toLowerCase()) &&
+                !industry.toLowerCase().startsWith(searchTerm.toLowerCase())
+            );
+            
+            // Combine all results, removing duplicates
+            const allIndustries = Array.from(new Set([
+                ...startsWith,
+                ...contains,
+                ...trendingIndustries
+            ]));
+            
+            // Always maintain at least 10 suggestions
+            const minSuggestions = 10;
+            let suggestions = allIndustries;
+            
+            // If we have fewer than 10 suggestions, add more from the full industry list
+            if (suggestions.length < minSuggestions) {
+                const additionalIndustries = data.industries
+                    .filter(industry => !suggestions.includes(industry))
+                    .slice(0, minSuggestions - suggestions.length);
+                suggestions = [...suggestions, ...additionalIndustries];
+            }
+            
+            setSuggestions(prev => ({
+                ...prev,
+                industries: suggestions.slice(0, 15) // Show up to 15 results
+            }));
+            
+        } catch (error) {
+            console.error('Error updating industry suggestions:', error);
+        }
     }, 300),
-    []
+    [data.industries]
   );
 
   const updateJobTypeSuggestions = useCallback(
-    debounce((industry) => {
-      const selectedIndustry = data.industries.find(ind => ind.name === industry);
-      const jobTypes = selectedIndustry ? selectedIndustry.jobTypes : [];
-      setSuggestions(prev => ({ ...prev, jobTypes }));
-    }, 300),
-    []
+    async (industry) => {
+      try {
+        if (!industry) return;
+        
+        console.log(`Fetching jobs for industry: ${industry}`);
+        const jobs = await fetchTrendingJobs(industry);
+        
+        setTrendingData(prev => ({
+          ...prev,
+          jobs: {
+            ...prev.jobs,
+            [industry]: jobs
+          }
+        }));
+        
+        setSuggestions(prev => ({ 
+          ...prev, 
+          jobTypes: jobs 
+        }));
+      } catch (error) {
+        console.error('Error updating job suggestions:', error);
+        setSuggestions(prev => ({ 
+          ...prev, 
+          jobTypes: [] 
+        }));
+      }
+    },
+    []  // Remove trendingData.jobs dependency to avoid stale data
   );
 
   const updateSkillSuggestions = useCallback(
-    debounce((jobType) => {
-      const selectedIndustry = data.industries.find(ind => 
-        ind.name === attributes.industryPrefs[0] // Assuming we're using the first selected industry
-      );
-      const selectedJobType = selectedIndustry?.jobTypes.find(job => job.name === jobType);
-      const skills = selectedJobType ? selectedJobType.skills : [];
-      setSuggestions(prev => ({ ...prev, skills }));
+    debounce(async (jobType) => {
+        try {
+            if (!jobType || !attributes.industryPrefs[0]) return;
+            
+            console.log(`Fetching skills for ${jobType} in ${attributes.industryPrefs[0]}`);
+            const skills = await fetchTrendingSkills(jobType, attributes.industryPrefs[0]);
+            
+            if (Array.isArray(skills) && skills.length > 0) {
+                console.log(`Received skills: ${skills}`);
+                setSuggestions(prev => ({
+                    ...prev,
+                    skills: skills
+                }));
+            } else {
+                console.log("No skills returned");
+                // Set default skills if none returned
+                setSuggestions(prev => ({
+                    ...prev,
+                    skills: [
+                        "Communication",
+                        "Problem Solving",
+                        "Team Work",
+                        "Project Management",
+                        "Time Management",
+                        "Leadership",
+                        "Analytics",
+                        "Critical Thinking",
+                        "Organization",
+                        "Attention to Detail"
+                    ]
+                }));
+            }
+        } catch (error) {
+            console.error('Error updating skill suggestions:', error);
+            // Set default skills on error
+            setSuggestions(prev => ({
+                ...prev,
+                skills: [
+                    "Communication",
+                    "Problem Solving",
+                    "Team Work",
+                    "Project Management",
+                    "Time Management"
+                ]
+            }));
+        }
     }, 300),
     [attributes.industryPrefs]
-  );
+);
 
   const handleSkillSelection = (skill) => {
     if (attributes.skills.includes(skill)) {
@@ -403,227 +542,398 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     );
   };
 
+  const fetchOverviewQuestions = async () => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/generate-overview-questions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          role: userRole,
+          selectedJobs: attributes.selectedJobs || [],
+          industryPrefs: attributes.industryPrefs || [],
+        }),
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        setOverviewQuestions(data.questions);
+      } else {
+        console.error('Error:', data.error);
+      }
+    } catch (error) {
+      console.error('Error fetching overview questions:', error);
+    }
+  };
+
+  const handleOverviewResponse = (question, answer) => {
+    setOverviewResponses(prev => ({
+      ...prev,
+      [question]: answer
+    }));
+  };
+
+  const generateOverview = async () => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/generate-overview`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          role: userRole,
+          responses: overviewResponses,
+        }),
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        setGeneratedOverview(data.overview);
+        setAttributes(prev => ({
+          ...prev,
+          user_overview: data.overview
+        }));
+      } else {
+        console.error('Error:', data.error);
+      }
+    } catch (error) {
+      console.error('Error generating overview:', error);
+    }
+  };
+
+  const handleIndustryInputFocus = useCallback(() => {
+    setIsIndustryInputFocused(true);
+    if (trendingData.industries.length > 0) {
+      setSuggestions(prev => ({ ...prev, industries: trendingData.industries }));
+    }
+  }, [trendingData.industries]);
+
+  const handleJobTypeSelection = (jobType) => {
+    console.log(`Selected job type: ${jobType}`);
+    handleInputChange('jobTypePrefs', jobType);
+    // Clear existing skills when job type changes
+    setAttributes(prev => ({
+        ...prev,
+        skills: []
+    }));
+    setSuggestions(prev => ({
+        ...prev,
+        skills: []
+    }));
+  };
+
   return (
-    <KeyboardAvoidingView
-      behavior={isWeb ? undefined : "padding"}
-      style={styles.container}
-    >
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.title}>Fill in Your Attributes</Text>
+    <View style={styles.mainContainer}>
+      <KeyboardAvoidingView
+        behavior={isWeb ? undefined : "padding"}
+        style={styles.keyboardAvoidingView}
+      >
+        <ScrollView 
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+        >
+          <Text style={styles.title}>Fill in Your Attributes</Text>
 
-        {error && <Text style={styles.error}>{error}</Text>}
+          {error && <Text style={styles.error}>{error}</Text>}
 
-        {/* Common fields for both roles */}
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Industry Preferences:</Text>
-          <View style={styles.inputWrapper}>
-            <TextInput
-              style={styles.input}
-              value={inputValues.industryPrefs}
-              onChangeText={(text) => handleInputChange('industryPrefs', text)}
-              placeholder="Type to search industries"
-              onFocus={() => {
-                setIsIndustryInputFocused(true);
-                showAllIndustries();
-              }}
-              onBlur={() => {
-                // Delay hiding the suggestions to allow for selection
-                setTimeout(() => setIsIndustryInputFocused(false), 200);
-              }}
-            />
-          </View>
-          <View style={styles.bubbleContainer}>
-            {attributes.industryPrefs.map((industry, index) => (
-              <View key={index} style={styles.bubble}>
-                <Text style={styles.bubbleText}>{industry}</Text>
-                <TouchableOpacity onPress={() => removeIndustry(industry)}>
-                  <Ionicons name="close-circle" size={20} color="#fff" />
-                </TouchableOpacity>
-              </View>
-            ))}
-          </View>
-          {isIndustryInputFocused && suggestions.industries.length > 0 && (
-            <FlatList
-              data={suggestions.industries}
-              keyExtractor={(item) => item.id.toString()}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.suggestionItem}
-                  onPress={() => {
-                    addIndustry(item.name);
-                    updateJobTypeSuggestions(item.name);
-                    setInputValues(prev => ({ ...prev, industryPrefs: '' }));
-                    setIsIndustryInputFocused(false);
-                  }}
-                >
-                  <Text>{item.name}</Text>
-                </TouchableOpacity>
-              )}
-              style={styles.suggestionList}
-            />
-          )}
-        </View>
-
-        {/* Worker-specific fields */}
-        {userRole === 'worker' && (
-          <>
-            {attributes.industryPrefs && (
-              <View style={styles.inputContainer}>
-                <Text style={styles.label}>Job Type Preferences:</Text>
-                <TextInput
-                  style={styles.input}
-                  value={attributes.jobTypePrefs}
-                  onChangeText={(text) => {
-                    handleInputChange('jobTypePrefs', text);
-                    updateSkillSuggestions(text);
-                  }}
-                  placeholder="Type to search job types"
-                />
-                {suggestions.jobTypes.length > 0 && (
-                  <FlatList
-                    data={suggestions.jobTypes}
-                    keyExtractor={(item) => item.id.toString()}
-                    renderItem={({ item }) => (
+          {/* Common fields for both roles */}
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Industry Preferences:</Text>
+            <View style={styles.inputWrapper}>
+              <TextInput
+                style={styles.input}
+                value={inputValues.industryPrefs}
+                onChangeText={(text) => handleInputChange('industryPrefs', text)}
+                placeholder="Type to search industries"
+                onFocus={handleIndustryInputFocus}
+                onBlur={() => {
+                  // Delay hiding the suggestions to allow for selection
+                  setTimeout(() => setIsIndustryInputFocused(false), 200);
+                }}
+              />
+            </View>
+            <View style={styles.bubbleContainer}>
+              {attributes.industryPrefs.map((industry, index) => (
+                <View key={index} style={styles.bubble}>
+                  <Text style={styles.bubbleText}>{industry}</Text>
+                  <TouchableOpacity onPress={() => removeIndustry(industry)}>
+                    <Ionicons name="close-circle" size={20} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+            {isIndustryInputFocused && suggestions.industries.length > 0 && (
+              <FlatList
+                data={suggestions.industries}
+                keyExtractor={(item, index) => `industry-${index}`}
+                renderItem={({ item }) => {
+                  const displayName = item.name || item;
+                  const inputValue = inputValues.industryPrefs.toLowerCase();
+                  if (!inputValue || displayName.toLowerCase().startsWith(inputValue)) {
+                    return (
                       <TouchableOpacity
                         style={styles.suggestionItem}
-                        onPress={() => handleInputChange('jobTypePrefs', item.name)}
+                        onPress={() => {
+                          addIndustry(displayName);
+                          updateJobTypeSuggestions(displayName);
+                          setInputValues(prev => ({ ...prev, industryPrefs: '' }));
+                          setIsIndustryInputFocused(false);
+                        }}
                       >
-                        <Text>{item.name}</Text>
+                        <Text>{displayName}</Text>
+                      </TouchableOpacity>
+                    );
+                  }
+                  return null;
+                }}
+                style={styles.suggestionList}
+              />
+            )}
+          </View>
+
+          {/* Worker-specific fields */}
+          {userRole === 'worker' && (
+            <>
+              {attributes.industryPrefs && (
+                <View style={styles.inputContainer}>
+                  <Text style={styles.label}>Job Type Preferences:</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={attributes.jobTypePrefs}
+                    onChangeText={(text) => {
+                      handleInputChange('jobTypePrefs', text);
+                      updateSkillSuggestions(text);
+                    }}
+                    placeholder="Type to search job types"
+                  />
+                  {suggestions.jobTypes.length > 0 && (
+                    <FlatList
+                      data={suggestions.jobTypes}
+                      keyExtractor={(item, index) => `job-${index}`}
+                      renderItem={({ item }) => (
+                        <TouchableOpacity
+                          style={styles.suggestionItem}
+                          onPress={() => {
+                            handleJobTypeSelection(typeof item === 'string' ? item : item.name);
+                            updateSkillSuggestions(typeof item === 'string' ? item : item.name);
+                          }}
+                        >
+                          <Text>{typeof item === 'string' ? item : item.name}</Text>
+                        </TouchableOpacity>
+                      )}
+                      style={styles.suggestionList}
+                    />
+                  )}
+                </View>
+              )}
+
+              {attributes.jobTypePrefs && (
+                <View style={styles.inputContainer}>
+                  <Text style={styles.label}>Skills (select up to 5):</Text>
+                  <FlatList
+                    data={suggestions.skills}
+                    keyExtractor={(item) => item}
+                    renderItem={({ item }) => (
+                      <TouchableOpacity
+                        style={[
+                          styles.skillItem,
+                          attributes.skills.includes(item) && styles.selectedSkill
+                        ]}
+                        onPress={() => handleSkillSelection(item)}
+                      >
+                        <Text style={attributes.skills.includes(item) ? styles.selectedSkillText : styles.skillText}>
+                          {item}
+                        </Text>
                       </TouchableOpacity>
                     )}
-                    style={styles.suggestionList}
+                    numColumns={2}
+                    columnWrapperStyle={styles.skillList}
                   />
-                )}
-              </View>
-            )}
+                </View>
+              )}
+            </>
+          )}
 
-            {attributes.jobTypePrefs && (
+          {/* Employer-specific fields */}
+          {userRole === 'employer' && (
+            <>
               <View style={styles.inputContainer}>
-                <Text style={styles.label}>Skills (select up to 5):</Text>
-                <FlatList
-                  data={suggestions.skills}
-                  keyExtractor={(item) => item}
-                  renderItem={({ item }) => (
-                    <TouchableOpacity
-                      style={[
-                        styles.skillItem,
-                        attributes.skills.includes(item) && styles.selectedSkill
-                      ]}
-                      onPress={() => handleSkillSelection(item)}
-                    >
-                      <Text style={attributes.skills.includes(item) ? styles.selectedSkillText : styles.skillText}>
-                        {item}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                  numColumns={2}
-                  columnWrapperStyle={styles.skillList}
+                <Text style={styles.label}>Job Title:</Text>
+                <TextInput
+                  style={styles.input}
+                  value={attributes.jobTitle}
+                  onChangeText={(text) => handleInputChange('jobTitle', text)}
+                  placeholder="Enter job title"
                 />
               </View>
-            )}
-          </>
-        )}
 
-        {/* Employer-specific fields */}
-        {userRole === 'employer' && (
-          <>
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Job Title:</Text>
-              <TextInput
-                style={styles.input}
-                value={attributes.jobTitle}
-                onChangeText={(text) => handleInputChange('jobTitle', text)}
-                placeholder="Enter job title"
-              />
-            </View>
-
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Estimated Hours:</Text>
-              <TextInput
-                style={styles.input}
-                value={attributes.estimatedHours}
-                onChangeText={(text) => handleInputChange('estimatedHours', text)}
-                placeholder="Enter estimated hours"
-                keyboardType="numeric"
-              />
-            </View>
-
-            {/* Add more employer-specific fields here */}
-            {/* ... */}
-
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Salary Range:</Text>
-              <View style={styles.rowContainer}>
+              <View style={styles.inputContainer}>
+                <Text style={styles.label}>Estimated Hours:</Text>
                 <TextInput
-                  style={[styles.input, styles.halfInput]}
-                  value={attributes.salaryRange.min}
-                  onChangeText={(text) => handleInputChange('salaryRange', { ...attributes.salaryRange, min: text })}
-                  placeholder="Min"
-                  keyboardType="numeric"
-                />
-                <TextInput
-                  style={[styles.input, styles.halfInput]}
-                  value={attributes.salaryRange.max}
-                  onChangeText={(text) => handleInputChange('salaryRange', { ...attributes.salaryRange, max: text })}
-                  placeholder="Max"
+                  style={styles.input}
+                  value={attributes.estimatedHours}
+                  onChangeText={(text) => handleInputChange('estimatedHours', text)}
+                  placeholder="Enter estimated hours"
                   keyboardType="numeric"
                 />
               </View>
-            </View>
-          </>
-        )}
 
-        {renderMap()}
+              {/* Add more employer-specific fields here */}
+              {/* ... */}
 
-        {userRole === 'worker' && (
-          <>
-            <TouchableOpacity 
-              style={[styles.addJobButton, 
-                (!attributes.industryPrefs[0] || !attributes.jobTypePrefs || attributes.skills.length === 0) && 
-                styles.addJobButtonDisabled
-              ]} 
-              onPress={handleAddJob}
-            >
-              <Text style={styles.addJobButtonText}>Add Job</Text>
-            </TouchableOpacity>
+              <View style={styles.inputContainer}>
+                <Text style={styles.label}>Salary Range:</Text>
+                <View style={styles.rowContainer}>
+                  <TextInput
+                    style={[styles.input, styles.halfInput]}
+                    value={attributes.salaryRange.min}
+                    onChangeText={(text) => handleInputChange('salaryRange', { ...attributes.salaryRange, min: text })}
+                    placeholder="Min"
+                    keyboardType="numeric"
+                  />
+                  <TextInput
+                    style={[styles.input, styles.halfInput]}
+                    value={attributes.salaryRange.max}
+                    onChangeText={(text) => handleInputChange('salaryRange', { ...attributes.salaryRange, max: text })}
+                    placeholder="Max"
+                    keyboardType="numeric"
+                  />
+                </View>
+              </View>
+            </>
+          )}
 
-            {selectedJobs.length > 0 && (
-              <View style={styles.selectedJobsContainer}>
-                <Text style={styles.selectedJobsTitle}>Selected Jobs:</Text>
-                {selectedJobs.map((job, index) => (
-                  <View key={index} style={styles.selectedJobItem}>
-                    <View style={styles.selectedJobInfo}>
-                      <Text style={styles.selectedJobText}>
-                        {job.industry} - {job.jobType}
-                      </Text>
-                      <Text style={styles.selectedJobSkills}>
-                        Skills: {job.skills.join(', ')}
-                      </Text>
+          {renderMap()}
+
+          {userRole === 'worker' && (
+            <>
+              <TouchableOpacity 
+                style={[styles.addJobButton, 
+                  (!attributes.industryPrefs[0] || !attributes.jobTypePrefs || attributes.skills.length === 0) && 
+                  styles.addJobButtonDisabled
+                ]} 
+                onPress={handleAddJob}
+              >
+                <Text style={styles.addJobButtonText}>Add Job</Text>
+              </TouchableOpacity>
+
+              {selectedJobs.length > 0 && (
+                <View style={styles.selectedJobsContainer}>
+                  <Text style={styles.selectedJobsTitle}>Selected Jobs:</Text>
+                  {selectedJobs.map((job, index) => (
+                    <View key={index} style={styles.selectedJobItem}>
+                      <View style={styles.selectedJobInfo}>
+                        <Text style={styles.selectedJobText}>
+                          {job.industry} - {job.jobType}
+                        </Text>
+                        <Text style={styles.selectedJobSkills}>
+                          Skills: {job.skills.join(', ')}
+                        </Text>
+                      </View>
+                      <TouchableOpacity onPress={() => handleRemoveJob(index)}>
+                        <Ionicons name="close-circle" size={24} color="#FF4136" />
+                      </TouchableOpacity>
                     </View>
-                    <TouchableOpacity onPress={() => handleRemoveJob(index)}>
-                      <Ionicons name="close-circle" size={24} color="#FF4136" />
-                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+            </>
+          )}
+
+          {/* Overview Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>
+              {userRole === 'worker' ? 'User Overview' : 'Job Overview'}
+            </Text>
+            
+            {!generatedOverview ? (
+              <>
+                {overviewQuestions.map((question, index) => (
+                  <View key={index} style={styles.inputContainer}>
+                    <Text style={styles.label}>{question}</Text>
+                    <TextInput
+                      style={[styles.input, styles.textArea]}
+                      multiline
+                      numberOfLines={3}
+                      value={overviewResponses[question] || ''}
+                      onChangeText={(text) => handleOverviewResponse(question, text)}
+                      placeholder="Enter your response..."
+                    />
                   </View>
                 ))}
+                
+                <TouchableOpacity 
+                  style={[styles.button, styles.generateButton]}
+                  onPress={generateOverview}
+                >
+                  <Text style={styles.buttonText}>Generate Overview</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <View style={styles.overviewContainer}>
+                {isEditingOverview ? (
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    multiline
+                    numberOfLines={6}
+                    value={generatedOverview}
+                    onChangeText={(text) => {
+                      setGeneratedOverview(text);
+                      setAttributes(prev => ({
+                        ...prev,
+                        user_overview: text
+                      }));
+                    }}
+                  />
+                ) : (
+                  <Text style={styles.overviewText}>{generatedOverview}</Text>
+                )}
+                
+                <TouchableOpacity 
+                  style={styles.editButton}
+                  onPress={() => setIsEditingOverview(!isEditingOverview)}
+                >
+                  <Text style={styles.editButtonText}>
+                    {isEditingOverview ? 'Save' : 'Edit'}
+                  </Text>
+                </TouchableOpacity>
               </View>
             )}
-          </>
-        )}
+          </View>
 
-        <TouchableOpacity style={styles.submitButton} onPress={handleSubmit}>
-          <Text style={styles.submitButtonText}>Submit Attributes</Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </KeyboardAvoidingView>
+          <TouchableOpacity style={styles.submitButton} onPress={handleSubmit}>
+            <Text style={styles.submitButtonText}>Submit Attributes</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 const styles = StyleSheet.create({
-  container: {
+  mainContainer: {
     flex: 1,
     backgroundColor: '#f8f8f8',
+    ...(isWeb && {
+      height: '100vh',
+      overflow: 'hidden',
+    }),
+  },
+  keyboardAvoidingView: {
+    flex: 1,
+  },
+  scrollView: {
+    flex: 1,
+    ...(isWeb && {
+      height: '100%',
+      overflow: 'auto',
+    }),
   },
   scrollContent: {
     padding: 20,
+    ...(isWeb && {
+      minHeight: 'min-content',
+    }),
   },
   title: {
     fontSize: 24,
@@ -819,5 +1129,56 @@ const styles = StyleSheet.create({
     height: 10,
     borderRadius: 5,
     backgroundColor: '#007BFF',
+  },
+  section: {
+    marginBottom: 20,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    color: '#333',
+  },
+  textArea: {
+    height: 100,
+    textAlignVertical: 'top',
+    paddingTop: 10,
+  },
+  button: {
+    backgroundColor: '#007BFF',
+    padding: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  generateButton: {
+    backgroundColor: '#3b82f6',
+    marginVertical: 10,
+  },
+  overviewContainer: {
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  overviewText: {
+    fontSize: 16,
+    lineHeight: 24,
+    color: '#374151',
+  },
+  editButton: {
+    alignSelf: 'flex-end',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    marginTop: 10,
+  },
+  editButtonText: {
+    color: '#3b82f6',
+    fontWeight: 'bold',
   },
 });

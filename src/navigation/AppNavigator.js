@@ -3,6 +3,7 @@ import HomeScreen from '../screens/HomeScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import JobDetailScreen from '../screens/JobDetailScreen';
 import MatchAnalysisScreen from '../screens/MatchAnalysisScreen';
+import AvailabilityScreen from '../screens/AvailabilityScreen';
 
 const Stack = createStackNavigator();
 
@@ -46,6 +47,14 @@ export default function AppNavigator() {
         component={MatchAnalysisScreen}
         options={{
           title: 'Match Analysis',
+          headerBackTitle: 'Back',
+        }}
+      />
+      <Stack.Screen 
+        name="Availability" 
+        component={AvailabilityScreen}
+        options={{
+          title: 'Set Availability',
           headerBackTitle: 'Back',
         }}
       />

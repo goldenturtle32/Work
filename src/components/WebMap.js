@@ -91,7 +91,7 @@ const LocationMarker = () => (
   </div>
 );
 
-export default function WebMap({ location, cityName, stateCode }) {
+export default function WebMap({ location, cityName, stateCode, onRadiusChange }) {
   const [mapLoaded, setMapLoaded] = useState(false);
   const [radius, setRadius] = useState(5000); // 5km default
   const [circle, setCircle] = useState(null);
@@ -164,6 +164,13 @@ export default function WebMap({ location, cityName, stateCode }) {
     }
   }, [radius, circle]);
 
+  const handleRadiusChange = (newRadius) => {
+    setRadius(Number(newRadius));
+    if (onRadiusChange) {
+      onRadiusChange(Number(newRadius));
+    }
+  };
+
   if (!location || !mapLoaded) return (
     <View style={styles.mapContainer}>
       <View style={styles.locationTextContainer}>
@@ -192,7 +199,7 @@ export default function WebMap({ location, cityName, stateCode }) {
             min="1000"
             max="50000"
             value={radius}
-            onChange={(e) => setRadius(Number(e.target.value))}
+            onChange={(e) => handleRadiusChange(e.target.value)}
             style={styles.slider}
           />
         </View>

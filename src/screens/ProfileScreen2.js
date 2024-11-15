@@ -10,7 +10,7 @@ import {
   Domine_700Bold
 } from '@expo-google-fonts/domine';
 
-export default function ProfileScreen({ navigation }) {
+export default function ProfileScreen({ navigation, route }) {
   const [profileData, setProfileData] = useState({
     email: '',
     name: '',
@@ -53,20 +53,21 @@ export default function ProfileScreen({ navigation }) {
     };
 
     fetchUserData();
-  }, [currentUser]);
+  }, [currentUser, route?.params?.availabilityUpdated]);
 
   const formatAvailability = () => {
     const availabilityArray = [];
-    const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+    const daysOfWeek = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
     
     daysOfWeek.forEach(day => {
-      const dayLower = day.toLowerCase();
-      if (profileData.availability[dayLower]?.slots?.length > 0) {
-        profileData.availability[dayLower].slots.forEach(slot => {
+      const dayData = profileData.availability?.[day];
+      if (dayData?.slots?.length > 0) {
+        dayData.slots.forEach(slot => {
           if (slot.startTime && slot.endTime) {
             availabilityArray.push({
-              day,
-              time: `${slot.startTime} - ${slot.endTime}`
+              day: day.charAt(0).toUpperCase() + day.slice(1),
+              time: `${slot.startTime} - ${slot.endTime}`,
+              repeatType: dayData.repeatType
             });
           }
         });
@@ -116,15 +117,28 @@ export default function ProfileScreen({ navigation }) {
 
         {/* Availability Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Availability</Text>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Availability</Text>
+            <TouchableOpacity 
+              style={styles.editButton}
+              onPress={() => navigation.navigate('Availability')}
+            >
+              <Ionicons name="calendar-outline" size={24} color="#1e3a8a" />
+            </TouchableOpacity>
+          </View>
           <View style={styles.bubbleContainer}>
-            {formatAvailability().map((slot, index) => (
-              <View key={index} style={styles.availabilityBubble}>
-                <Text style={styles.bubbleText}>
-                  {slot.day}: {slot.time}
-                </Text>
-              </View>
-            ))}
+            {formatAvailability().length > 0 ? (
+              formatAvailability().map((slot, index) => (
+                <View key={index} style={styles.availabilityBubble}>
+                  <Text style={styles.bubbleText}>
+                    {slot.day}: {slot.time}
+                    {slot.repeatType !== 'custom' && ` (${slot.repeatType})`}
+                  </Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.noDataText}>No availability set</Text>
+            )}
           </View>
         </View>
 
@@ -247,5 +261,18 @@ const styles = StyleSheet.create({
   smallBubbleText: {
     color: '#1e3a8a',
     fontSize: 12,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  editButton: {
+    padding: 4,
+  },
+  noDataText: {
+    color: '#6b7280',
+    fontStyle: 'italic',
   },
 });
