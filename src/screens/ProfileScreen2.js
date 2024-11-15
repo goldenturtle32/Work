@@ -39,21 +39,26 @@ export default function ProfileScreen({ navigation, route }) {
           const userData = userDoc.data();
           const attributesData = attributesDoc.data();
 
-          setProfileData({
+          setProfileData(prevData => ({
+            ...prevData,
             ...userData,
             ...attributesData,
-          });
+            selectedJobs: attributesData.selectedJobs || [],
+            skills: attributesData.skills || [],
+            industryPrefs: attributesData.industryPrefs || [],
+            availability: attributesData.availability || {},
+          }));
         }
+        setLoading(false);
       } catch (error) {
         console.error('Error fetching profile data:', error);
         Alert.alert('Error', 'Failed to load profile data');
-      } finally {
         setLoading(false);
       }
     };
 
     fetchUserData();
-  }, [currentUser, route?.params?.availabilityUpdated]);
+  }, [currentUser.uid]);
 
   const formatAvailability = () => {
     const availabilityArray = [];
@@ -77,6 +82,42 @@ export default function ProfileScreen({ navigation, route }) {
     return availabilityArray;
   };
 
+  const renderSelectedJobs = () => {
+    if (!profileData.selectedJobs?.length) {
+      return <Text style={styles.noDataText}>No jobs selected</Text>;
+    }
+
+    return profileData.selectedJobs.map((job, index) => (
+      <View key={index} style={styles.jobCard}>
+        <Text style={styles.jobTitle}>{job.jobType || 'Unknown Job'}</Text>
+        <Text style={styles.jobIndustry}>{job.industry || 'Unknown Industry'}</Text>
+        <View style={styles.bubbleContainer}>
+          {job.skills?.map((skill, skillIndex) => (
+            <View key={skillIndex} style={styles.smallBubble}>
+              <Text style={styles.smallBubbleText}>{skill}</Text>
+            </View>
+          )) || null}
+        </View>
+      </View>
+    ));
+  };
+
+  const renderSkills = () => {
+    if (!profileData.skills?.length) {
+      return <Text style={styles.noDataText}>No skills added</Text>;
+    }
+
+    return (
+      <View style={styles.bubbleContainer}>
+        {profileData.skills.map((skill, index) => (
+          <View key={index} style={styles.bubble}>
+            <Text style={styles.bubbleText}>{skill}</Text>
+          </View>
+        ))}
+      </View>
+    );
+  };
+
   if (loading) {
     return (
       <View style={styles.container}>
@@ -93,7 +134,7 @@ export default function ProfileScreen({ navigation, route }) {
           <Text style={styles.sectionTitle}>Basic Information</Text>
           <View style={styles.infoRow}>
             <Ionicons name="mail-outline" size={24} color="#1e3a8a" />
-            <Text style={styles.infoText}>{profileData.email}</Text>
+            <Text style={styles.infoText}>{profileData.email || 'No email'}</Text>
           </View>
           {profileData.phone && (
             <View style={styles.infoRow}>
@@ -106,13 +147,13 @@ export default function ProfileScreen({ navigation, route }) {
         {/* Skills Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Skills</Text>
-          <View style={styles.bubbleContainer}>
-            {profileData.skills.map((skill, index) => (
-              <View key={index} style={styles.bubble}>
-                <Text style={styles.bubbleText}>{skill}</Text>
-              </View>
-            ))}
-          </View>
+          {renderSkills()}
+        </View>
+
+        {/* Selected Jobs Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Selected Jobs</Text>
+          {renderSelectedJobs()}
         </View>
 
         {/* Availability Section */}
@@ -149,28 +190,10 @@ export default function ProfileScreen({ navigation, route }) {
             <View style={styles.infoRow}>
               <Ionicons name="location-outline" size={24} color="#1e3a8a" />
               <Text style={styles.infoText}>
-                Search radius: {profileData.searchRadius} miles
+                Search radius: {(profileData.locationPreference / 1609.34).toFixed(1)} miles
               </Text>
             </View>
           )}
-        </View>
-
-        {/* Selected Jobs Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Selected Jobs</Text>
-          {profileData.selectedJobs.map((job, index) => (
-            <View key={index} style={styles.jobCard}>
-              <Text style={styles.jobTitle}>{job.jobType}</Text>
-              <Text style={styles.jobIndustry}>{job.industry}</Text>
-              <View style={styles.bubbleContainer}>
-                {job.skills.map((skill, skillIndex) => (
-                  <View key={skillIndex} style={styles.smallBubble}>
-                    <Text style={styles.smallBubbleText}>{skill}</Text>
-                  </View>
-                ))}
-              </View>
-            </View>
-          ))}
         </View>
       </ScrollView>
     </View>

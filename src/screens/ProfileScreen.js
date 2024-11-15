@@ -9,6 +9,9 @@ import {
   Domine_400Regular,
   Domine_700Bold
 } from '@expo-google-fonts/domine';
+import Modal from 'react-native-modal';
+import Slider from '@react-native-community/slider';
+import WebMap from '../components/WebMap';
 
 export default function ProfileScreen({ navigation, route }) {
   const [profileData, setProfileData] = useState({
@@ -22,32 +25,45 @@ export default function ProfileScreen({ navigation, route }) {
     location: null,
     searchRadius: 0,
     availability: {},
+    locationPreference: 0,
   });
   
   const [loading, setLoading] = useState(true);
   const currentUser = auth.currentUser;
+  const [isLocationModalVisible, setIsLocationModalVisible] = useState(false);
+  const [tempLocationPreference, setTempLocationPreference] = useState(0);
+  const isWeb = Platform.OS === 'web';
 
   useEffect(() => {
     const fetchUserData = async () => {
       try {
-        const [userDoc, attributesDoc] = await Promise.all([
-          db.collection('users').doc(currentUser.uid).get(),
-          db.collection('user_attributes').doc(currentUser.uid).get(),
+        // Determine which collection to fetch from based on user role
+        const userDoc = await db.collection('users').doc(currentUser.uid).get();
+        const userRole = userDoc.data()?.role;
+        const collectionName = userRole === 'employer' ? 'job_attributes' : 'user_attributes';
+        
+        const [userData, attributesDoc] = await Promise.all([
+          userDoc,
+          db.collection(collectionName).doc(currentUser.uid).get(),
         ]);
 
-        if (userDoc.exists && attributesDoc.exists) {
-          const userData = userDoc.data();
+        if (userData.exists && attributesDoc.exists) {
+          const userDataObj = userData.data();
           const attributesData = attributesDoc.data();
 
           setProfileData(prevData => ({
             ...prevData,
-            ...userData,
+            ...userDataObj,
             ...attributesData,
             selectedJobs: attributesData.selectedJobs || [],
             skills: attributesData.skills || [],
             industryPrefs: attributesData.industryPrefs || [],
             availability: attributesData.availability || {},
+            locationPreference: attributesData.locationPreference || 1609.34, // Default to 1 mile
           }));
+
+          // Set initial temp location preference
+          setTempLocationPreference(attributesData.locationPreference || 1609.34);
         }
         setLoading(false);
       } catch (error) {
@@ -118,6 +134,31 @@ export default function ProfileScreen({ navigation, route }) {
     );
   };
 
+  const handleSaveRadius = async () => {
+    try {
+      // Get user role
+      const userDoc = await db.collection('users').doc(currentUser.uid).get();
+      const userRole = userDoc.data()?.role;
+      const collectionName = userRole === 'employer' ? 'job_attributes' : 'user_attributes';
+
+      // Update the database
+      await db.collection(collectionName).doc(currentUser.uid).update({
+        locationPreference: tempLocationPreference
+      });
+      
+      // Update local state
+      setProfileData(prev => ({
+        ...prev,
+        locationPreference: tempLocationPreference
+      }));
+      
+      setIsLocationModalVisible(false);
+    } catch (error) {
+      console.error('Error updating location preference:', error);
+      Alert.alert('Error', 'Failed to update location preference');
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.container}>
@@ -142,6 +183,15 @@ export default function ProfileScreen({ navigation, route }) {
               <Text style={styles.infoText}>{profileData.phone}</Text>
             </View>
           )}
+        </View>
+
+        {/* Name Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Name</Text>
+          <View style={styles.infoRow}>
+            <Ionicons name="person-outline" size={24} color="#1e3a8a" />
+            <Text style={styles.infoText}>{profileData.name || 'Not set'}</Text>
+          </View>
         </View>
 
         {/* Skills Section */}
@@ -185,16 +235,80 @@ export default function ProfileScreen({ navigation, route }) {
 
         {/* Location Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Location Preferences</Text>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Location Preferences</Text>
+            <TouchableOpacity 
+              style={styles.editButton}
+              onPress={() => {
+                setTempLocationPreference(profileData.locationPreference);
+                setIsLocationModalVisible(true);
+              }}
+            >
+              <Ionicons name="create-outline" size={24} color="#1e3a8a" />
+            </TouchableOpacity>
+          </View>
           {profileData.location && (
             <View style={styles.infoRow}>
               <Ionicons name="location-outline" size={24} color="#1e3a8a" />
               <Text style={styles.infoText}>
-                Search radius: {profileData.searchRadius} miles
+                Search radius: {(profileData.locationPreference / 1609.34).toFixed(1)} miles
               </Text>
             </View>
           )}
         </View>
+
+        {/* Location Modal */}
+        {isLocationModalVisible && (
+          <Modal
+            isVisible={true}
+            onBackdropPress={() => setIsLocationModalVisible(false)}
+            style={styles.modal}
+          >
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Edit Location Radius</Text>
+              
+              <View style={styles.radiusControl}>
+                <Text style={styles.radiusText}>
+                  Search Radius: {(tempLocationPreference / 1609.34).toFixed(1)} miles
+                </Text>
+                <Slider
+                  style={styles.slider}
+                  minimumValue={1609.34} // 1 mile in meters
+                  maximumValue={80467.2} // 50 miles in meters
+                  step={1609.34} // 1 mile increments
+                  value={tempLocationPreference}
+                  onValueChange={setTempLocationPreference}
+                  minimumTrackTintColor="#1e3a8a"
+                  maximumTrackTintColor="#cbd5e1"
+                />
+              </View>
+
+              {isWeb && profileData.location && (
+                <View style={styles.modalMapContainer}>
+                  <WebMap
+                    location={profileData.location}
+                    radius={tempLocationPreference}
+                  />
+                </View>
+              )}
+
+              <View style={styles.modalButtons}>
+                <TouchableOpacity 
+                  style={[styles.modalButton, styles.cancelButton]}
+                  onPress={() => setIsLocationModalVisible(false)}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={[styles.modalButton, styles.saveButton]}
+                  onPress={handleSaveRadius}
+                >
+                  <Text style={styles.saveButtonText}>Save</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
+        )}
       </ScrollView>
     </View>
   );
@@ -297,5 +411,75 @@ const styles = StyleSheet.create({
   noDataText: {
     color: '#6b7280',
     fontStyle: 'italic',
+  },
+  modal: {
+    margin: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 20,
+    width: Platform.OS === 'web' ? '80%' : '90%',
+    maxWidth: 600,
+    maxHeight: '90%',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1f2937',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  modalMapContainer: {
+    height: 300,
+    marginVertical: 20,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  radiusControl: {
+    backgroundColor: '#f8fafc',
+    padding: 15,
+    borderRadius: 8,
+    marginBottom: 10,
+  },
+  radiusText: {
+    fontSize: 16,
+    color: '#1f2937',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  slider: {
+    width: '100%',
+    height: 40,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 20,
+  },
+  modalButton: {
+    flex: 1,
+    padding: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginHorizontal: 5,
+  },
+  cancelButton: {
+    backgroundColor: '#f3f4f6',
+  },
+  saveButton: {
+    backgroundColor: '#1e3a8a',
+  },
+  cancelButtonText: {
+    color: '#4b5563',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  saveButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
 });

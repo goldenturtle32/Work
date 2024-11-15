@@ -19,6 +19,7 @@ import { data } from '../data';
 import { debounce } from 'lodash';
 import { Ionicons } from '@expo/vector-icons';
 import { fetchTrendingIndustries, fetchTrendingJobs, fetchTrendingSkills } from '../services/trendsService';
+import Slider from '@react-native-community/slider';
 
 const isWeb = typeof document !== 'undefined';
 let WebMap;
@@ -85,6 +86,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
   const { isNewUser } = route.params;
   const [userRole, setUserRole] = useState(null);
   const [attributes, setAttributes] = useState({
+    name: '',
     // Common attributes
     industryPrefs: [],
     location: null,
@@ -139,6 +141,8 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     industries: [],
     jobs: {}
   });
+
+  const [locationPreference, setLocationPreference] = useState(5000); // 5km default
 
   useEffect(() => {
     const fetchUserRole = async () => {
@@ -246,8 +250,9 @@ export default function AttributeSelectionScreen({ route, navigation }) {
 
   const handleInputChange = (field, value) => {
     setAttributes(prev => ({
-        ...prev,
-        [field]: value
+      ...prev,
+      [field]: value,
+      ...(field === 'locationPreference' && { locationPreference: parseInt(value, 10) })
     }));
 
     // If changing job type, update skills
@@ -476,6 +481,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
         ...attributes,
         selectedJobs,
         location: locationData,
+        locationPreference,
         uid: currentUser.uid,
         email: currentUser.email,
         role: userRole,
@@ -523,13 +529,38 @@ export default function AttributeSelectionScreen({ route, navigation }) {
   const renderMap = () => {
     if (!attributes.location) return null;
 
+    const radiusControl = (
+      <View style={styles.radiusControl}>
+        <Text style={styles.radiusText}>
+          Search Radius: {(locationPreference / 1609.34).toFixed(1)} miles
+        </Text>
+        <Slider
+          style={styles.slider}
+          minimumValue={1609.34} // 1 mile in meters
+          maximumValue={80467.2} // 50 miles in meters
+          step={1609.34}
+          value={locationPreference}
+          onValueChange={(value) => {
+            setLocationPreference(value);
+            handleInputChange('locationPreference', value);
+          }}
+          minimumTrackTintColor="#007BFF"
+          maximumTrackTintColor="#000000"
+        />
+      </View>
+    );
+
     if (isWeb && WebMap) {
       return (
-        <WebMap 
-          location={attributes.location}
-          cityName={cityName}
-          stateCode={stateCode}
-        />
+        <View style={styles.mapContainer}>
+          <WebMap 
+            location={attributes.location}
+            cityName={cityName}
+            stateCode={stateCode}
+            radius={locationPreference}
+          />
+          {radiusControl}
+        </View>
       );
     }
 
@@ -538,6 +569,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
         <Text style={styles.locationText}>
           Current Location: {cityName}{stateCode ? `, ${stateCode}` : ''}
         </Text>
+        {radiusControl}
       </View>
     );
   };
@@ -638,6 +670,17 @@ export default function AttributeSelectionScreen({ route, navigation }) {
           {error && <Text style={styles.error}>{error}</Text>}
 
           {/* Common fields for both roles */}
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Name:</Text>
+            <TextInput
+              style={[styles.input, styles.textInput]}
+              value={attributes.name}
+              onChangeText={(text) => handleInputChange('name', text)}
+              placeholder="Enter your name"
+              placeholderTextColor="#999"
+            />
+          </View>
+
           <View style={styles.inputContainer}>
             <Text style={styles.label}>Industry Preferences:</Text>
             <View style={styles.inputWrapper}>
@@ -804,12 +847,12 @@ export default function AttributeSelectionScreen({ route, navigation }) {
             </>
           )}
 
-          {renderMap()}
-
+          {/* Add Job Button for Workers */}
           {userRole === 'worker' && (
             <>
               <TouchableOpacity 
-                style={[styles.addJobButton, 
+                style={[
+                  styles.addJobButton, 
                   (!attributes.industryPrefs[0] || !attributes.jobTypePrefs || attributes.skills.length === 0) && 
                   styles.addJobButtonDisabled
                 ]} 
@@ -839,6 +882,14 @@ export default function AttributeSelectionScreen({ route, navigation }) {
                 </View>
               )}
             </>
+          )}
+
+          {/* Map Section */}
+          {attributes.location && (
+            <View style={styles.mapSection}>
+              <Text style={styles.sectionTitle}>Location Preferences</Text>
+              {renderMap()}
+            </View>
           )}
 
           {/* Overview Section */}
@@ -902,9 +953,16 @@ export default function AttributeSelectionScreen({ route, navigation }) {
             )}
           </View>
 
-          <TouchableOpacity style={styles.submitButton} onPress={handleSubmit}>
+          {/* Submit Button at the bottom */}
+          <TouchableOpacity 
+            style={styles.submitButton} 
+            onPress={handleSubmit}
+          >
             <Text style={styles.submitButtonText}>Submit Attributes</Text>
           </TouchableOpacity>
+
+          {/* Add bottom padding for scrolling */}
+          <View style={styles.bottomPadding} />
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -913,27 +971,20 @@ export default function AttributeSelectionScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   mainContainer: {
     flex: 1,
-    backgroundColor: '#f8f8f8',
-    ...(isWeb && {
-      height: '100vh',
-      overflow: 'hidden',
-    }),
+    backgroundColor: '#f3f4f6',
+    height: '100vh',
+    overflow: 'auto',
   },
   keyboardAvoidingView: {
     flex: 1,
   },
   scrollView: {
     flex: 1,
-    ...(isWeb && {
-      height: '100%',
-      overflow: 'auto',
-    }),
+    width: '100%',
   },
   scrollContent: {
-    padding: 20,
-    ...(isWeb && {
-      minHeight: 'min-content',
-    }),
+    padding: 16,
+    paddingBottom: 32,
   },
   title: {
     fontSize: 24,
@@ -1005,6 +1056,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
     marginTop: 20,
+    marginBottom: 20,
   },
   submitButtonText: {
     color: '#fff',
@@ -1090,10 +1142,11 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   mapContainer: {
-    height: 300,
+    height: 400,
     marginVertical: 20,
     borderRadius: 8,
-    overflow: 'hidden',
+    overflow: 'visible',
+    backgroundColor: '#f5f5f5',
   },
   map: {
     flex: 1,
@@ -1104,25 +1157,24 @@ const styles = StyleSheet.create({
     color: '#007BFF',
   },
   radiusControl: {
-    position: 'absolute',
-    bottom: 20,
-    left: 20,
-    right: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    padding: 10,
+    backgroundColor: '#f8fafc',
+    padding: 15,
     borderRadius: 8,
-    zIndex: 1000,
+    marginTop: 10,
+    marginBottom: 10,
+    position: 'relative',
+    zIndex: 2,
+  },
+  radiusText: {
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 10,
+    textAlign: 'center',
   },
   slider: {
     width: '100%',
     height: 40,
-    ...(isWeb && {
-      appearance: 'none',
-      height: 5,
-      background: '#ddd',
-      borderRadius: 5,
-      outline: 'none',
-    }),
+    zIndex: 3,
   },
   pulseCircle: {
     width: 10,
@@ -1180,5 +1232,12 @@ const styles = StyleSheet.create({
   editButtonText: {
     color: '#3b82f6',
     fontWeight: 'bold',
+  },
+  mapSection: {
+    marginTop: 20,
+    marginBottom: 20,
+  },
+  bottomPadding: {
+    height: 50, // Extra space at bottom for web scrolling
   },
 });

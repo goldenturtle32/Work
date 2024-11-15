@@ -203,50 +203,39 @@ export default function HomeScreen({ navigation }) {
         if (otherUserPref.exists && otherUserPref.data().interested) {
           console.log("Found matching preference! Creating match...");
           
-          // Create match ID consistently: workerId_employerId
-          const workerId = currentUser.role === 'worker' ? currentUserUid : swipedUserId;
-          const employerId = currentUser.role === 'worker' ? swipedUserId : currentUserUid;
-          const matchId = `${workerId}_${employerId}`;
-          
-          console.log('Creating match with data:', {
-            matchId,
-            workerId,
-            employerId
-          });
-          
           try {
-            // Create or update the match document
-            const matchRef = db.collection('matches').doc(matchId);
-            
-            const matchData = {
-              worker: true,
-              employer: true,
-              workerId: workerId,
-              employerId: employerId,
-              timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-              // Add any additional fields you want to track
-              status: 'active',
-              createdAt: firebase.firestore.FieldValue.serverTimestamp()
-            };
-
-            console.log('About to create match with data:', {
-              matchId,
-              workerId,
-              employerId,
-              currentUserUid,
-              swipedUserId,
-              currentUserRole: currentUser.role
-            });
-
+            // Create match document...
             await matchRef.set(matchData);
-            console.log('Match created successfully with ID:', matchId);
+            
+            // Get additional details for the popup
+            const matchedItemDetails = currentUser.role === 'worker' 
+              ? await db.collection('job_attributes').doc(swipedUserId).get()
+              : await db.collection('user_attributes').doc(swipedUserId).get();
+            
+            const matchDetails = matchedItemDetails.data();
+            
             Alert.alert(
               "It's a Match! 🎉",
-              "You've matched with this candidate/employer!",
+              currentUser.role === 'worker' 
+                ? `You matched with ${matchDetails.jobTitle} at ${matchDetails.company}!\n\nSalary: $${matchDetails.salaryRange?.min}-${matchDetails.salaryRange?.max}/hr`
+                : `You matched with a candidate!\n\nSkills: ${matchDetails.skills?.slice(0,3).join(', ')}\nExperience: ${matchDetails.experience?.totalYears} years`,
               [
                 {
-                  text: "View Matches",
-                  onPress: () => navigation.navigate('Matches')
+                  text: "Message",
+                  onPress: () => navigation.navigate('Chat', {
+                    jobTitle: matchDetails.jobTitle || 'Job',
+                    company: matchDetails.company || 'Company',
+                    role: currentUser.role
+                  })
+                },
+                {
+                  text: "View Profile",
+                  onPress: () => navigation.navigate('JobDetail', {
+                    itemId: swipedUserId,
+                    itemType: currentUser.role === 'worker' ? 'job' : 'worker',
+                    currentUserData: currentUser,
+                    item: matchDetails
+                  })
                 },
                 {
                   text: "Keep Swiping",
@@ -256,7 +245,6 @@ export default function HomeScreen({ navigation }) {
             );
           } catch (error) {
             console.error("Error creating match:", error);
-            Alert.alert('Error', 'Failed to create match. Please try again.');
           }
         } else {
           console.log("No match yet - waiting for other user to swipe right");

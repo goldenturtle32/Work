@@ -91,9 +91,8 @@ const LocationMarker = () => (
   </div>
 );
 
-export default function WebMap({ location, cityName, stateCode, onRadiusChange }) {
+export default function WebMap({ location, radius, cityName, stateCode }) {
   const [mapLoaded, setMapLoaded] = useState(false);
-  const [radius, setRadius] = useState(5000); // 5km default
   const [circle, setCircle] = useState(null);
 
   useEffect(() => {
@@ -130,7 +129,7 @@ export default function WebMap({ location, cityName, stateCode, onRadiusChange }
   const createMapOptions = (maps) => {
     return {
       styles: mapStyles,
-      disableDefaultUI: true, // Removes default UI elements
+      disableDefaultUI: true,
       zoomControl: false,
       fullscreenControl: false,
       streetViewControl: false,
@@ -149,7 +148,7 @@ export default function WebMap({ location, cityName, stateCode, onRadiusChange }
       fillColor: '#444444',
       fillOpacity: 0.1,
       map: map,
-      editable: false, // No longer editable by dragging
+      editable: false,
       draggable: false,
       clickable: false
     });
@@ -157,19 +156,12 @@ export default function WebMap({ location, cityName, stateCode, onRadiusChange }
     setCircle(newCircle);
   };
 
-  // Update circle radius when slider changes
+  // Update circle radius when radius prop changes
   useEffect(() => {
-    if (circle) {
+    if (circle && radius) {
       circle.setRadius(radius);
     }
   }, [radius, circle]);
-
-  const handleRadiusChange = (newRadius) => {
-    setRadius(Number(newRadius));
-    if (onRadiusChange) {
-      onRadiusChange(Number(newRadius));
-    }
-  };
 
   if (!location || !mapLoaded) return (
     <View style={styles.mapContainer}>
@@ -190,19 +182,6 @@ export default function WebMap({ location, cityName, stateCode, onRadiusChange }
         <Text style={styles.locationText}>
           Current Location: {cityName}{stateCode ? `, ${stateCode}` : ''}
         </Text>
-        <View style={styles.radiusContainer}>
-          <Text style={styles.radiusText}>
-            Search Radius: {(radius / 1000).toFixed(1)} km
-          </Text>
-          <input
-            type="range"
-            min="1000"
-            max="50000"
-            value={radius}
-            onChange={(e) => handleRadiusChange(e.target.value)}
-            style={styles.slider}
-          />
-        </View>
       </View>
       <div style={{ height: '280px', width: '100%' }}>
         <GoogleMapReact
@@ -252,24 +231,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     height: 280,
-  },
-  radiusContainer: {
-    width: '100%',
-    paddingHorizontal: 20,
-    marginTop: 10,
-  },
-  radiusText: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 5,
-  },
-  slider: {
-    width: '100%',
-    height: 30,
-    WebkitAppearance: 'none',
-    appearance: 'none',
-    backgroundColor: 'transparent',
-    cursor: 'pointer',
   },
 });
