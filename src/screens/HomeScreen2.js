@@ -282,7 +282,7 @@ export default function HomeScreen({ navigation }) {
         >
           {currentUser && currentUser.role === 'worker' ? (
             <View style={styles.cardContent}>
-              <Text style={styles.jobTitle}>{item.jobTitle || 'No Title'}</Text>
+              <Text style={styles.jobTitle}>{item.jobTitle || 'No Job Title'}</Text>
               
               <View style={styles.matchContainer}>
                 <Text style={styles.matchText}>50% Match</Text>
@@ -341,7 +341,7 @@ export default function HomeScreen({ navigation }) {
             </View>
           ) : (
             <>
-              <Text style={styles.jobTitle}>{item.email || 'No Email'}</Text>
+              <Text style={styles.jobTitle}>{item.jobTitle || 'No Job Title'}</Text>
               <Text style={styles.cardText}>Skills: {item.skills?.join(', ') || 'N/A'}</Text>
               <Text style={styles.cardText}>Experience: {item.experience?.totalYears || 'N/A'} years</Text>
               <Text style={styles.cardText}>Education: {item.education || 'N/A'}</Text>

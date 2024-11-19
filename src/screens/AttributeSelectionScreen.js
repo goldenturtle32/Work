@@ -670,16 +670,18 @@ export default function AttributeSelectionScreen({ route, navigation }) {
           {error && <Text style={styles.error}>{error}</Text>}
 
           {/* Common fields for both roles */}
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Name:</Text>
-            <TextInput
-              style={[styles.input, styles.textInput]}
-              value={attributes.name}
-              onChangeText={(text) => handleInputChange('name', text)}
-              placeholder="Enter your name"
-              placeholderTextColor="#999"
-            />
-          </View>
+          {userRole === 'worker' && (
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Name:</Text>
+              <TextInput
+                style={[styles.input, styles.textInput]}
+                value={attributes.name}
+                onChangeText={(text) => handleInputChange('name', text)}
+                placeholder="Enter your name"
+                placeholderTextColor="#999"
+              />
+            </View>
+          )}
 
           <View style={styles.inputContainer}>
             <Text style={styles.label}>Industry Preferences:</Text>
@@ -810,20 +812,6 @@ export default function AttributeSelectionScreen({ route, navigation }) {
                   placeholder="Enter job title"
                 />
               </View>
-
-              <View style={styles.inputContainer}>
-                <Text style={styles.label}>Estimated Hours:</Text>
-                <TextInput
-                  style={styles.input}
-                  value={attributes.estimatedHours}
-                  onChangeText={(text) => handleInputChange('estimatedHours', text)}
-                  placeholder="Enter estimated hours"
-                  keyboardType="numeric"
-                />
-              </View>
-
-              {/* Add more employer-specific fields here */}
-              {/* ... */}
 
               <View style={styles.inputContainer}>
                 <Text style={styles.label}>Salary Range:</Text>

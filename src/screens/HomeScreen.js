@@ -78,12 +78,19 @@ export default function HomeScreen({ navigation }) {
               distance 
             });
           });
+          console.log("Formatted items:", jobsData);
           setItems(jobsData);
         } else if (userData.role === 'employer') {
           const userAttributesSnapshot = await db.collection('user_attributes')
             .where('role', '==', 'worker').get();
           const candidatesData = userAttributesSnapshot.docs.map(doc => {
             const candidateData = doc.data();
+            console.log('Raw candidate data from Firebase:', JSON.stringify({
+              id: doc.id,
+              candidateData,
+              overview: candidateData.user_overview,
+              keys: Object.keys(candidateData)
+            }, null, 2));
             const distance = candidateData.location && userLocation ? 
               calculateDistance(
                 userLocation.latitude,
@@ -104,6 +111,7 @@ export default function HomeScreen({ navigation }) {
               distance 
             });
           });
+          console.log("Formatted items:", candidatesData);
           setItems(candidatesData);
         }
       } catch (error) {
@@ -289,6 +297,11 @@ export default function HomeScreen({ navigation }) {
               </View>
 
               <View style={styles.infoContainer}>
+                <Text style={styles.label}>Overview</Text>
+                <Text style={styles.value}>{item.user_overview || 'No overview available'}</Text>
+              </View>
+
+              <View style={styles.infoContainer}>
                 <Text style={styles.label}>Pay Range</Text>
                 <Text style={styles.value}>${item.salaryRange?.min || 'N/A'}/hr - ${item.salaryRange?.max || 'N/A'}/hr</Text>
               </View>
@@ -304,21 +317,6 @@ export default function HomeScreen({ navigation }) {
                   ${((item.salaryRange?.min || 0) * (item.weeklyHours || 0)).toLocaleString()} - 
                   ${((item.salaryRange?.max || 0) * (item.weeklyHours || 0)).toLocaleString()}
                 </Text>
-              </View>
-
-              <View style={styles.infoContainer}>
-                <Text style={styles.label}>Availability Schedule</Text>
-                <View style={styles.availabilityContainer}>
-                  {item.getFormattedAvailability().length > 0 ? (
-                    item.getFormattedAvailability().map((schedule, index) => (
-                      <View key={index} style={styles.scheduleRow}>
-                        <Text style={[styles.value, styles.scheduleText]}>{schedule}</Text>
-                      </View>
-                    ))
-                  ) : (
-                    <Text style={styles.value}>No recurring availability set</Text>
-                  )}
-                </View>
               </View>
 
               <View style={styles.infoContainer}>
@@ -340,16 +338,46 @@ export default function HomeScreen({ navigation }) {
               </View>
             </View>
           ) : (
-            <>
-              <Text style={styles.jobTitle}>{item.jobTitle || 'No Job Title'}</Text>
-              <Text style={styles.cardText}>Skills: {item.skills?.join(', ') || 'N/A'}</Text>
-              <Text style={styles.cardText}>Experience: {item.experience?.totalYears || 'N/A'} years</Text>
-              <Text style={styles.cardText}>Education: {item.education || 'N/A'}</Text>
-              <Text style={styles.cardText}>Certifications: {item.certifications?.join(', ') || 'N/A'}</Text>
-              <Text style={styles.cardText}>Preferred Job Types: {item.jobTypePrefs?.join(', ') || 'N/A'}</Text>
-              <Text style={styles.cardText}>Preferred Industries: {item.industryPrefs?.join(', ') || 'N/A'}</Text>
-              <Text style={styles.cardText}>Salary Preference: ${item.salaryPrefs?.min || 'N/A'} - ${item.salaryPrefs?.max || 'N/A'}</Text>
-            </>
+            <View style={styles.cardContent}>
+              <Text style={styles.jobTitle}>{item.name || 'No Name'}</Text>
+              
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Overview</Text>
+                <Text style={styles.value}>{item.user_overview || 'No overview available'}</Text>
+              </View>
+
+              {Array.isArray(item.selectedJobs) && item.selectedJobs.map((job, index) => (
+                <View key={index} style={styles.jobContainer}>
+                  <Text style={styles.jobText}>{job.jobType || 'No Job Type'}</Text>
+                  <Text style={styles.industryText}>{job.industry || 'No Industry'}</Text>
+                  <View style={styles.skillsContainer}>
+                    {Array.isArray(job.skills) && job.skills.map((skill, skillIndex) => (
+                      <View key={skillIndex} style={styles.skillBubble}>
+                        <Text style={styles.skillText}>{skill}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              ))}
+
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Availability</Text>
+                <View style={styles.availabilityContainer}>
+                  {Array.isArray(item.availability) && item.availability.map((schedule, index) => (
+                    <View key={index} style={styles.scheduleRow}>
+                      <Text style={[styles.value, styles.scheduleText]}>{schedule}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Distance</Text>
+                <Text style={styles.value}>
+                  {item.distance != null ? `${item.distance} miles away` : 'Distance unavailable'}
+                </Text>
+              </View>
+            </View>
           )}
         </LinearGradient>
       </TouchableOpacity>
@@ -620,5 +648,27 @@ const styles = StyleSheet.create({
   scheduleText: {
     fontSize: 15,
     lineHeight: 20,
+  },
+  jobContainer: {
+    marginVertical: 8,
+    padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+  },
+  jobText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontFamily: 'DMSerifText_400Regular',
+    marginBottom: 4,
+  },
+  industryText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontFamily: 'LibreBodoni_400Regular',
+    marginBottom: 8,
+  },
+  skillsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
   },
 });

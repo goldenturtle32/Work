@@ -86,6 +86,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
   const { isNewUser } = route.params;
   const [userRole, setUserRole] = useState(null);
   const [attributes, setAttributes] = useState({
+    name: '',
     // Common attributes
     industryPrefs: [],
     location: null,
@@ -528,6 +529,27 @@ export default function AttributeSelectionScreen({ route, navigation }) {
   const renderMap = () => {
     if (!attributes.location) return null;
 
+    const radiusControl = (
+      <View style={styles.radiusControl}>
+        <Text style={styles.radiusText}>
+          Search Radius: {(locationPreference / 1609.34).toFixed(1)} miles
+        </Text>
+        <Slider
+          style={styles.slider}
+          minimumValue={1609.34} // 1 mile in meters
+          maximumValue={80467.2} // 50 miles in meters
+          step={1609.34}
+          value={locationPreference}
+          onValueChange={(value) => {
+            setLocationPreference(value);
+            handleInputChange('locationPreference', value);
+          }}
+          minimumTrackTintColor="#007BFF"
+          maximumTrackTintColor="#000000"
+        />
+      </View>
+    );
+
     if (isWeb && WebMap) {
       return (
         <View style={styles.mapContainer}>
@@ -537,24 +559,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
             stateCode={stateCode}
             radius={locationPreference}
           />
-          <View style={styles.radiusControl}>
-            <Text style={styles.radiusText}>
-              Search Radius: {(locationPreference / 1000).toFixed(1)} km
-            </Text>
-            <Slider
-              style={styles.slider}
-              minimumValue={1000}
-              maximumValue={50000}
-              step={1000}
-              value={locationPreference}
-              onValueChange={(value) => {
-                setLocationPreference(value);
-                handleInputChange('locationPreference', value);
-              }}
-              minimumTrackTintColor="#007BFF"
-              maximumTrackTintColor="#000000"
-            />
-          </View>
+          {radiusControl}
         </View>
       );
     }
@@ -564,24 +569,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
         <Text style={styles.locationText}>
           Current Location: {cityName}{stateCode ? `, ${stateCode}` : ''}
         </Text>
-        <View style={styles.radiusControl}>
-          <Text style={styles.radiusText}>
-            Search Radius: {(locationPreference / 1000).toFixed(1)} km
-          </Text>
-          <Slider
-            style={styles.slider}
-            minimumValue={1000}
-            maximumValue={50000}
-            step={1000}
-            value={locationPreference}
-            onValueChange={(value) => {
-              setLocationPreference(value);
-              handleInputChange('locationPreference', value);
-            }}
-            minimumTrackTintColor="#007BFF"
-            maximumTrackTintColor="#000000"
-          />
-        </View>
+        {radiusControl}
       </View>
     );
   };
@@ -682,6 +670,17 @@ export default function AttributeSelectionScreen({ route, navigation }) {
           {error && <Text style={styles.error}>{error}</Text>}
 
           {/* Common fields for both roles */}
+          <View style={styles.inputContainer}>
+            <Text style={styles.label}>Name:</Text>
+            <TextInput
+              style={[styles.input, styles.textInput]}
+              value={attributes.name}
+              onChangeText={(text) => handleInputChange('name', text)}
+              placeholder="Enter your name"
+              placeholderTextColor="#999"
+            />
+          </View>
+
           <View style={styles.inputContainer}>
             <Text style={styles.label}>Industry Preferences:</Text>
             <View style={styles.inputWrapper}>
@@ -973,16 +972,19 @@ const styles = StyleSheet.create({
   mainContainer: {
     flex: 1,
     backgroundColor: '#f3f4f6',
+    height: '100vh',
+    overflow: 'auto',
   },
   keyboardAvoidingView: {
     flex: 1,
   },
   scrollView: {
     flex: 1,
+    width: '100%',
   },
   scrollContent: {
     padding: 16,
-    paddingBottom: 32, // Extra padding at bottom
+    paddingBottom: 32,
   },
   title: {
     fontSize: 24,
@@ -1140,10 +1142,11 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   mapContainer: {
-    height: 300,
+    height: 400,
     marginVertical: 20,
     borderRadius: 8,
-    overflow: 'hidden',
+    overflow: 'visible',
+    backgroundColor: '#f5f5f5',
   },
   map: {
     flex: 1,
@@ -1154,12 +1157,13 @@ const styles = StyleSheet.create({
     color: '#007BFF',
   },
   radiusControl: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    backgroundColor: '#f8fafc',
     padding: 15,
     borderRadius: 8,
+    marginTop: 10,
     marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#ccc',
+    position: 'relative',
+    zIndex: 2,
   },
   radiusText: {
     fontSize: 16,
@@ -1170,6 +1174,7 @@ const styles = StyleSheet.create({
   slider: {
     width: '100%',
     height: 40,
+    zIndex: 3,
   },
   pulseCircle: {
     width: 10,

@@ -20,6 +20,9 @@ export default class User {
   };
   category: string;
   reviewsAverage: number;
+  user_overview: string;
+  name: string;
+  selectedJobs: string[];
 
   constructor(data) {
     this.uid = data.uid || data.id || '';
@@ -31,6 +34,9 @@ export default class User {
     this.availability = Array.isArray(data.availability) ? data.availability : [];
     this.category = data.category || '';
     this.reviewsAverage = data.reviewsAverage || 0;
+    this.user_overview = data.user_overview || '';
+    this.name = data.name || '';
+    this.selectedJobs = Array.isArray(data.selectedJobs) ? data.selectedJobs : [];
 
     // These fields are not in the Firebase data, but we'll keep them in the model
     // with default values in case they're needed elsewhere in the app
@@ -63,6 +69,9 @@ export default class User {
       id: this.id,
       email: this.email,
       role: this.role,
+      user_overview: this.user_overview,
+      name: this.name,
+      selectedJobs: this.selectedJobs,
       // ... other properties
     };
   }

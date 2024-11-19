@@ -1,5 +1,6 @@
 export default class User {
   uid: string;
+  id: string;
   email: string;
   role: string;
   location: { city: string; state: string; country: string };
@@ -21,7 +22,8 @@ export default class User {
   reviewsAverage: number;
 
   constructor(data) {
-    this.uid = data.id || '';
+    this.uid = data.uid || data.id || '';
+    this.id = data.id || data.uid || '';
     this.email = data.email || '';
     this.role = data.role || '';
     this.location = this.parseLocation(data.location);
@@ -49,5 +51,19 @@ export default class User {
       };
     }
     return { latitude: 0, longitude: 0 };
+  }
+
+  get userId() {
+    return this.uid || this.id;
+  }
+
+  toObject() {
+    return {
+      uid: this.uid,
+      id: this.id,
+      email: this.email,
+      role: this.role,
+      // ... other properties
+    };
   }
 }

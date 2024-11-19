@@ -15,6 +15,9 @@ export default class Job {
     this.estimatedHours = this.parseNumber(data.estimatedHours);
     this.availability = this.parseAvailability(data.availability);
     this.weeklyHours = this.calculateWeeklyHours(this.availability);
+    this.user_overview = data.user_overview || '';
+    this.name = data.name || '';
+    this.selectedJobs = this.parseArray(data.selectedJobs);
   }
 
   parseArray(value) {
