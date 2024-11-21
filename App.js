@@ -180,6 +180,12 @@ export default function App() {
               options={{ headerShown: false }} 
               initialParams={{ isNewUser: true }}
             />
+            <Stack.Screen 
+              name="Availability" 
+              component={AvailabilityScreen} 
+              options={{ headerShown: false }}
+              initialParams={{ isInitialSetup: true }}
+            />
           </Stack.Navigator>
         ) : (
           <AppStack />

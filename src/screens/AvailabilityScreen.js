@@ -52,7 +52,9 @@ const WebTimePicker = ({ value, onChange }) => {
   );
 };
 
-export default function AvailabilityScreen({ navigation }) {
+export default function AvailabilityScreen({ navigation, route }) {
+  const isInitialSetup = route.params?.isInitialSetup || false;
+
   const [user, setUser] = useState(null);
   const [selectedDay, setSelectedDay] = useState('');
   const [timeSlots, setTimeSlots] = useState([]);
@@ -162,40 +164,53 @@ export default function AvailabilityScreen({ navigation }) {
     setTimeSlots(updatedSlots);
   };
 
-  const saveAvailability = async () => {
-    if (!user || !selectedDay) return;
-
+  const handleSaveAvailability = async () => {
     try {
-      // Format the day to lowercase for consistency
-      const dayOfWeek = new Date(selectedDay)
-        .toLocaleDateString('en-US', { weekday: 'long' })
-        .toLowerCase();
+      if (!selectedDay || timeSlots.length === 0 || !areTimeSlotsValid()) {
+        Alert.alert('Invalid Input', 'Please select a day and add valid time slots');
+        return;
+      }
 
+      console.log('Saving availability...');
+      const currentAvailability = user?.availability || {};
       const updatedAvailability = {
-        ...user.availability,
-        [dayOfWeek]: { 
-          repeatType, 
-          slots: timeSlots.filter(slot => slot.startTime && slot.endTime)
+        ...currentAvailability,
+        [selectedDay]: {
+          repeatType,
+          slots: timeSlots,
         },
       };
 
+      // Save to Firestore
       const userDocRef = db.collection('user_attributes').doc(auth.currentUser.uid);
       await userDocRef.update({
         availability: updatedAvailability,
       });
 
-      setUser({ ...user, availability: updatedAvailability });
-      updateMarkedDates(updatedAvailability);
-
-      if (repeatType !== 'custom') {
-        await applyRepeatingSchedule(updatedAvailability);
+      // If this is initial setup, update user's new status
+      if (isInitialSetup) {
+        console.log('Updating user status...');
+        await db.collection('users').doc(auth.currentUser.uid).update({
+          isNewUser: false
+        });
       }
 
-      Alert.alert('Success', 'Availability updated successfully!');
-      navigation.setParams({ availabilityUpdated: Date.now() });
+      console.log('Successfully saved. Navigating to Home...');
+      
+      // Use navigation.reset to force navigation to Home
+      navigation.reset({
+        index: 0,
+        routes: [
+          {
+            name: 'Home',
+            params: { userRole: route.params?.userRole }
+          }
+        ]
+      });
+
     } catch (error) {
       console.error('Error saving availability:', error);
-      Alert.alert('Error', 'Failed to update availability');
+      Alert.alert('Error', 'Failed to save availability');
     }
   };
 
@@ -222,6 +237,18 @@ export default function AvailabilityScreen({ navigation }) {
     setUser({ ...user, availability: updatedAvailability });
     updateMarkedDates(updatedAvailability);
   };
+
+  // Add this function to check if time slots are valid
+  const areTimeSlotsValid = () => {
+    return timeSlots.every(slot => 
+      slot.startTime && 
+      slot.endTime && 
+      slot.startTime < slot.endTime
+    );
+  };
+
+  // Update the button's disabled state
+  const isNextDisabled = !selectedDay || timeSlots.length === 0 || !areTimeSlotsValid();
 
   return (
     <ScrollView style={styles.container}>
@@ -312,8 +339,20 @@ export default function AvailabilityScreen({ navigation }) {
         </View>
       </View>
 
-      <TouchableOpacity style={styles.saveButton} onPress={saveAvailability}>
-        <Text style={styles.saveButtonText}>Save Availability</Text>
+      <TouchableOpacity 
+        style={[
+          styles.saveButton,
+          (!selectedDay || timeSlots.length === 0 || !areTimeSlotsValid()) && styles.buttonDisabled
+        ]}
+        onPress={handleSaveAvailability}
+        disabled={!selectedDay || timeSlots.length === 0 || !areTimeSlotsValid()}
+      >
+        <Text style={[
+          styles.saveButtonText,
+          (!selectedDay || timeSlots.length === 0 || !areTimeSlotsValid()) && styles.buttonTextDisabled
+        ]}>
+          {isInitialSetup ? 'Complete Setup' : 'Save Changes'}
+        </Text>
       </TouchableOpacity>
 
       {showPickerModal.show && (
@@ -508,5 +547,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#4b5563',
     minWidth: 45,
+  },
+  buttonDisabled: {
+    backgroundColor: '#94a3b8',
+    opacity: 0.5,
+  },
+  buttonTextDisabled: {
+    color: '#e2e8f0',
   },
 });

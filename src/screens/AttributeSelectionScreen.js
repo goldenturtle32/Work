@@ -249,16 +249,20 @@ export default function AttributeSelectionScreen({ route, navigation }) {
   };
 
   const handleInputChange = (field, value) => {
+    if (field === 'locationPreference') {
+      // Store locationPreference as a string value
+      setLocationPreference(value);
+    }
+    
     setAttributes(prev => ({
       ...prev,
-      [field]: value,
-      ...(field === 'locationPreference' && { locationPreference: parseInt(value, 10) })
+      [field]: value
     }));
 
     // If changing job type, update skills
     if (field === 'jobTypePrefs') {
-        console.log(`Updating skills for job type: ${value}`);
-        updateSkillSuggestions(value);
+      console.log(`Updating skills for job type: ${value}`);
+      updateSkillSuggestions(value);
     }
   };
 
@@ -464,6 +468,9 @@ export default function AttributeSelectionScreen({ route, navigation }) {
 
   const handleSubmit = async () => {
     try {
+      console.log('Submit button pressed');
+      console.log('Current user:', currentUser);
+      
       if (!currentUser) {
         throw new Error('User not authenticated');
       }
@@ -487,37 +494,25 @@ export default function AttributeSelectionScreen({ route, navigation }) {
         role: userRole,
       };
 
-      if (userRole === 'worker') {
-        await db.collection('user_attributes').doc(currentUser.uid).set(dataToSubmit);
-      } else if (userRole === 'employer') {
-        // Remove worker-specific fields
-        delete dataToSubmit.jobTypePrefs;
-        delete dataToSubmit.skills;
-        delete dataToSubmit.salaryPrefs;
-        delete dataToSubmit.education;
-        delete dataToSubmit.experience;
-        delete dataToSubmit.certifications;
-        delete dataToSubmit.availability;
+      console.log('Data to submit:', dataToSubmit);
 
-        await db.collection('job_attributes').doc(currentUser.uid).set(dataToSubmit);
-      }
+      // Save to Firestore
+      await db.collection('user_attributes').doc(currentUser.uid).set(dataToSubmit);
+      console.log('Data saved successfully');
 
-      await db.collection('users').doc(currentUser.uid).update({
-        isNewUser: false
+      // Try immediate navigation without Alert
+      navigation.reset({
+        index: 0,
+        routes: [
+          {
+            name: 'Availability',
+            params: { isInitialSetup: true, userRole: userRole }
+          }
+        ]
       });
 
-      Alert.alert('Success', 'Attributes saved successfully!');
-      
-      if (isNewUser) {
-        navigation.reset({
-          index: 0,
-          routes: [{ name: 'Home' }],
-        });
-      } else {
-        navigation.goBack();
-      }
     } catch (error) {
-      console.error('Error saving attributes:', error);
+      console.error('Error in handleSubmit:', error);
       Alert.alert('Error', 'Failed to save attributes');
     }
   };
@@ -653,6 +648,35 @@ export default function AttributeSelectionScreen({ route, navigation }) {
         ...prev,
         skills: []
     }));
+  };
+
+  // Add this function to check if form is valid
+  const isFormValid = () => {
+    console.log('Checking form validity:', {
+      selectedJobs: selectedJobs,
+      userRole: userRole
+    });
+    
+    if (userRole === 'worker') {
+      // For workers, only require selected jobs
+      const isValid = selectedJobs.length > 0;
+      console.log('Worker form validity:', isValid);
+      return isValid;
+    } else {
+      // For employers
+      const hasJobDetails = attributes.jobTitle && 
+        attributes.salaryRange && 
+        attributes.salaryRange.min && 
+        attributes.salaryRange.max;
+      
+      const hasIndustry = attributes.industryPrefs.length > 0;
+      const hasJobType = attributes.jobTypePrefs !== '';
+      const hasSkills = attributes.skills.length > 0;
+      
+      const isValid = hasJobDetails && hasIndustry && hasJobType && hasSkills;
+      console.log('Employer form validity:', isValid);
+      return isValid;
+    }
   };
 
   return (
@@ -942,11 +966,20 @@ export default function AttributeSelectionScreen({ route, navigation }) {
           </View>
 
           {/* Submit Button at the bottom */}
-          <TouchableOpacity 
-            style={styles.submitButton} 
+          <TouchableOpacity
+            style={[
+              styles.submitButton,
+              !isFormValid() && styles.submitButtonDisabled
+            ]}
             onPress={handleSubmit}
+            disabled={!isFormValid()}
           >
-            <Text style={styles.submitButtonText}>Submit Attributes</Text>
+            <Text style={[
+              styles.submitButtonText,
+              !isFormValid() && styles.submitButtonTextDisabled
+            ]}>
+              Submit Attributes
+            </Text>
           </TouchableOpacity>
 
           {/* Add bottom padding for scrolling */}
@@ -1039,17 +1072,25 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   submitButton: {
-    backgroundColor: '#007BFF',
+    backgroundColor: '#1e3a8a',
     padding: 15,
     borderRadius: 8,
     alignItems: 'center',
     marginTop: 20,
+    marginHorizontal: 20,
     marginBottom: 20,
   },
+  submitButtonDisabled: {
+    backgroundColor: '#94a3b8',
+    opacity: 0.5,
+  },
   submitButtonText: {
-    color: '#fff',
-    fontSize: 16,
+    color: '#ffffff',
+    fontSize: 18,
     fontWeight: 'bold',
+  },
+  submitButtonTextDisabled: {
+    color: '#e2e8f0',
   },
   inputWrapper: {
     flexDirection: 'row',
