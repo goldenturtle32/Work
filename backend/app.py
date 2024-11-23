@@ -777,5 +777,40 @@ def clean_skill_name(query):
         return skill
     return None
 
+@app.route('/suggest-skills', methods=['POST'])
+def suggest_skills():
+    try:
+        data = request.json
+        job_title = data.get('jobTitle', '')
+        
+        messages = [
+            {"role": "system", "content": "You are a job skills expert. Provide relevant skills for job titles in JSON array format."},
+            {"role": "user", "content": f"List 10 key skills required for a {job_title} position. Return only a JSON array of skill names."}
+        ]
+        
+        response = make_openai_request(messages)
+        
+        # Parse the response into a list of skills
+        try:
+            skills = json.loads(response)
+            if not isinstance(skills, list):
+                skills = response.strip('[]').split(',')
+        except:
+            skills = response.strip('[]').split(',')
+        
+        # Clean and format skills
+        skills = [s.strip().strip('"\'') for s in skills if s.strip()]
+        
+        return jsonify({
+            "success": True,
+            "skills": skills
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 if __name__ == '__main__':
     app.run(debug=True) 

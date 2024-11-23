@@ -50,7 +50,18 @@ const AuthStack = () => (
 
 // App Stack: All other screens
 const AppStack = () => (
-  <Stack.Navigator initialRouteName="Home">
+  <Stack.Navigator 
+    initialRouteName="Home"
+    screenOptions={{
+      headerStyle: {
+        backgroundColor: '#4f46e5',
+      },
+      headerTintColor: '#fff',
+      headerTitleStyle: {
+        fontWeight: 'bold',
+      },
+    }}
+  >
     <Stack.Screen 
       name="Home" 
       component={HomeScreen} 
@@ -58,43 +69,51 @@ const AppStack = () => (
     />
     <Stack.Screen 
       name="Profile" 
-      component={ProfileScreen} 
+      component={ProfileScreen}
       options={{ title: 'Profile' }}
     />
     <Stack.Screen 
       name="Settings" 
-      component={SettingsScreen} 
+      component={SettingsScreen}
       options={{ title: 'Settings' }}
     />
     <Stack.Screen 
       name="Matches" 
-      component={MatchesScreen} 
+      component={MatchesScreen}
       options={{ title: 'Matches' }}
     />
     <Stack.Screen 
-      name="JobList" 
-      component={JobList} 
-      options={{ title: 'Job List' }}
-    />
-    <Stack.Screen 
       name="JobDetail" 
-      component={JobDetailScreen} 
+      component={JobDetailScreen}
       options={{ title: 'Job Details' }}
     />
     <Stack.Screen 
-      name="Availability"  
-      component={AvailabilityScreen} 
-      options={{ title: 'Availability' }}
-    />
-    <Stack.Screen 
-      name="Payment"  
-      component={PaymentScreen} 
-      options={{ title: 'Payment' }}
-    />
-    <Stack.Screen 
       name="Chat" 
-      component={ChatScreen} 
+      component={ChatScreen}
       options={{ title: 'Chat' }}
+    />
+  </Stack.Navigator>
+);
+
+// Add Home screen to the initial setup stack
+const InitialSetupStack = () => (
+  <Stack.Navigator initialRouteName="AttributeSelection">
+    <Stack.Screen 
+      name="AttributeSelection" 
+      component={AttributeSelectionScreen} 
+      options={{ headerShown: false }} 
+      initialParams={{ isNewUser: true }}
+    />
+    <Stack.Screen 
+      name="Availability" 
+      component={AvailabilityScreen} 
+      options={{ headerShown: false }}
+      initialParams={{ isInitialSetup: true }}
+    />
+    <Stack.Screen 
+      name="Home" 
+      component={HomeScreen} 
+      options={{ headerShown: false }}
     />
   </Stack.Navigator>
 );
@@ -173,20 +192,7 @@ export default function App() {
     <NavigationContainer>
       {user ? (
         isNewUser ? (
-          <Stack.Navigator initialRouteName="AttributeSelection">
-            <Stack.Screen 
-              name="AttributeSelection" 
-              component={AttributeSelectionScreen} 
-              options={{ headerShown: false }} 
-              initialParams={{ isNewUser: true }}
-            />
-            <Stack.Screen 
-              name="Availability" 
-              component={AvailabilityScreen} 
-              options={{ headerShown: false }}
-              initialParams={{ isInitialSetup: true }}
-            />
-          </Stack.Navigator>
+          <InitialSetupStack />
         ) : (
           <AppStack />
         )

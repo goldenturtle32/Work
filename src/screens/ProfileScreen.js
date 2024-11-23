@@ -99,37 +99,50 @@ export default function ProfileScreen({ navigation, route }) {
   };
 
   const renderSelectedJobs = () => {
-    if (!profileData.selectedJobs?.length) {
-      return <Text style={styles.noDataText}>No jobs selected</Text>;
-    }
-
-    return profileData.selectedJobs.map((job, index) => (
-      <View key={index} style={styles.jobCard}>
-        <Text style={styles.jobTitle}>{job.jobType || 'Unknown Job'}</Text>
-        <Text style={styles.jobIndustry}>{job.industry || 'Unknown Industry'}</Text>
-        <View style={styles.bubbleContainer}>
-          {job.skills?.map((skill, skillIndex) => (
-            <View key={skillIndex} style={styles.smallBubble}>
-              <Text style={styles.smallBubbleText}>{skill}</Text>
+    return (
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Selected Jobs</Text>
+        {profileData.selectedJobs && profileData.selectedJobs.length > 0 ? (
+          profileData.selectedJobs.map((job, index) => (
+            <View key={index} style={styles.jobItem}>
+              <Text style={styles.jobTitle}>{job.industry} - {job.title}</Text>
+              <View style={styles.jobSkills}>
+                {job.skills && job.skills.length > 0 ? (
+                  job.skills.map((skill, skillIndex) => (
+                    <Text key={skillIndex} style={styles.jobSkillText}>
+                      {skill.name} ({skill.yearsOfExperience} yr{skill.yearsOfExperience !== 1 ? 's' : ''})
+                    </Text>
+                  ))
+                ) : (
+                  <Text style={styles.noDataText}>No skills selected</Text>
+                )}
+              </View>
             </View>
-          )) || null}
-        </View>
+          ))
+        ) : (
+          <Text style={styles.noDataText}>No jobs selected</Text>
+        )}
       </View>
-    ));
+    );
   };
 
   const renderSkills = () => {
-    if (!profileData.skills?.length) {
-      return <Text style={styles.noDataText}>No skills added</Text>;
-    }
-
     return (
-      <View style={styles.bubbleContainer}>
-        {profileData.skills.map((skill, index) => (
-          <View key={index} style={styles.bubble}>
-            <Text style={styles.bubbleText}>{skill}</Text>
-          </View>
-        ))}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Skills</Text>
+        <View style={styles.skillsContainer}>
+          {profileData.skills && profileData.skills.length > 0 ? (
+            profileData.skills.map((skill, index) => (
+              <View key={index} style={styles.skillItem}>
+                <Text style={styles.skillText}>
+                  {skill.name} ({skill.yearsOfExperience} yr{skill.yearsOfExperience !== 1 ? 's' : ''})
+                </Text>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.noDataText}>No skills added</Text>
+          )}
+        </View>
       </View>
     );
   };
@@ -195,16 +208,10 @@ export default function ProfileScreen({ navigation, route }) {
         </View>
 
         {/* Skills Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Skills</Text>
-          {renderSkills()}
-        </View>
+        {renderSkills()}
 
         {/* Selected Jobs Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Selected Jobs</Text>
-          {renderSelectedJobs()}
-        </View>
+        {renderSelectedJobs()}
 
         {/* Availability Section */}
         <View style={styles.section}>
@@ -481,5 +488,32 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  jobSkills: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 5,
+  },
+  jobSkillText: {
+    fontSize: 14,
+    color: '#666',
+    backgroundColor: '#f0f0f0',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    marginRight: 8,
+    marginBottom: 4,
+  },
+  skillItem: {
+    backgroundColor: '#f0f0f0',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 4,
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  skillText: {
+    fontSize: 14,
+    color: '#333',
   },
 });

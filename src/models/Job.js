@@ -3,7 +3,7 @@ export default class Job {
   constructor(data) {
     this.id = data.id || '';
     this.location = data.location || ''; 
-    this.requiredSkills = this.parseArray(data.requiredSkills);
+    this.requiredSkills = this.parseSkillsWithExperience(data.requiredSkills);
     this.requiredExperience = this.parseExperience(data.requiredExperience);
     this.requiredEducation = data.requiredEducation || '';
     this.requiredCertifications = this.parseArray(data.requiredCertifications);
@@ -132,5 +132,25 @@ export default class Job {
     const ampm = hour >= 12 ? 'PM' : 'AM';
     const hour12 = hour % 12 || 12;
     return `${hour12}:${minutes.padStart(2, '0')}${ampm}`;
+  }
+
+  parseSkillsWithExperience(skills) {
+    if (!skills) return [];
+    
+    // If skills is already in the correct format, return it
+    if (Array.isArray(skills) && skills.length > 0 && 
+        typeof skills[0] === 'object' && 'name' in skills[0]) {
+      return skills;
+    }
+
+    // Convert simple array of strings to array of objects with experience
+    if (Array.isArray(skills)) {
+      return skills.map(skill => ({
+        name: typeof skill === 'object' ? skill.name : skill,
+        yearsOfExperience: typeof skill === 'object' ? skill.yearsOfExperience : 0
+      }));
+    }
+
+    return [];
   }
 }

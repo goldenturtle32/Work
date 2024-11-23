@@ -144,6 +144,8 @@ export default function AttributeSelectionScreen({ route, navigation }) {
 
   const [locationPreference, setLocationPreference] = useState(5000); // 5km default
 
+  const [skillExperience, setSkillExperience] = useState({});
+
   useEffect(() => {
     const fetchUserRole = async () => {
       try {
@@ -397,15 +399,19 @@ export default function AttributeSelectionScreen({ route, navigation }) {
 );
 
   const handleSkillSelection = (skill) => {
-    if (attributes.skills.includes(skill)) {
+    const existingSkillIndex = attributes.skills.findIndex(s => s.name === skill);
+    
+    if (existingSkillIndex !== -1) {
+      // Remove skill
       setAttributes(prev => ({
         ...prev,
-        skills: prev.skills.filter(s => s !== skill)
+        skills: prev.skills.filter(s => s.name !== skill)
       }));
     } else if (attributes.skills.length < 5) {
+      // Add skill with default 0 years experience
       setAttributes(prev => ({
         ...prev,
-        skills: [...prev.skills, skill]
+        skills: [...prev.skills, { name: skill, yearsOfExperience: 0 }]
       }));
     } else {
       Alert.alert('Maximum Skills', 'You can select up to 5 skills.');
@@ -433,33 +439,25 @@ export default function AttributeSelectionScreen({ route, navigation }) {
   };
 
   const handleAddJob = () => {
-    if (selectedJobs.length >= 3) {
-      Alert.alert('Maximum Jobs', 'You can only add up to 3 jobs.');
-      return;
-    }
-
-    if (!attributes.industryPrefs[0] || !attributes.jobTypePrefs || attributes.skills.length === 0) {
-      Alert.alert('Incomplete Job', 'Please select an industry, job type, and at least one skill.');
+    if (!attributes.industryPrefs[0] || !attributes.jobTypePrefs) {
+      Alert.alert('Missing Information', 'Please select both industry and job type.');
       return;
     }
 
     const newJob = {
       industry: attributes.industryPrefs[0],
-      jobType: attributes.jobTypePrefs,
-      skills: [...attributes.skills]
+      title: attributes.jobTypePrefs,
+      skills: [...attributes.skills] // Copy the current skills with their experience
     };
 
     setSelectedJobs(prev => [...prev, newJob]);
-
-    // Reset job-related fields
+    
+    // Reset job-specific fields but keep the skills
     setAttributes(prev => ({
       ...prev,
-      industryPrefs: [],
       jobTypePrefs: '',
-      skills: []
+      industryPrefs: []
     }));
-    setInputValues(prev => ({ ...prev, industryPrefs: '' }));
-    setSuggestions(prev => ({ ...prev, jobTypes: [], skills: [] }));
   };
 
   const handleRemoveJob = (index) => {
@@ -679,6 +677,103 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     }
   };
 
+  const fetchSkillSuggestions = async (jobTitle) => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/suggest-skills`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ jobTitle }),
+      });
+      
+      const data = await response.json();
+      if (data.success) {
+        setSuggestions(prev => ({
+          ...prev,
+          skills: data.skills
+        }));
+      }
+    } catch (error) {
+      console.error('Error fetching skill suggestions:', error);
+    }
+  };
+
+  const updateSkillExperience = (skill, years) => {
+    setSkillExperience(prev => ({
+      ...prev,
+      [skill]: years
+    }));
+    
+    // Update the skill in attributes if it exists
+    setAttributes(prev => ({
+      ...prev,
+      skills: prev.skills.map(s => 
+        s.name === skill ? { ...s, yearsOfExperience: years } : s
+      )
+    }));
+  };
+
+  const renderSelectedJob = (job) => {
+    const skillsDisplay = job.skills && job.skills.length > 0
+      ? job.skills.map(skill => 
+          `${skill.name} (${skill.yearsOfExperience} yr${skill.yearsOfExperience !== 1 ? 's' : ''})`
+        ).join(', ')
+      : 'No skills selected';
+
+    return (
+      <View style={styles.selectedJobItem}>
+        <View style={styles.selectedJobInfo}>
+          <Text style={styles.selectedJobText}>
+            {`${job.industry} - ${job.title}`}
+          </Text>
+          <Text style={styles.selectedJobSkills}>
+            Skills: {skillsDisplay}
+          </Text>
+        </View>
+        <TouchableOpacity onPress={() => handleRemoveJob(job)}>
+          <Ionicons name="close-circle" size={24} color="#dc3545" />
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  const renderSkillItem = (skill) => {
+    const isSelected = attributes.skills.some(s => s.name === skill);
+    
+    return (
+      <View style={styles.skillItemContainer}>
+        <TouchableOpacity
+          style={[
+            styles.skillItem,
+            isSelected && styles.selectedSkillItem
+          ]}
+          onPress={() => handleSkillSelection(skill)}
+        >
+          <Text style={[
+            styles.skillItemText,
+            isSelected && styles.selectedSkillItemText
+          ]}>
+            {skill}
+          </Text>
+        </TouchableOpacity>
+        
+        {isSelected && (
+          <View style={styles.experienceInput}>
+            <TextInput
+              style={styles.experienceTextInput}
+              keyboardType="numeric"
+              placeholder="Years"
+              value={attributes.skills.find(s => s.name === skill)?.yearsOfExperience?.toString() || ''}
+              onChangeText={(value) => updateSkillExperience(skill, parseInt(value) || 0)}
+            />
+            <Text style={styles.experienceLabel}>years</Text>
+          </View>
+        )}
+      </View>
+    );
+  };
+
   return (
     <View style={styles.mainContainer}>
       <KeyboardAvoidingView
@@ -803,19 +898,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
                   <FlatList
                     data={suggestions.skills}
                     keyExtractor={(item) => item}
-                    renderItem={({ item }) => (
-                      <TouchableOpacity
-                        style={[
-                          styles.skillItem,
-                          attributes.skills.includes(item) && styles.selectedSkill
-                        ]}
-                        onPress={() => handleSkillSelection(item)}
-                      >
-                        <Text style={attributes.skills.includes(item) ? styles.selectedSkillText : styles.skillText}>
-                          {item}
-                        </Text>
-                      </TouchableOpacity>
-                    )}
+                    renderItem={({ item }) => renderSkillItem(item)}
                     numColumns={2}
                     columnWrapperStyle={styles.skillList}
                   />
@@ -876,21 +959,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
               {selectedJobs.length > 0 && (
                 <View style={styles.selectedJobsContainer}>
                   <Text style={styles.selectedJobsTitle}>Selected Jobs:</Text>
-                  {selectedJobs.map((job, index) => (
-                    <View key={index} style={styles.selectedJobItem}>
-                      <View style={styles.selectedJobInfo}>
-                        <Text style={styles.selectedJobText}>
-                          {job.industry} - {job.jobType}
-                        </Text>
-                        <Text style={styles.selectedJobSkills}>
-                          Skills: {job.skills.join(', ')}
-                        </Text>
-                      </View>
-                      <TouchableOpacity onPress={() => handleRemoveJob(index)}>
-                        <Ionicons name="close-circle" size={24} color="#FF4136" />
-                      </TouchableOpacity>
-                    </View>
-                  ))}
+                  {selectedJobs.map((job, index) => renderSelectedJob(job))}
                 </View>
               )}
             </>
@@ -1268,5 +1337,44 @@ const styles = StyleSheet.create({
   },
   bottomPadding: {
     height: 50, // Extra space at bottom for web scrolling
+  },
+  skillItemContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  skillItem: {
+    backgroundColor: '#f8f9fa',
+    padding: 10,
+    borderRadius: 8,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+  },
+  selectedSkillItem: {
+    backgroundColor: '#007bff',
+    borderColor: '#0056b3',
+  },
+  skillItemText: {
+    color: '#333',
+  },
+  selectedSkillItemText: {
+    color: '#fff',
+  },
+  experienceInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  experienceTextInput: {
+    width: 60,
+    height: 40,
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+    borderRadius: 4,
+    paddingHorizontal: 8,
+    marginRight: 5,
+  },
+  experienceLabel: {
+    color: '#666',
   },
 });

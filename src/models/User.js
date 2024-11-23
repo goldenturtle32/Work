@@ -30,7 +30,7 @@ export default class User {
     this.email = data.email || '';
     this.role = data.role || '';
     this.location = this.parseLocation(data.location);
-    this.skills = Array.isArray(data.skills) ? data.skills : [];
+    this.skills = this.parseSkillsWithExperience(data.skills);
     this.availability = Array.isArray(data.availability) ? data.availability : [];
     this.category = data.category || '';
     this.reviewsAverage = data.reviewsAverage || 0;
@@ -57,6 +57,26 @@ export default class User {
       };
     }
     return { latitude: 0, longitude: 0 };
+  }
+
+  parseSkillsWithExperience(skills) {
+    if (!skills) return [];
+    
+    // If skills is already in the correct format, return it
+    if (Array.isArray(skills) && skills.length > 0 && 
+        typeof skills[0] === 'object' && 'name' in skills[0]) {
+      return skills;
+    }
+
+    // Convert simple array of strings to array of objects with experience
+    if (Array.isArray(skills)) {
+      return skills.map(skill => ({
+        name: typeof skill === 'object' ? skill.name : skill,
+        yearsOfExperience: typeof skill === 'object' ? skill.yearsOfExperience : 0
+      }));
+    }
+
+    return [];
   }
 
   get userId() {
