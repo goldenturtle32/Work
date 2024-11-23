@@ -336,6 +336,22 @@ export default function HomeScreen({ navigation }) {
                   {item.distance != null ? `${item.distance} miles away` : 'Distance unavailable'}
                 </Text>
               </View>
+
+              <View style={styles.infoContainer}>
+                <Text style={styles.label}>Availability</Text>
+                <View style={styles.availabilityContainer}>
+                  {item.availability && Object.entries(item.availability).map(([date, dayData], index) => (
+                    <View key={index} style={styles.scheduleRow}>
+                      {dayData.slots?.map((slot, slotIndex) => (
+                        <Text key={`${index}-${slotIndex}`} style={[styles.value, styles.scheduleText]}>
+                          {new Date(date).toLocaleDateString('en-US', { weekday: 'long' })}: 
+                          {slot.startTime} - {slot.endTime}
+                        </Text>
+                      ))}
+                    </View>
+                  ))}
+                </View>
+              </View>
             </View>
           ) : (
             <View style={styles.cardContent}>
@@ -363,9 +379,14 @@ export default function HomeScreen({ navigation }) {
               <View style={styles.infoContainer}>
                 <Text style={styles.label}>Availability</Text>
                 <View style={styles.availabilityContainer}>
-                  {Array.isArray(item.availability) && item.availability.map((schedule, index) => (
+                  {item.availability && Object.entries(item.availability).map(([date, dayData], index) => (
                     <View key={index} style={styles.scheduleRow}>
-                      <Text style={[styles.value, styles.scheduleText]}>{schedule}</Text>
+                      {dayData.slots?.map((slot, slotIndex) => (
+                        <Text key={`${index}-${slotIndex}`} style={[styles.value, styles.scheduleText]}>
+                          {new Date(date).toLocaleDateString('en-US', { weekday: 'long' })}: 
+                          {slot.startTime} - {slot.endTime}
+                        </Text>
+                      ))}
                     </View>
                   ))}
                 </View>

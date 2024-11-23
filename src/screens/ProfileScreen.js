@@ -77,25 +77,45 @@ export default function ProfileScreen({ navigation, route }) {
   }, [currentUser.uid]);
 
   const formatAvailability = () => {
+    console.log('Raw availability data:', profileData.availability);
     const availabilityArray = [];
-    const daysOfWeek = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
     
-    daysOfWeek.forEach(day => {
-      const dayData = profileData.availability?.[day];
+    if (!profileData.availability) return [];
+
+    // Process each date in the availability object
+    Object.entries(profileData.availability).forEach(([date, dayData]) => {
       if (dayData?.slots?.length > 0) {
+        const dayOfWeek = new Date(date).toLocaleDateString('en-US', { weekday: 'long' });
+        
         dayData.slots.forEach(slot => {
           if (slot.startTime && slot.endTime) {
             availabilityArray.push({
-              day: day.charAt(0).toUpperCase() + day.slice(1),
+              day: dayOfWeek,
               time: `${slot.startTime} - ${slot.endTime}`,
-              repeatType: dayData.repeatType
+              repeatType: dayData.repeatType || 'custom'
             });
           }
         });
       }
     });
     
-    return availabilityArray;
+    // Sort by day of week
+    const dayOrder = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    availabilityArray.sort((a, b) => {
+      return dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day);
+    });
+    
+    // Remove duplicates (same day, time and repeat type)
+    const uniqueAvailability = availabilityArray.filter((slot, index, self) =>
+      index === self.findIndex((s) => (
+        s.day === slot.day && 
+        s.time === slot.time && 
+        s.repeatType === slot.repeatType
+      ))
+    );
+    
+    console.log('Formatted availability:', uniqueAvailability);
+    return uniqueAvailability;
   };
 
   const renderSelectedJobs = () => {

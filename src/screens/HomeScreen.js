@@ -32,6 +32,38 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
   return Math.round(distance);
 };
 
+const checkTimeOverlap = (slot1, slot2) => {
+  const [start1H, start1M] = slot1.startTime.split(':').map(Number);
+  const [end1H, end1M] = slot1.endTime.split(':').map(Number);
+  const [start2H, start2M] = slot2.startTime.split(':').map(Number);
+  const [end2H, end2M] = slot2.endTime.split(':').map(Number);
+
+  const start1 = start1H * 60 + start1M;
+  const end1 = end1H * 60 + end1M;
+  const start2 = start2H * 60 + start2M;
+  const end2 = end2H * 60 + end2M;
+
+  return (start1 < end2 && end1 > start2);
+};
+
+const checkDayAvailabilityMatch = (userAvailability, itemAvailability, date) => {
+  const dayOfWeek = new Date(date).toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+  
+  // Find matching day in user's availability
+  const userDaySlots = Object.entries(userAvailability || {}).find(([userDate]) => {
+    const userDayOfWeek = new Date(userDate).toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+    return userDayOfWeek === dayOfWeek;
+  });
+
+  if (!userDaySlots) return false;
+
+  // Check if any time slots overlap
+  const [_, userData] = userDaySlots;
+  return itemAvailability.slots.some(itemSlot => 
+    userData.slots.some(userSlot => checkTimeOverlap(itemSlot, userSlot))
+  );
+};
+
 export default function HomeScreen({ navigation }) {
   const [items, setItems] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
@@ -336,6 +368,8 @@ export default function HomeScreen({ navigation }) {
                   {item.distance != null ? `${item.distance} miles away` : 'Distance unavailable'}
                 </Text>
               </View>
+
+              {renderAvailabilitySection(item)}
             </View>
           ) : (
             <View style={styles.cardContent}>
@@ -360,16 +394,7 @@ export default function HomeScreen({ navigation }) {
                 </View>
               ))}
 
-              <View style={styles.infoContainer}>
-                <Text style={styles.label}>Availability</Text>
-                <View style={styles.availabilityContainer}>
-                  {Array.isArray(item.availability) && item.availability.map((schedule, index) => (
-                    <View key={index} style={styles.scheduleRow}>
-                      <Text style={[styles.value, styles.scheduleText]}>{schedule}</Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
+              {renderAvailabilitySection(item)}
 
               <View style={styles.infoContainer}>
                 <Text style={styles.label}>Distance</Text>
@@ -381,6 +406,44 @@ export default function HomeScreen({ navigation }) {
           )}
         </LinearGradient>
       </TouchableOpacity>
+    );
+  };
+
+  const renderAvailabilitySection = (item) => {
+    if (!item?.availability) return null;
+    
+    return (
+      <View style={styles.infoContainer}>
+        <Text style={styles.label}>Availability</Text>
+        <View style={styles.availabilityContainer}>
+          {Object.entries(item.availability).map(([date, dayData], index) => {
+            const hasMatch = checkDayAvailabilityMatch(currentUser?.availability, dayData, date);
+            
+            return (
+              <View key={index} style={styles.scheduleRow}>
+                {dayData.slots?.map((slot, slotIndex) => (
+                  <View 
+                    key={`${index}-${slotIndex}`} 
+                    style={[
+                      styles.availabilityBubble,
+                      hasMatch && styles.availabilityBubbleMatch
+                    ]}
+                  >
+                    <Text style={[
+                      styles.value, 
+                      styles.scheduleText,
+                      hasMatch && styles.scheduleTextMatch
+                    ]}>
+                      {new Date(date).toLocaleDateString('en-US', { weekday: 'long' })}: 
+                      {slot.startTime} - {slot.endTime}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            );
+          })}
+        </View>
+      </View>
     );
   };
 
@@ -670,5 +733,18 @@ const styles = StyleSheet.create({
   skillsContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+  },
+  availabilityBubble: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    margin: 4,
+  },
+  availabilityBubbleMatch: {
+    backgroundColor: 'rgba(46, 204, 64, 0.2)',
+  },
+  scheduleTextMatch: {
+    color: '#4ade80',
   },
 });
