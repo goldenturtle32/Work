@@ -11,6 +11,8 @@ import random
 from datetime import datetime, timedelta
 import threading
 import pandas as pd
+from time import sleep
+from random import uniform
 lock = threading.Lock()
 last_request_time = datetime.now() - timedelta(seconds=60)  # Initialize to allow immediate first request
 
@@ -350,47 +352,51 @@ def get_cached_trends(search_term=''):
 
 def fetch_trending_data(search_term=''):
     """Fetch trending data with rate limiting"""
-    global last_request_time
-    
-    with lock:
-        # Ensure at least 60 seconds between requests
-        current_time = datetime.now()
-        time_since_last_request = (current_time - last_request_time).total_seconds()
+    try:
+        pytrends = TrendReq(hl='en-US', tz=360)
         
-        if time_since_last_request < 60:
-            time.sleep(60 - time_since_last_request)
+        # Simplified payload with single keyword
+        kw_list = ["industry trends"]
         
-        try:
-            pytrends = TrendReq(hl='en-US', tz=360)
-            kw_list = ["growing industries", "top industries", "emerging sectors"]
-            
-            pytrends.build_payload(
-                kw_list,
-                cat=12,  # Business category
-                timeframe='today 12-m',
-                geo='US'
-            )
-            
-            trending_industries = set()
-            
-            # Get related queries instead of topics
-            related_queries = pytrends.related_queries()
-            
-            for kw in kw_list:
-                if kw in related_queries and related_queries[kw].get('top') is not None:
-                    queries = related_queries[kw]['top']
-                    if not queries.empty:
-                        for _, row in queries.iterrows():
+        pytrends.build_payload(
+            kw_list,
+            timeframe='today 12-m',
+            geo='US'
+        )
+        
+        # Get related queries
+        related_queries = pytrends.related_queries()
+        trending_industries = set()
+        
+        if related_queries and kw_list[0] in related_queries:
+            for query_type in ['top', 'rising']:
+                if query_type in related_queries[kw_list[0]]:
+                    df = related_queries[kw_list[0]][query_type]
+                    if isinstance(df, pd.DataFrame) and not df.empty:
+                        for _, row in df.iterrows():
                             industry = clean_industry_name(row['query'])
                             if industry:
                                 trending_industries.add(industry)
-            
-            last_request_time = datetime.now()
-            return list(trending_industries)
-            
-        except Exception as e:
-            print(f"Error fetching trends: {str(e)}")
-            return []
+        
+        # Always include default industries
+        default_industries = [
+            'Technology', 'Healthcare', 'Finance', 'Education',
+            'Manufacturing', 'Retail', 'Entertainment', 'Construction',
+            'Transportation', 'Hospitality'
+        ]
+        
+        # Combine trending and default industries
+        all_industries = list(trending_industries) + [
+            ind for ind in default_industries 
+            if ind not in trending_industries
+        ]
+        
+        print(f"Fetched industries: {all_industries}")
+        return all_industries
+        
+    except Exception as e:
+        print(f"Error in fetch_trending_data: {str(e)}")
+        return default_industries
 
 def clean_industry_name(query):
     """Clean and validate industry names"""
@@ -596,6 +602,32 @@ def get_trending_jobs():
             "error": str(e)
         }), 500
 
+def make_pytrends_request(func):
+    """Helper function for rate-limited requests"""
+    max_retries = 3
+    base_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            # Initialize PyTrends with minimal settings
+            pytrends = TrendReq(
+                hl='en-US',
+                tz=360
+            )
+            
+            # Add delay between attempts
+            if attempt > 0:
+                sleep(base_delay * attempt)
+            
+            # Execute the provided function
+            result = func(pytrends)
+            return result
+            
+        except Exception as e:
+            print(f"PyTrends attempt {attempt + 1} failed: {str(e)}")
+            if attempt == max_retries - 1:
+                raise e
+
 @app.route('/trending-skills', methods=['GET'])
 def get_trending_skills():
     try:
@@ -603,84 +635,114 @@ def get_trending_skills():
         industry = request.args.get('industry', '')
         print(f"Fetching skills for job: {job_title} in industry: {industry}")
         
-        try:
-            # Initialize pytrends with longer timeout
-            pytrends = TrendReq(hl='en-US', tz=360, timeout=(30,30), retries=2)
-            time.sleep(2)  # Add longer delay
+        def fetch_skills(pytrends):
+            trending_skills = set()
             
-            # More specific search terms
-            kw_list = [
-                f"{job_title} skills 2024",
-                f"{industry} skills required",
-                f"top {job_title} skills"
-            ][:5]  # Limit to 5 keywords
+            # Use multiple search terms for better coverage
+            search_terms = [
+                f"{job_title} skills required",
+                f"{job_title} {industry} skills",
+                f"{job_title} qualifications"
+            ]
             
-            print(f"Fetching Google Trends data with keywords: {kw_list}")
-            
-            try:
-                pytrends.build_payload(
-                    kw_list,
-                    cat=0,  # All categories
-                    timeframe='today 12-m',
-                    geo='US'
-                )
-                
-                related_topics = pytrends.related_topics()
-                related_queries = pytrends.related_queries()
-                
-                trending_skills = set()
-                
-                # Process related topics
-                for kw in kw_list:
-                    if kw in related_topics and related_topics[kw]:
+            for search_term in search_terms:
+                try:
+                    print(f"Querying PyTrends for: {search_term}")
+                    # Build payload with a single term
+                    pytrends.build_payload(
+                        kw_list=[search_term],
+                        timeframe='today 12-m',
+                        geo='US'
+                    )
+                    
+                    # Get both related queries and topics
+                    related_queries = pytrends.related_queries()
+                    related_topics = pytrends.related_topics()
+                    
+                    print(f"Raw queries response: {related_queries}")
+                    print(f"Raw topics response: {related_topics}")
+                    
+                    # Process related queries
+                    if related_queries and search_term in related_queries:
+                        for query_type in ['top', 'rising']:
+                            queries = related_queries[search_term].get(query_type)
+                            if isinstance(queries, pd.DataFrame) and not queries.empty:
+                                for _, row in queries.iterrows():
+                                    if 'query' in row:
+                                        skill = clean_skill_name(row['query'])
+                                        if skill:
+                                            trending_skills.add(skill)
+                    
+                    # Process related topics
+                    if related_topics and search_term in related_topics:
                         for topic_type in ['top', 'rising']:
-                            topics = related_topics[kw].get(topic_type)
+                            topics = related_topics[search_term].get(topic_type)
                             if isinstance(topics, pd.DataFrame) and not topics.empty:
                                 for _, row in topics.iterrows():
                                     if 'topic_title' in row:
                                         skill = clean_skill_name(row['topic_title'])
                                         if skill:
                                             trending_skills.add(skill)
-                
-                # Process related queries
-                for kw in kw_list:
-                    if kw in related_queries and related_queries[kw]:
-                        for query_type in ['top', 'rising']:
-                            queries = related_queries[kw].get(query_type)
-                            if isinstance(queries, pd.DataFrame) and not queries.empty:
-                                for _, row in queries.iterrows():
-                                    skill = clean_skill_name(row['query'])
-                                    if skill:
-                                        trending_skills.add(skill)
-                
-                if trending_skills:
-                    skills_list = list(trending_skills)[:10]
-                    print(f"Found trending skills: {skills_list}")
-                    return jsonify({
-                        "success": True,
-                        "skills": skills_list
-                    })
-                
-            except Exception as e:
-                print(f"Error processing trends data: {str(e)}")
-                
-        except Exception as e:
-            print(f"PyTrends error: {str(e)}")
+                    
+                    # Add delay between requests
+                    sleep(2)
+                    
+                except Exception as e:
+                    print(f"Error processing search term {search_term}: {str(e)}")
+                    continue
             
-        # Fall back to default skills if no trending skills found
-        default_skills = get_default_skills(job_title, industry)
-        print(f"Using default skills for {job_title}: {default_skills}")
+            return list(trending_skills)
+        
+        # Try to get trending skills
+        trending_skills = make_pytrends_request(fetch_skills)
+        
+        if trending_skills:
+            print(f"Found trending skills: {trending_skills}")
+            return jsonify({
+                "success": True,
+                "skills": trending_skills[:10]  # Return top 10 skills
+            })
+        
+        # If no trending skills found, fall back to industry-based skills
+        industry_skills = get_industry_based_skills(industry)
+        print(f"Using industry-based skills for {job_title}")
         return jsonify({
             "success": True,
-            "skills": default_skills
+            "skills": industry_skills
         })
             
     except Exception as e:
         print(f"Error in trending skills: {str(e)}")
         return jsonify({
-            "success": True,
-            "skills": get_default_skills(job_title, industry)
+            "success": False,
+            "error": str(e)
         })
+
+def get_industry_based_skills(industry):
+    """Get industry-specific default skills"""
+    industry_skills = {
+        "Technology": [
+            "Programming", "Cloud Computing", "Agile",
+            "DevOps", "Cybersecurity", "Data Analysis",
+            "Project Management", "API Integration",
+            "Software Development", "Technical Documentation"
+        ],
+        "Education": [
+            "Curriculum Development", "Assessment",
+            "Educational Technology", "Classroom Management",
+            "Differentiated Instruction", "Student Engagement",
+            "Learning Management Systems", "Educational Psychology",
+            "Special Education", "Student Assessment"
+        ]
+        # Add more industries...
+    }
+    
+    return industry_skills.get(industry, [
+        "Communication", "Problem Solving", "Team Work",
+        "Project Management", "Time Management",
+        "Leadership", "Analytics", "Critical Thinking",
+        "Organization", "Attention to Detail"
+    ])
 
 def clean_skill_name(query):
     """Clean and validate skill names"""
@@ -715,20 +777,40 @@ def clean_skill_name(query):
         return skill
     return None
 
-def get_default_skills(job_title, industry):
-    """Get default skills based on job title and industry"""
-    default_skills_map = {
-        "Logistics Manager": [
-            "Supply Chain Management", "Inventory Management",
-            "Data Analysis", "Project Management", "SQL",
-            "Excel", "ERP Systems", "Process Optimization",
-            "Team Leadership", "Risk Management"
-        ],
-        # Add more job titles and their default skills...
-    }
-    
-    # Return default skills for the job title if available
-    return default_skills_map.get(job_title, ["Communication", "Problem Solving", "Team Work", "Leadership", "Analytics"])
+@app.route('/suggest-skills', methods=['POST'])
+def suggest_skills():
+    try:
+        data = request.json
+        job_title = data.get('jobTitle', '')
+        
+        messages = [
+            {"role": "system", "content": "You are a job skills expert. Provide relevant skills for job titles in JSON array format."},
+            {"role": "user", "content": f"List 10 key skills required for a {job_title} position. Return only a JSON array of skill names."}
+        ]
+        
+        response = make_openai_request(messages)
+        
+        # Parse the response into a list of skills
+        try:
+            skills = json.loads(response)
+            if not isinstance(skills, list):
+                skills = response.strip('[]').split(',')
+        except:
+            skills = response.strip('[]').split(',')
+        
+        # Clean and format skills
+        skills = [s.strip().strip('"\'') for s in skills if s.strip()]
+        
+        return jsonify({
+            "success": True,
+            "skills": skills
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 if __name__ == '__main__':
     app.run(debug=True) 

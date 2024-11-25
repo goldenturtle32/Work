@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, TextInput, TouchableOpacity, FlatList, Text, StyleSheet, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, TextInput, TouchableOpacity, FlatList, Text, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePickerModal from "react-native-modal-datetime-picker";
 import { db, auth, firebase } from '../firebase';
@@ -10,6 +10,8 @@ export default function ChatScreen({ route, navigation }) {
   const [messages, setMessages] = useState([]);
   const [isDatePickerVisible, setDatePickerVisibility] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [suggestions, setSuggestions] = useState([]);
+  const BACKEND_URL = 'http://127.0.0.1:5000';
 
   useEffect(() => {
     const unsubscribe = db.collection('chats')
@@ -40,6 +42,68 @@ export default function ChatScreen({ route, navigation }) {
 
     return () => unsubscribe();
   }, [matchId]);
+
+  useEffect(() => {
+    generateSuggestions();
+  }, [messages]);
+
+  const generateSuggestions = async () => {
+    try {
+      const lastMessages = messages.slice(0, 3).map(msg => ({
+        text: msg.text,
+        sender: msg.sender
+      }));
+
+      const response = await fetch(`${BACKEND_URL}/generate-chat-suggestions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          role: role,
+          jobTitle: jobTitle,
+          company: company,
+          recentMessages: lastMessages,
+          context: {
+            isWorker: role === 'worker',
+            jobTitle: jobTitle,
+            company: company
+          }
+        }),
+      });
+
+      if (!response.ok) throw new Error('Failed to get suggestions');
+      
+      const data = await response.json();
+      setSuggestions(data.suggestions);
+    } catch (error) {
+      console.error('Error getting suggestions:', error);
+      setSuggestions(getStaticSuggestions());
+    }
+  };
+
+  const getStaticSuggestions = () => {
+    if (role === 'worker') {
+      return [
+        "What benefits does this position offer?",
+        "Is there flexibility in the work schedule?",
+        "What growth opportunities are available?",
+        "Can you describe the team I'd be working with?"
+      ];
+    } else {
+      return [
+        "What relevant experience do you have for this role?",
+        "When would you be able to start?",
+        "What interests you most about this position?",
+        "Tell me about your biggest professional achievement"
+      ];
+    }
+  };
+
+  const sendSuggestion = async (suggestionText) => {
+    setMessage(suggestionText);
+    await sendMessage(suggestionText);
+  };
 
   const sendMessage = async () => {
     if (message.trim()) {
@@ -194,6 +258,22 @@ export default function ChatScreen({ route, navigation }) {
         style={styles.chatArea}
       />
 
+      <ScrollView 
+        horizontal 
+        style={styles.suggestionsContainer}
+        showsHorizontalScrollIndicator={false}
+      >
+        {suggestions.map((suggestion, index) => (
+          <TouchableOpacity
+            key={index}
+            style={styles.suggestionBubble}
+            onPress={() => sendSuggestion(suggestion)}
+          >
+            <Text style={styles.suggestionText}>{suggestion}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
       <View style={styles.inputContainer}>
         <TextInput
           value={message}
@@ -301,5 +381,21 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
     marginTop: 4,
     alignSelf: 'flex-end',
+  },
+  suggestionsContainer: {
+    maxHeight: 50,
+    marginVertical: 10,
+  },
+  suggestionBubble: {
+    backgroundColor: '#E3F2FD',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginRight: 10,
+    marginBottom: 5,
+  },
+  suggestionText: {
+    color: '#1976D2',
+    fontSize: 14,
   },
 });

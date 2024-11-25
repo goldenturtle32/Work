@@ -305,6 +305,12 @@ export default function HomeScreen({ navigation }) {
 
   const renderCard = (item) => {
     if (!item) return null;
+    
+    // Calculate weekly hours and estimated pay
+    const weeklyHours = item.availability ? item.weeklyHours : null;
+    const estimatedWeeklyPayMin = weeklyHours ? (item.salaryRange?.min || 0) * weeklyHours : null;
+    const estimatedWeeklyPayMax = weeklyHours ? (item.salaryRange?.max || 0) * weeklyHours : null;
+
     return (
       <TouchableOpacity
         style={styles.card}
@@ -339,15 +345,18 @@ export default function HomeScreen({ navigation }) {
               </View>
 
               <View style={styles.infoContainer}>
-                <Text style={styles.label}>Weekly Hours</Text>
-                <Text style={styles.value}>{item.weeklyHours || 0} hours</Text>
+                <Text style={styles.label}>Estimated Weekly Hours</Text>
+                <Text style={styles.value}>
+                  {weeklyHours ? `${weeklyHours} hours` : 'No Availability Set'}
+                </Text>
               </View>
 
               <View style={styles.infoContainer}>
                 <Text style={styles.label}>Estimated Weekly Pay</Text>
                 <Text style={styles.value}>
-                  ${((item.salaryRange?.min || 0) * (item.weeklyHours || 0)).toLocaleString()} - 
-                  ${((item.salaryRange?.max || 0) * (item.weeklyHours || 0)).toLocaleString()}
+                  {weeklyHours ? 
+                    `$${estimatedWeeklyPayMin.toLocaleString()} - $${estimatedWeeklyPayMax.toLocaleString()}` : 
+                    'No Availability Set'}
                 </Text>
               </View>
 

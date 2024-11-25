@@ -131,28 +131,59 @@ def generate_chat_suggestions():
         recent_messages = data.get('recentMessages', [])
 
         try:
+            # Add timestamp to force variation
+            current_time = datetime.now().strftime("%H:%M:%S")
+            
             messages = [
-                {"role": "system", "content": "You are a helpful assistant generating chat suggestions for a job matching platform."},
-                {"role": "user", "content": f"""Generate 4 relevant questions/messages for a {role} chatting about a {job_title} position at {company}.
+                {"role": "system", "content": "You are a helpful assistant generating unique chat suggestions. Never repeat previous suggestions."},
+                {"role": "user", "content": f"""Generate 3 completely new, different questions/messages for a {role} chatting about a {job_title} position at {company}.
+                Current time: {current_time}
                 Recent messages in the chat: {recent_messages}
                 
                 The suggestions should be:
+                - Completely different from any previous suggestions
                 - Natural and conversational
                 - Relevant to the context
                 - Professional but friendly
-                - Specific to the role/company when possible
+                - Specific to the role/company
+                - Cover different aspects (e.g., culture, responsibilities, growth)
                 
-                Return the suggestions as a JSON array of strings."""}
+                Return only a JSON array of 3 unique strings."""}
             ]
-            suggestions = parse_llm_response(make_openai_request(messages))
-        except Exception as e:
-            print(f"Falling back to default suggestions: {e}")
-            suggestions = get_fallback_suggestions(role)
             
-        return jsonify({
-            "success": True,
-            "suggestions": suggestions
-        })
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                temperature=1.0,  # Maximum creativity
+                presence_penalty=0.9,  # Encourage different content
+                frequency_penalty=0.9,  # Discourage repetition
+                max_tokens=200
+            )
+            
+            suggestions = parse_llm_response(response.choices[0].message.content)
+            
+            # Ensure we have exactly 3 suggestions
+            if not suggestions or len(suggestions) < 3:
+                fallback = get_fallback_suggestions(role)
+                suggestions = (suggestions or []) + fallback
+            
+            # Randomize order
+            random.shuffle(suggestions)
+            
+            return jsonify({
+                "success": True,
+                "suggestions": suggestions[:3]
+            })
+            
+        except Exception as e:
+            print(f"Error generating suggestions: {e}")
+            suggestions = get_fallback_suggestions(role)
+            random.shuffle(suggestions)
+            return jsonify({
+                "success": True,
+                "suggestions": suggestions[:3]
+            })
+            
     except Exception as e:
         return jsonify({
             "success": False,
@@ -160,20 +191,35 @@ def generate_chat_suggestions():
         }), 500
 
 def get_fallback_suggestions(role):
-    if role == 'worker':
-        return [
-            "What benefits does this position offer?",
-            "Is there flexibility in the work schedule?",
-            "What growth opportunities are available?",
-            "Can you describe the team I'd be working with?"
-        ]
-    else:
-        return [
-            "What relevant experience do you have for this role?",
-            "When would you be able to start?",
-            "What interests you most about this position?",
-            "Tell me about your biggest professional achievement"
-        ]
+    """Get role-specific fallback suggestions"""
+    worker_suggestions = [
+        "What opportunities for professional development are available?",
+        "Could you describe the team culture?",
+        "What does success look like in this role?",
+        "What are the biggest challenges in this position?",
+        "How would you describe the work-life balance?",
+        "What's the typical career progression for this role?",
+        "Can you tell me about the onboarding process?",
+        "What technologies or tools does the team use?",
+        "How does the team handle project deadlines?",
+        "What's your favorite part about working here?"
+    ]
+    
+    employer_suggestions = [
+        "What interests you most about this position?",
+        "Could you describe your ideal work environment?",
+        "What are your career goals?",
+        "How do you handle challenging situations?",
+        "What's your approach to problem-solving?",
+        "Could you share an example of a successful project?",
+        "What motivates you in your work?",
+        "How do you stay updated in your field?",
+        "What's your preferred management style?",
+        "What questions do you have about the role?"
+    ]
+    
+    suggestions = worker_suggestions if role == 'worker' else employer_suggestions
+    return random.sample(suggestions, 3)
 
 @app.route('/generate-overview-questions', methods=['POST'])
 def generate_overview_questions():
