@@ -532,30 +532,69 @@ def get_trending_jobs():
         industry = request.args.get('industry', '')
         print(f"Fetching jobs for industry: {industry}")
         
-        # Fallback jobs dictionary
-        fallback_jobs = {
-            "Technology": ["Software Engineer", "Data Analyst", "Product Manager", "IT Support", "Web Developer"],
-            "Healthcare": ["Nurse", "Medical Assistant", "Healthcare Administrator", "Physical Therapist", "Pharmacist"],
-            "Retail": ["Store Manager", "Sales Associate", "Retail Supervisor", "Cashier", "Visual Merchandiser"],
-            "Finance": ["Financial Analyst", "Accountant", "Investment Banker", "Financial Advisor", "Credit Analyst"],
-            "Education": ["Teacher", "Professor", "Education Administrator", "Curriculum Developer", "School Counselor"],
-            "Manufacturing": ["Production Manager", "Quality Control", "Process Engineer", "Operations Manager", "Manufacturing Technician"],
-            "Hospitality": ["Hotel Manager", "Chef", "Restaurant Manager", "Event Coordinator", "Customer Service Representative"],
-            "Construction": ["Construction Manager", "Project Manager", "Civil Engineer", "Architect", "Construction Supervisor"],
-            "Transportation": ["Logistics Manager", "Supply Chain Manager", "Fleet Manager", "Transportation Coordinator", "Dispatcher"],
-            "Entertainment": ["Producer", "Director", "Content Creator", "Event Manager", "Marketing Coordinator"]
-        }
-        
         try:
             if industry:
                 job_interests = {}
                 
-                # More natural search terms
-                search_batches = [
-                    [f"store manager jobs", f"sales associate jobs"],  # Common retail jobs
-                    [f"{industry.lower()} jobs", f"{industry.lower()} careers"],  # Industry-specific
-                    [f"{industry.lower()} positions", f"{industry.lower()} work"]  # Additional terms
-                ]
+                # Industry-specific search terms
+                industry_search_terms = {
+                    "Technology": [
+                        ["software engineer jobs", "data scientist jobs"],
+                        ["web developer jobs", "product manager tech"],
+                        ["devops engineer jobs", "it support jobs"]
+                    ],
+                    "Healthcare": [
+                        ["registered nurse jobs", "medical assistant jobs"],
+                        ["physician jobs", "healthcare admin jobs"],
+                        ["physical therapist jobs", "pharmacist jobs"]
+                    ],
+                    "Retail": [
+                        ["retail manager jobs", "sales associate jobs"],
+                        ["store supervisor jobs", "merchandiser jobs"],
+                        ["retail buyer jobs", "cashier jobs"]
+                    ],
+                    "Finance": [
+                        ["financial analyst jobs", "accountant jobs"],
+                        ["investment banker jobs", "financial advisor jobs"],
+                        ["risk analyst jobs", "credit analyst jobs"]
+                    ],
+                    "Manufacturing": [
+                        ["production manager jobs", "manufacturing engineer jobs"],
+                        ["quality control jobs", "plant manager jobs"],
+                        ["process engineer jobs", "maintenance technician jobs"]
+                    ],
+                    "Construction": [
+                        ["construction manager jobs", "project manager construction"],
+                        ["site supervisor jobs", "civil engineer jobs"],
+                        ["construction estimator jobs", "safety manager jobs"]
+                    ],
+                    "Education": [
+                        ["teacher jobs", "professor jobs"],
+                        ["school administrator jobs", "education coordinator jobs"],
+                        ["curriculum developer jobs", "school counselor jobs"]
+                    ],
+                    "Transportation": [
+                        ["logistics manager jobs", "supply chain jobs"],
+                        ["fleet manager jobs", "transportation coordinator jobs"],
+                        ["shipping manager jobs", "dispatcher jobs"]
+                    ],
+                    "Entertainment": [
+                        ["producer jobs", "director entertainment"],
+                        ["content creator jobs", "event manager jobs"],
+                        ["talent manager jobs", "production coordinator jobs"]
+                    ],
+                    "Hospitality": [
+                        ["hotel manager jobs", "restaurant manager jobs"],
+                        ["chef jobs", "event coordinator hospitality"],
+                        ["guest services manager", "hospitality supervisor"]
+                    ]
+                }
+                
+                # Get search terms for the specific industry
+                search_batches = industry_search_terms.get(industry, [
+                    [f"{industry.lower()} manager jobs", f"{industry.lower()} specialist jobs"],
+                    [f"{industry.lower()} supervisor jobs", f"{industry.lower()} coordinator jobs"]
+                ])
                 
                 for batch in search_batches:
                     try:
@@ -579,13 +618,11 @@ def get_trending_jobs():
                                 older_avg = older_data[keyword].mean()
                                 growth = ((recent_avg - older_avg) / older_avg) * 100 if older_avg > 0 else 0
                                 
-                                # Clean job title without industry prefix
+                                # Clean job title
                                 job_title = (keyword
                                     .replace(' jobs', '')
-                                    .replace(' careers', '')
-                                    .replace(' positions', '')
-                                    .replace(' work', '')
                                     .replace(industry.lower(), '')
+                                    .replace('tech', '')
                                     .strip()
                                     .title())
                                 
@@ -594,7 +631,7 @@ def get_trending_jobs():
                                 print(f"Added trending job: {job_title} (score: {score}, growth: {growth}%)")
                     
                     except Exception as batch_error:
-                        print(f"Error processing job batch {batch}: {str(batch_error)}")
+                        print(f"Error processing batch {batch}: {str(batch_error)}")
                         continue
                 
                 if job_interests:
@@ -605,27 +642,23 @@ def get_trending_jobs():
                     )
                     
                     jobs_list = [job for job, _ in trending_jobs]
-                    
-                    # Combine with industry-specific fallback jobs
-                    fallback = fallback_jobs.get(industry, [])
-                    result = jobs_list + [j for j in fallback if j not in jobs_list]
-                    
-                    print(f"Found trending jobs for {industry}: {result[:10]}")
                     return jsonify({
                         "success": True,
-                        "jobs": result[:10]
+                        "jobs": jobs_list[:10]  # Return top 10 trending jobs
                     })
-        
+                
+                return jsonify({
+                    "success": True,
+                    "jobs": []  # Return empty list if no jobs found
+                })
+            
         except Exception as e:
             print(f"PyTrends error in jobs: {str(e)}")
             print(f"Error traceback: {traceback.format_exc()}")
-        
-        # Fall back to default jobs if PyTrends fails
-        jobs = fallback_jobs.get(industry, ["Manager", "Assistant", "Coordinator", "Specialist", "Supervisor"])
-        return jsonify({
-            "success": True,
-            "jobs": jobs
-        })
+            return jsonify({
+                "success": True,
+                "jobs": []
+            })
             
     except Exception as e:
         print(f"Error in trending jobs: {str(e)}")

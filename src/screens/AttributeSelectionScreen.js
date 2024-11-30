@@ -146,6 +146,8 @@ export default function AttributeSelectionScreen({ route, navigation }) {
 
   const [skillExperience, setSkillExperience] = useState({});
 
+  const [isJobTypeInputFocused, setIsJobTypeInputFocused] = useState(false);
+
   useEffect(() => {
     const fetchUserRole = async () => {
       try {
@@ -650,18 +652,10 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     }
   }, [trendingData.industries]);
 
-  const handleJobTypeSelection = (jobType) => {
-    console.log(`Selected job type: ${jobType}`);
+  const handleJobTypeSelect = (jobType) => {
     handleInputChange('jobTypePrefs', jobType);
-    // Clear existing skills when job type changes
-    setAttributes(prev => ({
-        ...prev,
-        skills: []
-    }));
-    setSuggestions(prev => ({
-        ...prev,
-        skills: []
-    }));
+    setIsJobTypeInputFocused(false); // Hide dropdown after selection
+    updateSkillSuggestions(jobType);
   };
 
   // Add this function to check if form is valid
@@ -880,30 +874,54 @@ export default function AttributeSelectionScreen({ route, navigation }) {
                   <Text style={styles.label}>Job Type Preferences:</Text>
                   <TextInput
                     style={styles.input}
-                    value={attributes.jobTypePrefs}
+                    value={inputValues.jobTypePrefs || ''}  // Use inputValues instead of attributes
                     onChangeText={(text) => {
-                      handleInputChange('jobTypePrefs', text);
+                      setInputValues(prev => ({ ...prev, jobTypePrefs: text }));
                       updateSkillSuggestions(text);
                     }}
                     placeholder="Type to search job types"
+                    onFocus={() => setIsJobTypeInputFocused(true)}
+                    onBlur={() => setTimeout(() => setIsJobTypeInputFocused(false), 200)}
                   />
-                  {suggestions.jobTypes.length > 0 && (
-                    <FlatList
-                      data={suggestions.jobTypes}
-                      keyExtractor={(item, index) => `job-${index}`}
-                      renderItem={({ item }) => (
-                        <TouchableOpacity
-                          style={styles.suggestionItem}
+                  
+                  {/* Add bubble display for selected job type */}
+                  {attributes.jobTypePrefs && (
+                    <View style={styles.bubbleContainer}>
+                      <View style={styles.bubble}>
+                        <Text style={styles.bubbleText}>{attributes.jobTypePrefs}</Text>
+                        <TouchableOpacity 
                           onPress={() => {
-                            handleJobTypeSelection(typeof item === 'string' ? item : item.name);
-                            updateSkillSuggestions(typeof item === 'string' ? item : item.name);
+                            handleInputChange('jobTypePrefs', '');
+                            setAttributes(prev => ({
+                              ...prev,
+                              skills: []  // Clear skills when job type is removed
+                            }));
                           }}
                         >
-                          <Text>{typeof item === 'string' ? item : item.name}</Text>
+                          <Ionicons name="close-circle" size={20} color="#fff" />
                         </TouchableOpacity>
-                      )}
-                      style={styles.suggestionList}
-                    />
+                      </View>
+                    </View>
+                  )}
+                  
+                  {/* Job type suggestions dropdown */}
+                  {isJobTypeInputFocused && suggestions.jobTypes.length > 0 && (
+                    <View style={styles.suggestionsContainer}>
+                      <ScrollView>
+                        {suggestions.jobTypes.map((job, index) => (
+                          <TouchableOpacity
+                            key={index}
+                            onPress={() => {
+                              handleJobTypeSelect(job);
+                              setInputValues(prev => ({ ...prev, jobTypePrefs: '' }));  // Clear input after selection
+                            }}
+                            style={styles.suggestionItem}
+                          >
+                            <Text>{job}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </View>
                   )}
                 </View>
               )}
@@ -1409,5 +1427,12 @@ buttonTextDisabled: {
   },
   experienceLabel: {
     color: '#666',
+  },
+  suggestionsContainer: {
+    maxHeight: 200,
+    borderColor: '#ccc',
+    borderWidth: 1,
+    borderRadius: 8,
+    overflow: 'hidden',
   },
 });
