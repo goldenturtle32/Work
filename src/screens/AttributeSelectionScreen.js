@@ -599,33 +599,49 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     }));
   };
 
-  const generateOverview = async () => {
-    try {
-      const response = await fetch(`${BACKEND_URL}/generate-overview`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          role: userRole,
-          responses: overviewResponses,
-        }),
-      });
+  const canGenerateOverview = () => {
+  return Object.values(overviewResponses).some(response => response && response.trim() !== '');
+};
 
-      const data = await response.json();
-      if (data.success) {
-        setGeneratedOverview(data.overview);
-        setAttributes(prev => ({
-          ...prev,
-          user_overview: data.overview
-        }));
-      } else {
-        console.error('Error:', data.error);
-      }
-    } catch (error) {
-      console.error('Error generating overview:', error);
+  const generateOverview = async () => {
+  try {
+    const response = await fetch(`${BACKEND_URL}/generate-overview`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        role: userRole,
+        responses: overviewResponses,
+        selectedJobs: selectedJobs,
+        industryPrefs: attributes.industryPrefs
+      }),
+    });
+
+    const data = await response.json();
+    if (data.success) {
+      setGeneratedOverview(data.overview);
+      setAttributes(prev => ({
+        ...prev,
+        user_overview: data.overview
+      }));
+    } else {
+      console.error('Error:', data.error);
+      Alert.alert(
+        'Error',
+        'Failed to generate overview. Please try again.',
+        [{ text: 'OK' }]
+      );
     }
-  };
+  } catch (error) {
+    console.error('Error generating overview:', error);
+    Alert.alert(
+      'Error',
+      'Failed to connect to server. Please try again.',
+      [{ text: 'OK' }]
+    );
+  }
+};
 
   const handleIndustryInputFocus = useCallback(() => {
     setIsIndustryInputFocused(true);
@@ -996,11 +1012,21 @@ export default function AttributeSelectionScreen({ route, navigation }) {
                 ))}
                 
                 <TouchableOpacity 
-                  style={[styles.button, styles.generateButton]}
-                  onPress={generateOverview}
-                >
-                  <Text style={styles.buttonText}>Generate Overview</Text>
-                </TouchableOpacity>
+  style={[
+    styles.button, 
+    styles.generateButton,
+    !canGenerateOverview() && styles.buttonDisabled
+  ]}
+  onPress={generateOverview}
+  disabled={!canGenerateOverview()}
+>
+  <Text style={[
+    styles.buttonText,
+    !canGenerateOverview() && styles.buttonTextDisabled
+  ]}>
+    Generate Overview
+  </Text>
+</TouchableOpacity>
               </>
             ) : (
               <View style={styles.overviewContainer}>
@@ -1361,6 +1387,13 @@ const styles = StyleSheet.create({
   selectedSkillItemText: {
     color: '#fff',
   },
+  buttonDisabled: {
+  backgroundColor: '#cccccc',
+  opacity: 0.7,
+},
+buttonTextDisabled: {
+  color: '#666666',
+},
   experienceInput: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -13,6 +13,7 @@ import threading
 import pandas as pd
 from time import sleep
 from random import uniform
+import traceback
 lock = threading.Lock()
 last_request_time = datetime.now() - timedelta(seconds=60)  # Initialize to allow immediate first request
 
@@ -24,7 +25,13 @@ cache_duration = timedelta(minutes=30)
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, resources={
+    r"/*": {
+        "origins": ["http://localhost:8081", "http://127.0.0.1:8081"],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"]
+    }
+})
 
 api_key = os.getenv('OPENAI_API_KEY')
 if not api_key:
@@ -221,174 +228,91 @@ def get_fallback_suggestions(role):
     suggestions = worker_suggestions if role == 'worker' else employer_suggestions
     return random.sample(suggestions, 3)
 
-@app.route('/generate-overview-questions', methods=['POST'])
+@app.route('/generate-overview-questions', methods=['POST', 'OPTIONS'])
 def generate_overview_questions():
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'POST')
+        return response
+
     try:
         data = request.json
-        role = data['role']
+        role = data.get('role')
         selected_jobs = data.get('selectedJobs', [])
-        industry_prefs = data.get('industryPrefs', [])
-
+        
         if role == 'worker':
-            prompt = f"""Generate 5 relevant questions to create a worker profile overview. 
-            Their selected industries are: {industry_prefs}
-            Their selected jobs are: {selected_jobs}
+            job_titles = [job.get('title', '') for job in selected_jobs]
             
-            Questions should cover:
-            - Educational background
-            - Relevant certifications
-            - Work experience
-            - Key achievements
-            - Career goals
+            # Generate questions based on selected jobs
+            questions = [
+                f"What specific qualifications or certifications do you have related to {', '.join(job_titles)}?",
+                "How many years of experience do you have in these or related roles?",
+                "What technical skills and tools are you proficient in?",
+                "What are your most notable achievements or successful projects in similar positions?",
+                "What relevant education or training do you have for these roles?"
+            ]
             
-            Format: Return only the questions as a JSON array of strings."""
+            return jsonify({
+                "success": True,
+                "questions": questions
+            })
         else:
-            prompt = """Generate 5 relevant questions to create a job posting overview.
-            
-            Questions should cover:
-            - Ideal candidate profile
-            - Key responsibilities
-            - Work environment
-            - Growth opportunities
-            - Company culture
-            
-            Format: Return only the questions as a JSON array of strings."""
-
-        try:
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are an expert at creating professional profiles and job descriptions."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-                max_tokens=200
-            )
-            
-            questions = parse_llm_response(response.choices[0].message.content)
-            
             return jsonify({
-                "success": True,
-                "questions": questions
-            })
-            
-        except Exception as e:
-            print(f"OpenAI API error: {e}")
-            # Fallback questions based on role
-            if role == 'worker':
-                questions = [
-                    "What is your highest level of education?",
-                    "What relevant certifications do you hold?",
-                    "Describe your work experience in this field.",
-                    "What are your key professional achievements?",
-                    "What are your career goals?"
-                ]
-            else:
-                questions = [
-                    "What are the key responsibilities for this role?",
-                    "What qualifications should the ideal candidate have?",
-                    "How would you describe the work environment?",
-                    "What growth opportunities are available?",
-                    "What makes your company culture unique?"
-                ]
-            
-            return jsonify({
-                "success": True,
-                "questions": questions
-            })
+                "success": False,
+                "error": "Employer questions not implemented"
+            }), 501
             
     except Exception as e:
+        print(f"Error generating questions: {str(e)}")
         return jsonify({
             "success": False,
-            "error": f"Error: {str(e)}"
+            "error": str(e)
         }), 500
 
 @app.route('/generate-overview', methods=['POST'])
 def generate_overview():
     try:
         data = request.json
-        role = data['role']
-        responses = data['responses']
+        role = data.get('role')
+        responses = data.get('responses', {})
         selected_jobs = data.get('selectedJobs', [])
         industry_prefs = data.get('industryPrefs', [])
 
         if role == 'worker':
-            prompt = f"""Create a detailed, first-person professional profile using the information provided in these responses:
-
-            Responses: {json.dumps(responses, indent=2)}
-            Desired Industries: {json.dumps(industry_prefs, indent=2)}
-            Desired Positions: {json.dumps(selected_jobs, indent=2)}
-
-            Important guidelines:
-            - Use ONLY the information provided, but make meaningful connections between different pieces of information
-            - Acknowledge any certifications or experience that might be different from the desired roles, but frame them positively
-            - Create natural transitions between different aspects (education, experience, goals)
-            - Keep the tone professional yet conversational
-            - Explain how past experience and skills could transfer to desired roles
-            - Be specific when mentioning achievements or experiences
+            # Create a prompt that focuses on professional experience
+            job_titles = [job.get('title', '') for job in selected_jobs]
+            prompt = f"""Create a professional overview based on these responses:
+            Selected jobs: {job_titles}
+            Industries: {industry_prefs}
+            Responses: {responses}
             
-            For example:
-            - If someone has medical certifications but is seeking retail work, explain how patient care skills transfer to customer service
-            - If someone has education in one field but seeking work in another, highlight transferable skills
-            - When mentioning achievements, include specific impacts or recognition
-            - When discussing goals, connect them to current experience and desired roles
+            Focus on highlighting qualifications, experience, and skills relevant to {', '.join(job_titles)}.
+            Keep it concise, professional, and focused on career achievements."""
 
-            Make the narrative flow naturally while maintaining professional language."""
-
+            messages = [
+                {"role": "system", "content": "You are an expert at crafting professional profiles focused on qualifications and experience."},
+                {"role": "user", "content": prompt}
+            ]
+            
+            response = make_openai_request(messages)
+            
+            return jsonify({
+                "success": True,
+                "overview": response
+            })
         else:
-            prompt = f"""Create a detailed, engaging job posting overview using the information provided in these responses:
-
-            {json.dumps(responses, indent=2)}
-
-            Important guidelines:
-            - Paint a clear picture of both the role and the workplace environment
-            - Be specific about requirements while remaining welcoming
-            - Explain how different aspects of the role connect to growth opportunities
-            - Highlight unique aspects of the company culture with concrete examples
-            - Make clear connections between responsibilities and qualifications
-            - Use engaging, active language while maintaining professionalism
-            
-            For example:
-            - Instead of just listing responsibilities, explain their impact
-            - Connect required qualifications to specific aspects of the role
-            - Describe how the work environment supports employee success
-            - Explain how growth opportunities align with company culture"""
-
-        try:
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are an expert writer who creates detailed, contextual professional narratives. You excel at making meaningful connections between different pieces of information and explaining their relevance."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-                max_tokens=500
-            )
-            
-            overview = response.choices[0].message.content
-            
             return jsonify({
-                "success": True,
-                "overview": overview
-            })
-            
-        except Exception as e:
-            print(f"OpenAI API error: {e}")
-            # More structured fallback
-            if role == 'worker':
-                overview = f"With a background in {responses.get('Describe your work experience in this field.', 'various fields')}, I am seeking opportunities in {', '.join(industry_prefs)}. {responses.get('What relevant certifications do you hold?', '')} While my certifications and experience may be in different areas, these skills are transferable to my desired roles. {responses.get('What are your key professional achievements?', '')} Looking ahead, {responses.get('What are your career goals?', '')}"
-            else:
-                overview = f"We are seeking candidates for a role that involves {responses.get('What are the key responsibilities for this role?', '')}. The ideal candidate should have {responses.get('What qualifications should the ideal candidate have?', '')}. Our workplace offers {responses.get('How would you describe the work environment?', '')} with opportunities for {responses.get('What growth opportunities are available?', '')}. What makes us unique is that {responses.get('What makes your company culture unique?', '')}."
-            
-            return jsonify({
-                "success": True,
-                "overview": overview
-            })
+                "success": False,
+                "error": "Employer overview generation not implemented"
+            }), 501
             
     except Exception as e:
+        print(f"Error generating overview: {str(e)}")
         return jsonify({
             "success": False,
-            "error": f"Error: {str(e)}"
+            "error": str(e)
         }), 500
 
 @lru_cache(maxsize=128)
@@ -464,6 +388,20 @@ def clean_industry_name(query):
         return industry
     return None
 
+# Update the PyTrends initialization
+def get_pytrends_client():
+    try:
+        return TrendReq(
+            hl='en-US',
+            tz=360,
+            requests_args={
+                'verify': True
+            }
+        )
+    except Exception as e:
+        print(f"Error initializing PyTrends: {str(e)}")
+        return None
+
 @app.route('/trending-industries', methods=['GET'])
 def get_trending_industries():
     try:
@@ -473,97 +411,105 @@ def get_trending_industries():
         global trends_cache_time, trends_cache
         current_time = datetime.now()
         
-        # Default industries list
-        default_industries = [
-            "Technology", "Healthcare", "Retail", "Finance", 
-            "Education", "Manufacturing", "Hospitality", 
-            "Construction", "Transportation", "Entertainment"
-        ]
-        
         with lock:
-            # Check if we have valid cached data
             if (trends_cache_time is None or 
                 current_time - trends_cache_time > cache_duration or 
                 not trends_cache):
                 
                 try:
                     print("Fetching fresh trends data...")
-                    # Initialize pytrends
                     pytrends = TrendReq(hl='en-US', tz=360)
                     
-                    # Create multiple payloads for different aspects of industries
-                    payloads = [
-                        ["business sectors", "industry growth", "emerging markets"],
-                        ["top industries", "growing industries", "industry trends"],
-                        ["career industries", "job sectors", "employment trends"]
+                    # Use job-specific keywords
+                    keywords_batches = [
+                        ["technology jobs hiring", "healthcare jobs hiring"],
+                        ["finance jobs available", "retail jobs hiring"],
+                        ["manufacturing jobs open", "construction jobs hiring"]
                     ]
                     
-                    trending_industries = set()
+                    industry_interests = {}
                     
-                    for kw_list in payloads:
+                    for batch in keywords_batches:
                         try:
-                            # Build payload
-                            pytrends.build_payload(
-                                kw_list,
-                                timeframe='today 12-m',
-                                geo='US',
-                                cat=12  # Business category
-                            )
-                            
-                            # Get related queries
-                            related_queries = pytrends.related_queries()
-                            
-                            # Process each keyword's results
-                            for kw in kw_list:
-                                if kw in related_queries and related_queries[kw]:
-                                    for query_type in ['top', 'rising']:
-                                        queries = related_queries[kw].get(query_type)
-                                        if isinstance(queries, pd.DataFrame) and not queries.empty:
-                                            for _, row in queries.iterrows():
-                                                query = row['query'].lower()
-                                                # Clean and filter industry names
-                                                if any(term in query for term in ['industry', 'sector', 'tech', 'healthcare', 'retail']):
-                                                    clean_name = (query
-                                                        .replace('industry', '')
-                                                        .replace('sector', '')
-                                                        .replace('companies', '')
-                                                        .strip()
-                                                        .title())
-                                                    if len(clean_name) > 2:
-                                                        trending_industries.add(clean_name)
-                            
-                            # Add a delay between requests
+                            print(f"Processing batch: {batch}")
                             time.sleep(1)
                             
-                        except Exception as e:
-                            print(f"Error processing payload {kw_list}: {str(e)}")
+                            pytrends.build_payload(
+                                batch,
+                                timeframe='today 3-m',  # Last 3 months for recent trends
+                                geo='US'
+                            )
+                            
+                            interest_data = pytrends.interest_over_time()
+                            
+                            if interest_data is not None and not interest_data.empty:
+                                # Calculate trend momentum (recent growth)
+                                recent_data = interest_data.tail(12)  # Last 12 weeks
+                                older_data = interest_data.head(12)   # Previous 12 weeks
+                                
+                                for keyword in batch:
+                                    recent_avg = recent_data[keyword].mean()
+                                    older_avg = older_data[keyword].mean()
+                                    growth = ((recent_avg - older_avg) / older_avg) * 100 if older_avg > 0 else 0
+                                    
+                                    # Clean industry name
+                                    industry = (keyword
+                                        .replace(' jobs hiring', '')
+                                        .replace(' jobs available', '')
+                                        .replace(' jobs open', '')
+                                        .title())
+                                    
+                                    # Score combines current interest and growth
+                                    score = recent_avg * (1 + growth/100)
+                                    industry_interests[industry] = score
+                                    print(f"Added trending industry: {industry} (score: {score}, growth: {growth}%)")
+                            
+                        except Exception as batch_error:
+                            print(f"Error processing batch {batch}: {str(batch_error)}")
                             continue
                     
-                    # Update cache
-                    trends_cache = list(trending_industries)
+                    # Sort industries by score
+                    trends_cache = sorted(
+                        industry_interests.items(),
+                        key=lambda x: x[1],
+                        reverse=True
+                    )
+                    print(f"Sorted trending industries: {trends_cache}")
                     trends_cache_time = current_time
-                    print(f"Found trending industries: {trends_cache}")
                     
                 except Exception as e:
-                    print(f"Error fetching trends: {str(e)}")
+                    print(f"PyTrends error: {str(e)}")
                     trends_cache = []
+                    trends_cache_time = current_time
             
-            # Combine trending and default industries
-            all_industries = list(set(trends_cache + default_industries))
+            # Default industries with lower weights
+            default_industries = [
+                ("Education", 45),
+                ("Transportation", 40),
+                ("Entertainment", 35),
+                ("Hospitality", 30)
+            ]
+            
+            # Get just the industry names from trends_cache
+            trending_industries = [ind for ind, _ in trends_cache]
+            
+            # Add default industries that aren't already included
+            result = trending_industries + [
+                ind for ind, _ in default_industries 
+                if ind not in trending_industries
+            ]
             
             # Filter by search term if provided
             if search_term:
                 filtered_industries = [
-                    industry for industry in all_industries 
+                    industry for industry in result 
                     if search_term in industry.lower()
                 ]
-                result = filtered_industries if filtered_industries else default_industries
+                result = filtered_industries if filtered_industries else result[:10]
             else:
-                # Randomize order but ensure a mix of trending and default
-                random.shuffle(all_industries)
-                result = all_industries[:10]
+                result = result[:10]
             
-            print(f"Returning industries: {result}")
+            print(f"Returning industries (first is most trending): {result}")
             return jsonify({
                 "success": True,
                 "industries": result
@@ -573,7 +519,11 @@ def get_trending_industries():
         print(f"Error in trending industries: {str(e)}")
         return jsonify({
             "success": True,
-            "industries": default_industries
+            "industries": [
+                "Technology", "Healthcare", "Finance", "Manufacturing",
+                "Construction", "Retail", "Education", "Transportation",
+                "Entertainment", "Hospitality"
+            ]
         })
 
 @app.route('/trending-jobs', methods=['GET'])
@@ -598,49 +548,85 @@ def get_trending_jobs():
         
         try:
             if industry:
-                # Try to get trending jobs from Google Trends
-                kw_list = [
-                    f"{industry} jobs",
-                    f"{industry} careers",
-                    f"{industry} positions"
+                job_interests = {}
+                
+                # More natural search terms
+                search_batches = [
+                    [f"store manager jobs", f"sales associate jobs"],  # Common retail jobs
+                    [f"{industry.lower()} jobs", f"{industry.lower()} careers"],  # Industry-specific
+                    [f"{industry.lower()} positions", f"{industry.lower()} work"]  # Additional terms
                 ]
-                pytrends.build_payload(kw_list, timeframe='today 12-m', geo='US')
                 
-                # Get related topics for job titles
-                related_topics = pytrends.related_topics()
-                trending_jobs = set()
+                for batch in search_batches:
+                    try:
+                        print(f"Processing job batch: {batch}")
+                        time.sleep(1)  # Rate limiting
+                        
+                        pytrends.build_payload(
+                            batch,
+                            timeframe='today 3-m',
+                            geo='US'
+                        )
+                        
+                        interest_data = pytrends.interest_over_time()
+                        
+                        if interest_data is not None and not interest_data.empty:
+                            recent_data = interest_data.tail(12)
+                            older_data = interest_data.head(12)
+                            
+                            for keyword in batch:
+                                recent_avg = recent_data[keyword].mean()
+                                older_avg = older_data[keyword].mean()
+                                growth = ((recent_avg - older_avg) / older_avg) * 100 if older_avg > 0 else 0
+                                
+                                # Clean job title without industry prefix
+                                job_title = (keyword
+                                    .replace(' jobs', '')
+                                    .replace(' careers', '')
+                                    .replace(' positions', '')
+                                    .replace(' work', '')
+                                    .replace(industry.lower(), '')
+                                    .strip()
+                                    .title())
+                                
+                                score = recent_avg * (1 + growth/100)
+                                job_interests[job_title] = score
+                                print(f"Added trending job: {job_title} (score: {score}, growth: {growth}%)")
+                    
+                    except Exception as batch_error:
+                        print(f"Error processing job batch {batch}: {str(batch_error)}")
+                        continue
                 
-                for kw in kw_list:
-                    if kw in related_topics and related_topics[kw].get('top') is not None:
-                        df = related_topics[kw]['top']
-                        for _, row in df.iterrows():
-                            job_title = (row['topic_title']
-                                .replace(' (occupation)', '')
-                                .replace(' job', '')
-                                .replace(' position', '')
-                                .title())
-                            trending_jobs.add(job_title)
-                
-                if trending_jobs:
-                    # Combine trending and fallback jobs
-                    all_jobs = list(trending_jobs)
-                    if industry in fallback_jobs:
-                        all_jobs.extend([j for j in fallback_jobs[industry] if j not in trending_jobs])
+                if job_interests:
+                    trending_jobs = sorted(
+                        job_interests.items(),
+                        key=lambda x: x[1],
+                        reverse=True
+                    )
+                    
+                    jobs_list = [job for job, _ in trending_jobs]
+                    
+                    # Combine with industry-specific fallback jobs
+                    fallback = fallback_jobs.get(industry, [])
+                    result = jobs_list + [j for j in fallback if j not in jobs_list]
+                    
+                    print(f"Found trending jobs for {industry}: {result[:10]}")
                     return jsonify({
                         "success": True,
-                        "jobs": all_jobs[:10]  # Limit to top 10
+                        "jobs": result[:10]
                     })
         
         except Exception as e:
             print(f"PyTrends error in jobs: {str(e)}")
+            print(f"Error traceback: {traceback.format_exc()}")
         
-        # Fall back to default jobs if PyTrends fails or no results
+        # Fall back to default jobs if PyTrends fails
         jobs = fallback_jobs.get(industry, ["Manager", "Assistant", "Coordinator", "Specialist", "Supervisor"])
         return jsonify({
             "success": True,
             "jobs": jobs
         })
-        
+            
     except Exception as e:
         print(f"Error in trending jobs: {str(e)}")
         return jsonify({
@@ -681,75 +667,65 @@ def get_trending_skills():
         industry = request.args.get('industry', '')
         print(f"Fetching skills for job: {job_title} in industry: {industry}")
         
-        def fetch_skills(pytrends):
-            trending_skills = set()
-            
-            # Use multiple search terms for better coverage
-            search_terms = [
-                f"{job_title} skills required",
-                f"{job_title} {industry} skills",
-                f"{job_title} qualifications"
-            ]
-            
-            for search_term in search_terms:
-                try:
-                    print(f"Querying PyTrends for: {search_term}")
-                    # Build payload with a single term
-                    pytrends.build_payload(
-                        kw_list=[search_term],
-                        timeframe='today 12-m',
-                        geo='US'
-                    )
-                    
-                    # Get both related queries and topics
-                    related_queries = pytrends.related_queries()
-                    related_topics = pytrends.related_topics()
-                    
-                    print(f"Raw queries response: {related_queries}")
-                    print(f"Raw topics response: {related_topics}")
-                    
-                    # Process related queries
-                    if related_queries and search_term in related_queries:
-                        for query_type in ['top', 'rising']:
-                            queries = related_queries[search_term].get(query_type)
-                            if isinstance(queries, pd.DataFrame) and not queries.empty:
-                                for _, row in queries.iterrows():
-                                    if 'query' in row:
-                                        skill = clean_skill_name(row['query'])
-                                        if skill:
-                                            trending_skills.add(skill)
-                    
-                    # Process related topics
-                    if related_topics and search_term in related_topics:
-                        for topic_type in ['top', 'rising']:
-                            topics = related_topics[search_term].get(topic_type)
-                            if isinstance(topics, pd.DataFrame) and not topics.empty:
-                                for _, row in topics.iterrows():
-                                    if 'topic_title' in row:
-                                        skill = clean_skill_name(row['topic_title'])
-                                        if skill:
-                                            trending_skills.add(skill)
-                    
-                    # Add delay between requests
-                    sleep(2)
-                    
-                except Exception as e:
-                    print(f"Error processing search term {search_term}: {str(e)}")
-                    continue
-            
-            return list(trending_skills)
+        if not job_title:
+            return jsonify({
+                "success": False,
+                "error": "Job title is required"
+            }), 400
+
+        # Try multiple search terms for better coverage
+        search_terms = [
+            f"{job_title} required skills",
+            f"{job_title} qualifications",
+            f"{industry} {job_title} skills"
+        ]
         
-        # Try to get trending skills
-        trending_skills = make_pytrends_request(fetch_skills)
+        trending_skills = set()
+        
+        for search_term in search_terms:
+            try:
+                print(f"Querying PyTrends for: {search_term}")
+                pytrends.build_payload([search_term], timeframe='today 3-m', geo='US')
+                time.sleep(1)  # Rate limiting
+                
+                # Try both topics and queries
+                topics = pytrends.related_topics()
+                if topics and search_term in topics:
+                    for topic_type in ['top', 'rising']:
+                        if topic_type in topics[search_term]:
+                            df = topics[search_term][topic_type]
+                            if isinstance(df, pd.DataFrame) and not df.empty:
+                                for _, row in df.iterrows():
+                                    skill = clean_skill_name(row['topic_title'])
+                                    if skill:
+                                        trending_skills.add(skill)
+                                        print(f"Found skill: {skill}")
+                
+                queries = pytrends.related_queries()
+                if queries and search_term in queries:
+                    for query_type in ['top', 'rising']:
+                        if query_type in queries[search_term]:
+                            df = queries[search_term][query_type]
+                            if isinstance(df, pd.DataFrame) and not df.empty:
+                                for _, row in df.iterrows():
+                                    skill = clean_skill_name(row['query'])
+                                    if skill:
+                                        trending_skills.add(skill)
+                                        print(f"Found skill from query: {skill}")
+            
+            except Exception as e:
+                print(f"Error processing search term {search_term}: {str(e)}")
+                continue
         
         if trending_skills:
-            print(f"Found trending skills: {trending_skills}")
+            skills_list = list(trending_skills)
+            print(f"Found trending skills: {skills_list}")
             return jsonify({
                 "success": True,
-                "skills": trending_skills[:10]  # Return top 10 skills
+                "skills": skills_list[:10]
             })
         
-        # If no trending skills found, fall back to industry-based skills
+        # Fall back to industry-based skills
         industry_skills = get_industry_based_skills(industry)
         print(f"Using industry-based skills for {job_title}")
         return jsonify({
@@ -762,7 +738,7 @@ def get_trending_skills():
         return jsonify({
             "success": False,
             "error": str(e)
-        })
+        }), 500
 
 def get_industry_based_skills(industry):
     """Get industry-specific default skills"""
@@ -857,6 +833,86 @@ def suggest_skills():
             "success": False,
             "error": str(e)
         }), 500
+
+@app.route('/check-skill-relevance', methods=['POST'])
+def check_skill_relevance():
+    try:
+        data = request.json
+        skill1 = data['skill1']
+        skill2 = data['skill2']
+        
+        # First check exact match
+        if skill1.lower() == skill2.lower():
+            return jsonify({"isRelevant": True})
+            
+        # Define skill categories and their related terms
+        skill_categories = {
+            "manual_labor": [
+                "manual labor", "physical work", "hands-on", "working with hands",
+                "manual dexterity", "physical strength", "lifting", "construction",
+                "assembly", "manufacturing", "mechanical"
+            ],
+            "customer_service": [
+                "customer service", "client relations", "people skills",
+                "interpersonal", "communication", "customer support",
+                "client interaction", "public relations"
+            ],
+            # Add more categories as needed
+        }
+        
+        # Check if skills are in the same category
+        for category in skill_categories.values():
+            if any(term in skill1.lower() for term in category) and \
+               any(term in skill2.lower() for term in category):
+                return jsonify({"isRelevant": True})
+        
+        # If not found in predefined categories, use OpenAI to check relevance
+        messages = [
+            {"role": "system", "content": """You are a skill matching expert. 
+             Determine if two skills are relevant or similar to each other.
+             Consider both direct and indirect relationships.
+             For example: 'Manual Labor' is relevant to 'Working with Hands'."""},
+            {"role": "user", "content": f"""Are these two skills related or relevant to each other?
+             Skill 1: {skill1}
+             Skill 2: {skill2}
+             
+             Answer with only 'true' or 'false'."""}
+        ]
+        
+        response = make_openai_request(messages)
+        is_relevant = response.strip().lower() == 'true'
+        
+        # Cache the result for future use
+        cache_key = f"{skill1.lower()}_{skill2.lower()}"
+        skill_relevance_cache[cache_key] = is_relevant
+        
+        return jsonify({"isRelevant": is_relevant})
+        
+    except Exception as e:
+        print(f"Error checking skill relevance: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+# Initialize a cache for skill relevance results
+skill_relevance_cache = {}
+
+def clean_job_title(query):
+    """Clean and validate job titles"""
+    remove_terms = [
+        'jobs', 'job', 'career', 'careers', 'position', 'positions',
+        'hiring', 'wanted', 'needed', 'required', 'immediate', 'urgent'
+    ]
+    
+    query = query.lower()
+    for term in remove_terms:
+        query = query.replace(term, '')
+    
+    title = query.strip().title()
+    if len(title) > 2 and not any(char.isdigit() for char in title):
+        return title
+    return None
 
 if __name__ == '__main__':
     app.run(debug=True) 

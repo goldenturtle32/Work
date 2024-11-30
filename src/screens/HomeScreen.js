@@ -64,12 +64,88 @@ const checkDayAvailabilityMatch = (userAvailability, itemAvailability, date) => 
   );
 };
 
+// Create a separate component for rendering skills
+const SkillsList = ({ skills, userSkills }) => {
+  const [relevanceMap, setRelevanceMap] = useState(new Map());
+  const [sortedSkills, setSortedSkills] = useState([]);
+
+  useEffect(() => {
+    const checkRelevance = async () => {
+      if (!skills || !userSkills) return;
+      
+      const newRelevanceMap = new Map();
+      const relevantSkills = [];
+      const otherSkills = [];
+      
+      for (const jobSkill of skills) {
+        if (!jobSkill || typeof jobSkill !== 'string') continue;
+        
+        // Check for exact matches first
+        const isRelevant = userSkills.some(userSkill => 
+          userSkill && typeof userSkill === 'string' && 
+          userSkill.toLowerCase() === jobSkill.toLowerCase()
+        );
+        
+        if (isRelevant) {
+          newRelevanceMap.set(jobSkill, true);
+          relevantSkills.push(jobSkill);
+        } else {
+          otherSkills.push(jobSkill);
+        }
+      }
+      
+      // Sort relevant skills first (limited to 5), then other skills
+      setSortedSkills([
+        ...relevantSkills.slice(0, 5),
+        ...otherSkills
+      ]);
+      setRelevanceMap(newRelevanceMap);
+    };
+
+    checkRelevance();
+  }, [skills, userSkills]);
+
+  if (!skills || !Array.isArray(skills) || skills.length === 0) {
+    return (
+      <View style={styles.skillsContainer}>
+        <Text style={styles.value}>No Skills Set</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.skillsContainer}>
+      {sortedSkills.map((skill, index) => {
+        if (!skill || typeof skill !== 'string') return null;
+        
+        return (
+          <View 
+            key={`${skill}-${index}`}
+            style={[
+              styles.skillBubble,
+              relevanceMap.get(skill) && styles.matchingSkillBubble
+            ]}
+          >
+            <Text style={[
+              styles.skillText,
+              relevanceMap.get(skill) && styles.matchingSkillText
+            ]}>
+              {skill}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+};
+
 export default function HomeScreen({ navigation }) {
   const [items, setItems] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const swiperRef = useRef(null);
+  const [userSkills, setUserSkills] = useState([]);
 
   let [fontsLoaded] = useFonts({
     LibreBodoni_400Regular,
@@ -156,6 +232,42 @@ export default function HomeScreen({ navigation }) {
 
     fetchUserAndItems();
   }, []);
+
+  useEffect(() => {
+    const fetchUserSkills = async () => {
+      try {
+        const userDoc = await db.collection('user_attributes')
+          .doc(auth.currentUser.uid)
+          .get();
+        if (userDoc.exists) {
+          setUserSkills(userDoc.data().skills || []);
+        }
+      } catch (error) {
+        console.error('Error fetching user skills:', error);
+      }
+    };
+    fetchUserSkills();
+  }, []);
+
+  const checkSkillRelevance = async (skill1, skill2) => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/check-skill-relevance`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          skill1,
+          skill2
+        })
+      });
+      const data = await response.json();
+      return data.isRelevant;
+    } catch (error) {
+      console.error('Error checking skill relevance:', error);
+      return false;
+    }
+  };
 
   const handleSwipe = async (cardIndex, interested) => {
     const item = items[cardIndex];
@@ -361,14 +473,11 @@ export default function HomeScreen({ navigation }) {
               </View>
 
               <View style={styles.infoContainer}>
-                <Text style={styles.label}>Skills</Text>
-                <View style={styles.skillsContainer}>
-                  {item.requiredSkills?.map((skill, index) => (
-                    <View key={index} style={styles.skillBubble}>
-                      <Text style={styles.skillText}>{skill}</Text>
-                    </View>
-                  ))}
-                </View>
+                <Text style={styles.label}>Relevant Skills</Text>
+                <SkillsList 
+                  skills={Array.isArray(item.requiredSkills) ? item.requiredSkills : []} 
+                  userSkills={Array.isArray(userSkills) ? userSkills : []} 
+                />
               </View>
 
               <View style={styles.infoContainer}>
@@ -394,11 +503,14 @@ export default function HomeScreen({ navigation }) {
                   <Text style={styles.jobText}>{job.jobType || 'No Job Type'}</Text>
                   <Text style={styles.industryText}>{job.industry || 'No Industry'}</Text>
                   <View style={styles.skillsContainer}>
-                    {Array.isArray(job.skills) && job.skills.map((skill, skillIndex) => (
-                      <View key={skillIndex} style={styles.skillBubble}>
-                        <Text style={styles.skillText}>{skill}</Text>
-                      </View>
-                    ))}
+                    {Array.isArray(job.skills) && job.skills.map((skill, skillIndex) => {
+                      if (typeof skill !== 'string') return null;
+                      return (
+                        <View key={skillIndex} style={styles.skillBubble}>
+                          <Text style={styles.skillText}>{skill}</Text>
+                        </View>
+                      );
+                    })}
                   </View>
                 </View>
               ))}
@@ -689,9 +801,9 @@ const styles = StyleSheet.create({
     marginBottom: 5,
   },
   value: {
-    fontFamily: 'DMSerifText_400Regular',
-    fontSize: 16,
     color: '#ffffff',
+    fontSize: 14,
+    fontFamily: 'LibreBodoni_400Regular',
   },
   skillsContainer: {
     flexDirection: 'row',
@@ -755,5 +867,14 @@ const styles = StyleSheet.create({
   },
   scheduleTextMatch: {
     color: '#4ade80',
+  },
+  matchingSkillBubble: {
+    backgroundColor: '#3b82f6',
+    borderColor: '#60a5fa',
+    borderWidth: 1,
+  },
+  matchingSkillText: {
+    color: '#ffffff',
+    fontWeight: 'bold',
   },
 });
