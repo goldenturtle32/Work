@@ -12,6 +12,7 @@ export default function ChatScreen({ route, navigation }) {
   const [loading, setLoading] = useState(true);
   const [suggestions, setSuggestions] = useState([]);
   const BACKEND_URL = 'http://127.0.0.1:5000';
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
     const unsubscribe = db.collection('chats')
@@ -173,22 +174,32 @@ export default function ChatScreen({ route, navigation }) {
       });
   };
 
-  const renderMessageItem = ({ item }) => (
-    <View style={[
-      styles.messageContainer,
-      item.sender === role ? styles.userMessage : styles.employerMessage
-    ]}>
-      <Text style={[
-        styles.messageText,
-        item.sender === role ? styles.userMessageText : styles.employerMessageText
+  const renderMessageItem = ({ item }) => {
+    const now = new Date();
+    const messageDate = item.timestamp;
+    const isToday = messageDate.toDateString() === now.toDateString();
+    
+    const timeString = isToday 
+      ? messageDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : `${messageDate.toLocaleDateString()} ${messageDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+
+    return (
+      <View style={[
+        styles.messageContainer,
+        item.sender === role ? styles.userMessage : styles.employerMessage
       ]}>
-        {item.text}
-      </Text>
-      <Text style={styles.timestamp}>
-        {item.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-      </Text>
-    </View>
-  );
+        <Text style={[
+          styles.messageText,
+          item.sender === role ? styles.userMessageText : styles.employerMessageText
+        ]}>
+          {item.text}
+        </Text>
+        <Text style={styles.timestamp}>
+          {timeString}
+        </Text>
+      </View>
+    );
+  };
 
   const showDatePicker = () => setDatePickerVisibility(true);
   const hideDatePicker = () => setDatePickerVisibility(false);
@@ -242,14 +253,57 @@ export default function ChatScreen({ route, navigation }) {
     }
   };
 
+  const refreshSuggestions = async () => {
+    if (isRefreshing) return;
+    
+    setIsRefreshing(true);
+    console.log("Refreshing suggestions...");
+    try {
+      const lastMessages = messages.slice(0, 3).map(msg => ({
+        text: msg.text,
+        sender: msg.sender
+      }));
+
+      const response = await fetch(`${BACKEND_URL}/generate-chat-suggestions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          role: role,
+          jobTitle: jobTitle,
+          company: company,
+          recentMessages: lastMessages,
+          context: {
+            isWorker: role === 'worker',
+            jobTitle: jobTitle,
+            company: company
+          }
+        }),
+      });
+
+      if (!response.ok) {
+        console.error("Failed to get suggestions:", response.status);
+        throw new Error('Failed to get suggestions');
+      }
+      
+      const data = await response.json();
+      console.log("New suggestions received:", data.suggestions);
+      setSuggestions(data.suggestions);
+    } catch (error) {
+      console.error('Error refreshing suggestions:', error);
+      setSuggestions(getStaticSuggestions());
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   return (
     <KeyboardAvoidingView 
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
     >
-      <Text style={styles.header}>Chat with {role === 'worker' ? company : 'Applicant'} about {jobTitle}</Text>
-      
       <FlatList
         data={messages}
         keyExtractor={(item) => item.id}
@@ -258,21 +312,33 @@ export default function ChatScreen({ route, navigation }) {
         style={styles.chatArea}
       />
 
-      <ScrollView 
-        horizontal 
-        style={styles.suggestionsContainer}
-        showsHorizontalScrollIndicator={false}
-      >
-        {suggestions.map((suggestion, index) => (
-          <TouchableOpacity
-            key={index}
-            style={styles.suggestionBubble}
-            onPress={() => sendSuggestion(suggestion)}
-          >
-            <Text style={styles.suggestionText}>{suggestion}</Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+      <View style={styles.suggestionsWrapper}>
+        <ScrollView 
+          horizontal 
+          style={styles.suggestionsContainer}
+          showsHorizontalScrollIndicator={false}
+        >
+          {suggestions.map((suggestion, index) => (
+            <TouchableOpacity
+              key={index}
+              style={styles.suggestionBubble}
+              onPress={() => sendSuggestion(suggestion)}
+            >
+              <Text style={styles.suggestionText}>{suggestion}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+        <TouchableOpacity 
+          style={[
+            styles.refreshButton,
+            { opacity: isRefreshing ? 0.6 : 1 }
+          ]}
+          onPress={refreshSuggestions}
+          disabled={isRefreshing}
+        >
+          <Ionicons name="refresh" size={20} color="#1976D2" />
+        </TouchableOpacity>
+      </View>
 
       <View style={styles.inputContainer}>
         <TextInput
@@ -316,12 +382,6 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 20,
     backgroundColor: '#F5F5F5',
-  },
-  header: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 10,
-    color: '#333',
   },
   chatArea: {
     flex: 1,
@@ -382,9 +442,14 @@ const styles = StyleSheet.create({
     marginTop: 4,
     alignSelf: 'flex-end',
   },
-  suggestionsContainer: {
-    maxHeight: 50,
+  suggestionsWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginVertical: 10,
+  },
+  suggestionsContainer: {
+    flex: 1,
+    maxHeight: 50,
   },
   suggestionBubble: {
     backgroundColor: '#E3F2FD',
@@ -397,5 +462,10 @@ const styles = StyleSheet.create({
   suggestionText: {
     color: '#1976D2',
     fontSize: 14,
+  },
+  refreshButton: {
+    padding: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
   },
 });

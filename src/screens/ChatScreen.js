@@ -1,18 +1,46 @@
 import React, { useState, useEffect } from 'react';
-import { View, TextInput, TouchableOpacity, FlatList, Text, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  Alert,
+  Modal,
+  StyleSheet,
+  FlatList,
+  TouchableWithoutFeedback,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePickerModal from "react-native-modal-datetime-picker";
 import { db, auth, firebase } from '../firebase';
+import { createInterview } from '../services/firestoreService';
+import DateTimePicker from '@react-native-community/datetimepicker';
+
+// Define BACKEND_URL constant
+const BACKEND_URL = 'http://127.0.0.1:5000';
 
 export default function ChatScreen({ route, navigation }) {
-  const { jobTitle, company, role, matchId } = route.params;
+  const { matchId, role, jobTitle, company } = route.params;
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState([]);
-  const [isDatePickerVisible, setDatePickerVisibility] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [suggestions, setSuggestions] = useState([]);
-  const BACKEND_URL = 'http://127.0.0.1:5000';
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showTimeSlotModal, setShowTimeSlotModal] = useState(false);
+  const [showWorkerResponseModal, setShowWorkerResponseModal] = useState(false);
+  const [selectedTimeSlots, setSelectedTimeSlots] = useState([]);
+  const [currentInterview, setCurrentInterview] = useState(null);
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [selectedSlot, setSelectedSlot] = useState(null);
+  const [isDatePickerVisible, setDatePickerVisible] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [selectedTime, setSelectedTime] = useState(null);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+
+  const isEmployer = role === 'employer';
+  const otherUserId = matchId?.split('_')[isEmployer ? 1 : 0];
 
   useEffect(() => {
     const unsubscribe = db.collection('chats')
@@ -27,10 +55,8 @@ export default function ChatScreen({ route, navigation }) {
             timestamp: doc.data().timestamp?.toDate() || new Date()
           }));
           setMessages(newMessages);
-          setLoading(false);
         } catch (error) {
           console.error("Error processing messages:", error);
-          setLoading(false);
         }
       }, error => {
         console.error("Error fetching messages:", error);
@@ -38,7 +64,6 @@ export default function ChatScreen({ route, navigation }) {
           'Error',
           'Unable to load messages. Please check your connection and try again.'
         );
-        setLoading(false);
       });
 
     return () => unsubscribe();
@@ -47,6 +72,29 @@ export default function ChatScreen({ route, navigation }) {
   useEffect(() => {
     generateSuggestions();
   }, [messages]);
+
+  useEffect(() => {
+    // Listen for interview updates
+    const unsubscribe = db.collection('interviews')
+      .where('matchId', '==', matchId)
+      .onSnapshot(snapshot => {
+        const interview = snapshot.docs[0]?.data();
+        if (interview) {
+          // Update UI based on interview status
+          if (interview.status === 'scheduled' && !interview.calendarEventId) {
+            createCalendarEvent(interview).then(eventId => {
+              if (eventId) {
+                db.collection('interviews')
+                  .doc(snapshot.docs[0].id)
+                  .update({ calendarEventId: eventId });
+              }
+            });
+          }
+        }
+      });
+
+    return () => unsubscribe();
+  }, [matchId]);
 
   const generateSuggestions = async () => {
     try {
@@ -101,9 +149,8 @@ export default function ChatScreen({ route, navigation }) {
     }
   };
 
-  const sendSuggestion = async (suggestionText) => {
+  const sendSuggestion = (suggestionText) => {
     setMessage(suggestionText);
-    await sendMessage(suggestionText);
   };
 
   const sendMessage = async () => {
@@ -201,26 +248,14 @@ export default function ChatScreen({ route, navigation }) {
     );
   };
 
-  const showDatePicker = () => setDatePickerVisibility(true);
-  const hideDatePicker = () => setDatePickerVisibility(false);
+  const hideDatePicker = () => {
+    setDatePickerVisibility(false);
+  };
 
-  const handleConfirm = async (date) => {
+  const handleConfirmDate = (date) => {
+    console.log("Selected date:", date);
+    setSelectedTimeSlots([...selectedTimeSlots, date]);
     hideDatePicker();
-    const formattedDate = date.toLocaleString();
-    const scheduleMessage = {
-      text: `Call scheduled for ${formattedDate}`,
-      sender: 'system',
-      timestamp: firebase.firestore.FieldValue.serverTimestamp()
-    };
-    
-    try {
-      await db.collection('chats')
-        .doc(matchId)
-        .collection('messages')
-        .add(scheduleMessage);
-    } catch (error) {
-      console.error('Error saving schedule:', error);
-    }
   };
 
   const suggestAction = async (action) => {
@@ -254,49 +289,191 @@ export default function ChatScreen({ route, navigation }) {
   };
 
   const refreshSuggestions = async () => {
-    if (isRefreshing) return;
-    
     setIsRefreshing(true);
-    console.log("Refreshing suggestions...");
+    await generateSuggestions();
+    setIsRefreshing(false);
+  };
+
+  const ScheduleButton = () => (
+    <TouchableOpacity 
+      style={styles.scheduleButton}
+      onPress={() => setShowTimeSlotModal(true)}
+    >
+      <Text style={styles.scheduleButtonText}>Schedule Interview</Text>
+    </TouchableOpacity>
+  );
+
+  const handleConfirm = (date) => {
+    console.log("Selected date:", date);
+    setSelectedTimeSlots([...selectedTimeSlots, date]);
+    setDatePickerVisible(false);
+  };
+
+  const handleCancel = () => {
+    setDatePickerVisible(false);
+  };
+
+  const handleSubmitTimeSlots = async () => {
+    if (selectedTimeSlots.length === 0) {
+      Alert.alert('Error', 'Please add at least one time slot');
+      return;
+    }
+
     try {
-      const lastMessages = messages.slice(0, 3).map(msg => ({
-        text: msg.text,
-        sender: msg.sender
-      }));
-
-      const response = await fetch(`${BACKEND_URL}/generate-chat-suggestions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          role: role,
-          jobTitle: jobTitle,
-          company: company,
-          recentMessages: lastMessages,
-          context: {
-            isWorker: role === 'worker',
-            jobTitle: jobTitle,
-            company: company
-          }
-        }),
+      await createInterview({
+        matchId,
+        employerId: auth.currentUser.uid,
+        workerId: otherUserId,
+        timeSlots: selectedTimeSlots.map(slot => ({
+          datetime: slot,
+          selected: false
+        }))
       });
-
-      if (!response.ok) {
-        console.error("Failed to get suggestions:", response.status);
-        throw new Error('Failed to get suggestions');
-      }
       
-      const data = await response.json();
-      console.log("New suggestions received:", data.suggestions);
-      setSuggestions(data.suggestions);
+      await sendSystemMessage('Interview time slots have been shared. Please select a preferred time.');
+      setShowTimeSlotModal(false);
+      setSelectedTimeSlots([]);
     } catch (error) {
-      console.error('Error refreshing suggestions:', error);
-      setSuggestions(getStaticSuggestions());
-    } finally {
-      setIsRefreshing(false);
+      console.error('Error submitting time slots:', error);
+      Alert.alert('Error', 'Failed to submit time slots');
     }
   };
+
+  const sendSystemMessage = async (text) => {
+    try {
+      await db.collection('chats')
+        .doc(matchId)
+        .collection('messages')
+        .add({
+          text,
+          sender: 'system',
+          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          read: false
+        });
+    } catch (error) {
+      console.error('Error sending system message:', error);
+    }
+  };
+
+  const onDateSelect = (event, selectedDate) => {
+    setShowDatePicker(false);
+    if (selectedDate) {
+      setSelectedDate(selectedDate);
+    }
+  };
+
+  const TimeSlotModal = () => (
+    <Modal
+      visible={showTimeSlotModal}
+      transparent={true}
+      animationType="slide"
+      onRequestClose={() => setShowTimeSlotModal(false)}
+    >
+      <View style={styles.modalContainer}>
+        <View style={styles.modalContent}>
+          <Text style={styles.modalTitle}>Select Available Time Slots</Text>
+          
+          <TouchableOpacity 
+            style={styles.dateButton}
+            onPress={() => setDatePickerVisible(true)}
+          >
+            <Text>{selectedDate ? selectedDate.toLocaleDateString() : 'Select Date'}</Text>
+          </TouchableOpacity>
+
+          {Platform.OS === 'web' ? (
+            showDatePicker && (
+              <DateTimePicker
+                value={selectedDate || new Date()}
+                onChange={onDateSelect}
+                minimumDate={new Date()}
+              />
+            )
+          ) : (
+            <DateTimePickerModal
+              isVisible={showDatePicker}
+              mode="datetime"
+              onConfirm={handleConfirm}
+              onCancel={() => setDatePickerVisible(false)}
+            />
+          )}
+
+          <TouchableOpacity
+            style={styles.addButton}
+            onPress={handleSubmitTimeSlots}
+          >
+            <Text style={styles.buttonText}>Confirm Time Slots</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  const WorkerResponseModal = () => {
+    // Early return if no interview data
+    if (!currentInterview) return null;
+
+    return (
+      <Modal
+        visible={showWorkerResponseModal}
+        animationType="slide"
+        transparent={true}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Select Interview Time</Text>
+            <ScrollView>
+              {currentInterview.timeSlots.map((slot, index) => (
+                <TouchableOpacity 
+                  key={index}
+                  style={[
+                    styles.timeSlotOption,
+                    selectedSlot === slot.datetime.toDate().getTime() && styles.selectedSlot
+                  ]}
+                  onPress={() => setSelectedSlot(slot.datetime.toDate().getTime())}
+                >
+                  <Text style={styles.timeSlotText}>
+                    {slot.datetime.toDate().toLocaleString()}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            
+            <TextInput
+              style={styles.phoneInput}
+              placeholder="Your phone number"
+              value={phoneNumber}
+              onChangeText={setPhoneNumber}
+              keyboardType="phone-pad"
+            />
+            
+            <TouchableOpacity
+              style={styles.submitButton}
+              onPress={handleWorkerSubmitSelection}
+            >
+              <Text style={styles.submitButtonText}>Confirm Selection</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={() => setShowWorkerResponseModal(false)}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    );
+  };
+
+  const renderMessages = () => (
+    <FlatList
+      data={messages}
+      renderItem={renderMessageItem}
+      keyExtractor={item => item.id}
+      inverted
+      contentContainerStyle={styles.messagesContainer}
+    />
+  );
 
   return (
     <KeyboardAvoidingView 
@@ -304,14 +481,8 @@ export default function ChatScreen({ route, navigation }) {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
     >
-      <FlatList
-        data={messages}
-        keyExtractor={(item) => item.id}
-        renderItem={renderMessageItem}
-        inverted
-        style={styles.chatArea}
-      />
-
+      {renderMessages()}
+      
       <View style={styles.suggestionsWrapper}>
         <ScrollView 
           horizontal 
@@ -340,39 +511,34 @@ export default function ChatScreen({ route, navigation }) {
         </TouchableOpacity>
       </View>
 
+      {/* Message Input */}
       <View style={styles.inputContainer}>
         <TextInput
+          style={styles.input}
           value={message}
           onChangeText={setMessage}
-          placeholder="Type your message..."
-          style={styles.input}
+          placeholder="Type a message..."
           multiline
         />
-        <TouchableOpacity onPress={sendMessage} style={styles.sendButton}>
+        <TouchableOpacity 
+          style={styles.sendButton} 
+          onPress={sendMessage}
+        >
           <Ionicons name="send" size={24} color="#007AFF" />
         </TouchableOpacity>
       </View>
 
-      {role === 'employer' && (
-        <View style={styles.actionContainer}>
-          <TouchableOpacity onPress={showDatePicker} style={styles.actionButton}>
-            <Ionicons name="calendar" size={24} color="#007AFF" />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => suggestAction('qualifications')} style={styles.actionButton}>
-            <Ionicons name="document-text" size={24} color="#007AFF" />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => suggestAction('experience')} style={styles.actionButton}>
-            <Ionicons name="briefcase" size={24} color="#007AFF" />
-          </TouchableOpacity>
-        </View>
+      {isEmployer && (
+        <TouchableOpacity
+          style={styles.scheduleButton}
+          onPress={() => setShowTimeSlotModal(true)}
+        >
+          <Text style={styles.scheduleButtonText}>Schedule Interview</Text>
+        </TouchableOpacity>
       )}
 
-      <DateTimePickerModal
-        isVisible={isDatePickerVisible}
-        mode="datetime"
-        onConfirm={handleConfirm}
-        onCancel={hideDatePicker}
-      />
+      <TimeSlotModal />
+      <WorkerResponseModal />
     </KeyboardAvoidingView>
   );
 }
@@ -467,5 +633,168 @@ const styles = StyleSheet.create({
     padding: 10,
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
+  },
+  scheduleButton: {
+    backgroundColor: '#007AFF',
+    padding: 10,
+    borderRadius: 20,
+    alignItems: 'center',
+    marginVertical: 10,
+  },
+  scheduleButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 20,
+    padding: 20,
+    width: '90%',
+    maxHeight: '80%',
+    elevation: 5, // for Android
+    zIndex: 1000, // for iOS
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  addSlotButton: {
+    backgroundColor: '#007AFF',
+    padding: 15,
+    borderRadius: 10,
+    marginBottom: 15,
+    zIndex: 1001, // Ensure button is clickable
+  },
+  timeSlotsList: {
+    maxHeight: 200,
+  },
+  timeSlotItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 10,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  timeSlotText: {
+    flex: 1,
+    fontSize: 16,
+  },
+  removeText: {
+    color: 'red',
+    fontSize: 18,
+    marginLeft: 10,
+  },
+  buttonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 20,
+  },
+  submitButton: {
+    backgroundColor: '#007AFF',
+    padding: 15,
+    borderRadius: 10,
+    flex: 1,
+    marginRight: 10,
+  },
+  cancelButton: {
+    backgroundColor: '#FF3B30',
+    padding: 15,
+    borderRadius: 10,
+    flex: 1,
+    marginLeft: 10,
+  },
+  buttonText: {
+    color: 'white',
+    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  phoneInput: {
+    borderWidth: 1,
+    borderColor: '#ccc',
+    padding: 10,
+    borderRadius: 20,
+    marginVertical: 10,
+  },
+  messagesContainer: {
+    flexGrow: 1,
+    paddingHorizontal: 10,
+  },
+  suggestionsContainer: {
+    maxHeight: 50,
+    paddingHorizontal: 10,
+    marginBottom: 10,
+  },
+  suggestionButton: {
+    backgroundColor: '#f0f0f0',
+    padding: 10,
+    borderRadius: 20,
+    marginRight: 10,
+  },
+  suggestionText: {
+    color: '#007AFF',
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    padding: 10,
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: '#ddd',
+    backgroundColor: 'white',
+  },
+  input: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 20,
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    marginRight: 10,
+    maxHeight: 100,
+  },
+  sendButton: {
+    padding: 10,
+  },
+  timeSlotContainer: {
+    maxHeight: 300,
+    marginVertical: 10,
+  },
+  timeSlot: {
+    padding: 15,
+    borderRadius: 8,
+    marginVertical: 5,
+    backgroundColor: '#f0f0f0',
+  },
+  selectedTimeSlot: {
+    backgroundColor: '#007AFF',
+  },
+  timeSlotText: {
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  selectedTimeSlotText: {
+    color: 'white',
+  },
+  addButton: {
+    backgroundColor: '#007AFF',
+    padding: 15,
+    borderRadius: 8,
+    marginTop: 10,
+  },
+  buttonText: {
+    color: 'white',
+    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
