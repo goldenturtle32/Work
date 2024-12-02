@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -21,7 +21,10 @@ import { Calendar } from 'react-native-calendars';
 import { 
   collection, 
   addDoc, 
-  serverTimestamp 
+  serverTimestamp,
+  doc, 
+  onSnapshot, 
+  updateDoc
 } from 'firebase/firestore';
 import { formatPhoneNumber } from '../utils/phoneFormatter';
 
@@ -58,6 +61,17 @@ export default function ChatScreen({ route, navigation }) {
     startTime: '',
     endTime: '',
   });
+  const [showPostInterviewModal, setShowPostInterviewModal] = useState(false);
+  const [workScheduleProposal, setWorkScheduleProposal] = useState(null);
+  const [showJobOfferModal, setShowJobOfferModal] = useState(false);
+  const [pendingOffer, setPendingOffer] = useState(null);
+  const [hourlyWage, setHourlyWage] = useState('');
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [isButtonEnabled, setIsButtonEnabled] = useState(true);
+  const [jobOfferDate, setJobOfferDate] = useState(new Date());
+  const [jobOfferStep, setJobOfferStep] = useState('offer'); // 'offer' or 'datetime'
+  const [jobStartDate, setJobStartDate] = useState(new Date());
+  const [jobStartTime, setJobStartTime] = useState(new Date());
 
   const isEmployer = role === 'employer';
   const otherUserId = matchId?.split('_')[isEmployer ? 1 : 0];
@@ -158,6 +172,21 @@ export default function ChatScreen({ route, navigation }) {
 
     return () => unsubscribe();
   }, [matchId, role]);
+
+  useEffect(() => {
+    if (!isEmployer && matchId) {
+      const offerRef = doc(db, 'job_offers', matchId);
+      const unsubscribe = onSnapshot(offerRef, (doc) => {
+        if (doc.exists() && doc.data().status === 'pending') {
+          setPendingOffer(doc.data());
+        } else {
+          setPendingOffer(null);
+        }
+      });
+
+      return () => unsubscribe();
+    }
+  }, [matchId, isEmployer]);
 
   const generateSuggestions = async () => {
     try {
@@ -845,104 +874,385 @@ export default function ChatScreen({ route, navigation }) {
     );
   };
 
-  const ScheduleModal = () => {
-    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    
-    return (
-      <Modal
-        visible={showScheduleModal}
-        animationType="slide"
-        transparent={true}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Set Work Schedule</Text>
+  const ScheduleModal = () => (
+    <Modal
+      visible={showScheduleModal}
+      transparent
+      animationType="slide"
+    >
+      <View style={styles.modalContainer}>
+        <View style={styles.modalContent}>
+          <Text style={styles.modalTitle}>Set Work Schedule</Text>
+          
+          <Calendar
+            onDayPress={day => {
+              const selected = selectedDays.includes(day.dateString)
+                ? selectedDays.filter(d => d !== day.dateString)
+                : [...selectedDays, day.dateString];
+              setSelectedDays(selected);
+            }}
+            markedDates={
+              selectedDays.reduce((obj, day) => ({
+                ...obj,
+                [day]: { selected: true }
+              }), {})
+            }
+          />
+          
+          <View style={styles.timeContainer}>
+            <TouchableOpacity onPress={() => setShowStartTimePicker(true)}>
+              <Text>Start Time: {workSchedule.startTime || 'Select'}</Text>
+            </TouchableOpacity>
             
-            {/* Days Selection */}
-            <View style={styles.daysContainer}>
-              {days.map(day => (
-                <TouchableOpacity
-                  key={day}
-                  style={[
-                    styles.dayButton,
-                    selectedDays.includes(day) && styles.selectedDay
-                  ]}
-                  onPress={() => {
-                    setSelectedDays(prev => 
-                      prev.includes(day) 
-                        ? prev.filter(d => d !== day)
-                        : [...prev, day]
-                    );
-                  }}
-                >
-                  <Text>{day.slice(0, 3)}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            <TouchableOpacity onPress={() => setShowEndTimePicker(true)}>
+              <Text>End Time: {workSchedule.endTime || 'Select'}</Text>
+            </TouchableOpacity>
+          </View>
+          
+          <TouchableOpacity 
+            style={[styles.button, styles.submitButton]}
+            onPress={handleAcceptCandidate}
+          >
+            <Text style={styles.buttonText}>Send Job Offer</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
 
-            {/* Time Selection */}
-            <View style={styles.timeContainer}>
-              <TouchableOpacity
-                onPress={() => setShowStartTimePicker(true)}
-                style={styles.timeButton}
-              >
-                <Text>Start: {workSchedule.startTime || 'Select'}</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity
-                onPress={() => setShowEndTimePicker(true)}
-                style={styles.timeButton}
-              >
-                <Text>End: {workSchedule.endTime || 'Select'}</Text>
-              </TouchableOpacity>
-            </View>
+  const handleScheduleSubmit = async () => {
+    try {
+      if (!selectedDays.length || !workSchedule.startTime || !workSchedule.endTime) {
+        Alert.alert('Error', 'Please select days and times');
+        return;
+      }
 
-            <TouchableOpacity
-              style={styles.submitButton}
-              onPress={handleScheduleSubmit}
+      const scheduleRef = await db.collection('work_schedules').add({
+        matchId,
+        employerId: currentInterview.employerId,
+        workerId: currentInterview.workerId,
+        schedule: selectedDays.map(day => ({
+          day,
+          startTime: workSchedule.startTime,
+          endTime: workSchedule.endTime
+        })),
+        status: 'pending_worker_approval',
+        createdAt: serverTimestamp()
+      });
+      
+      await db.collection('interviews')
+        .doc(currentInterview.id)
+        .update({
+          status: 'pending_schedule_approval',
+          workScheduleId: scheduleRef.id
+        });
+        
+      setShowScheduleModal(false);
+      setShowPostInterviewModal(false);
+    } catch (error) {
+      console.error('Error submitting schedule:', error);
+      Alert.alert('Error', 'Failed to submit work schedule');
+    }
+  };
+
+  const checkInterviewStatus = useCallback(() => {
+    if (!currentInterview) return;
+    
+    // Convert interview date and time to a Date object
+    const interviewDate = new Date(
+      `${currentInterview.date} ${currentInterview.startTime}`
+    );
+    
+    // Add logging to debug the conditions
+    console.log('Interview check:', {
+      currentDate: new Date(),
+      interviewDate,
+      status: currentInterview.status,
+      role,
+      isPast: new Date() > interviewDate
+    });
+
+    // Show post-interview modal if:
+    // 1. Interview is in the past
+    // 2. Status is "accepted"
+    // 3. User is employer
+    // 4. No schedule has been set
+    if (new Date() > interviewDate && 
+        currentInterview.status === 'accepted' && 
+        role === 'employer' && 
+        !currentInterview.workScheduleId) { // Only show if no schedule has been set
+      setShowPostInterviewModal(true);
+    }
+  }, [currentInterview, role]);
+
+  useEffect(() => {
+    checkInterviewStatus();
+  }, [currentInterview, checkInterviewStatus]);
+
+  const handleHireDecision = async (hire) => {
+    if (!hire) {
+      await db.collection('interviews')
+        .doc(currentInterview.id)
+        .update({
+          status: 'rejected_after_interview'
+        });
+      setShowPostInterviewModal(false);
+      return;
+    }
+    
+    setShowScheduleModal(true);
+  };
+
+  const PostInterviewModal = () => (
+    <Modal
+      visible={showPostInterviewModal}
+      transparent
+      animationType="slide"
+    >
+      <View style={styles.modalContainer}>
+        <View style={styles.modalContent}>
+          <Text style={styles.modalTitle}>Interview Complete</Text>
+          <Text>Would you like to hire this candidate?</Text>
+          
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity 
+              style={[styles.button, styles.rejectButton]}
+              onPress={() => handleHireDecision(false)}
             >
-              <Text style={styles.submitButtonText}>Submit Offer</Text>
+              <Text style={styles.buttonText}>No</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.button, styles.acceptButton]}
+              onPress={() => handleHireDecision(true)}
+            >
+              <Text style={styles.buttonText}>Yes, Set Schedule</Text>
             </TouchableOpacity>
           </View>
         </View>
-      </Modal>
-    );
+      </View>
+    </Modal>
+  );
+
+  const handleAcceptCandidate = async () => {
+    try {
+      // Update match status
+      const matchRef = doc(db, 'matches', `${workerId}_${employerId}`);
+      await updateDoc(matchRef, {
+        status: 'hired',
+        hiredAt: new Date().toISOString()
+      });
+
+      // Create job offer
+      const offerRef = doc(db, 'job_offers', `${workerId}_${employerId}`);
+      await setDoc(offerRef, {
+        workerId,
+        employerId,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        schedule: workSchedule,
+        jobId: currentJob.id
+      });
+
+      setShowScheduleModal(false);
+      Alert.alert('Success', 'Job offer sent to candidate');
+    } catch (error) {
+      console.error('Error accepting candidate:', error);
+      Alert.alert('Error', 'Failed to send job offer');
+    }
   };
 
-  const handleScheduleSubmit = async () => {
-    if (!selectedDays.length || !workSchedule.startTime || !workSchedule.endTime) {
-      Alert.alert('Error', 'Please select days and times');
+  const handleJobOffer = async () => {
+    if (!hourlyWage) {
+      Alert.alert('Error', 'Please enter an hourly wage');
+      return;
+    }
+
+    const selectedSchedules = {};
+    Object.keys(selectedDays).forEach(day => {
+      if (selectedDays[day]) {
+        selectedSchedules[day] = schedules[day];
+      }
+    });
+
+    if (Object.keys(selectedSchedules).length === 0) {
+      Alert.alert('Error', 'Please select at least one day');
       return;
     }
 
     try {
-      // Create job offer document
-      const offerRef = await addDoc(collection(db, 'job_offers'), {
-        matchId,
-        employerId: auth.currentUser.uid,
+      const offerRef = doc(db, 'job_offers', `${matchId}`);
+      await setDoc(offerRef, {
+        employerId: currentUserUid,
         workerId: otherUserId,
-        schedule: {
-          days: selectedDays,
-          startTime: workSchedule.startTime,
-          endTime: workSchedule.endTime
-        },
         status: 'pending',
-        createdAt: serverTimestamp()
+        createdAt: new Date().toISOString(),
+        matchId: matchId,
+        schedule: selectedSchedules,
+        hourlyWage: parseFloat(hourlyWage),
       });
 
-      // Add system message about the job offer
-      await addDoc(collection(db, 'chats', matchId, 'messages'), {
-        text: `Job offer sent with schedule: ${selectedDays.join(', ')} from ${workSchedule.startTime} to ${workSchedule.endTime}`,
-        system: true,
-        timestamp: serverTimestamp()
+      const matchRef = doc(db, 'matches', matchId);
+      await updateDoc(matchRef, {
+        status: 'offer_sent'
       });
 
-      setShowScheduleModal(false);
-      Alert.alert('Success', 'Job offer sent successfully');
+      setShowJobOfferModal(false);
+      Alert.alert('Success', 'Job offer sent successfully!');
     } catch (error) {
       console.error('Error sending job offer:', error);
-      Alert.alert('Error', 'Failed to send job offer');
+      Alert.alert('Error', 'Failed to send job offer. Please try again.');
     }
+  };
+
+  const handleOfferResponse = async (accept) => {
+    try {
+      const offerRef = doc(db, 'job_offers', matchId);
+      await updateDoc(offerRef, {
+        status: accept ? 'accepted' : 'rejected',
+        respondedAt: new Date().toISOString()
+      });
+
+      if (accept) {
+        const matchRef = doc(db, 'matches', matchId);
+        await updateDoc(matchRef, {
+          status: 'hired'
+        });
+      }
+
+      Alert.alert('Success', `Offer ${accept ? 'accepted' : 'rejected'} successfully`);
+    } catch (error) {
+      console.error('Error responding to offer:', error);
+      Alert.alert('Error', 'Failed to respond to offer. Please try again.');
+    }
+  };
+
+  const handleTimePickerChange = (event, selectedTime) => {
+    setShowTimePicker(false);
+    if (selectedTime) {
+      setSelectedTime(selectedTime);
+    }
+  };
+
+  const handleDateChange = (event, selected) => {
+    setShowDatePicker(false);
+    if (selected) {
+      setJobOfferDate(selected);
+      setIsButtonEnabled(true);
+    }
+  };
+
+  const sendJobOffer = () => {
+    setShowDatePicker(true);
+  };
+
+  const handleSendJobOffer = async (dateTime) => {
+    const formattedDateTime = dateTime.toISOString();
+    // Your existing job offer sending logic here
+    // Use formattedDateTime instead of just the date
+  };
+
+  const handleDateTimeSelection = (date, time) => {
+    const combinedDateTime = new Date(
+      date.getFullYear(),
+      date.getMonth(),
+      date.getDate(),
+      time.getHours(),
+      time.getMinutes()
+    );
+    // Handle the selected date/time
+    console.log('Selected DateTime:', combinedDateTime);
+    // Add your logic here to handle the selected date/time
+  };
+
+  const renderDateTimePickers = () => {
+    return (
+      <>
+        <Modal
+          transparent={true}
+          visible={showDatePicker || showTimePicker}
+          animationType="fade"
+          onRequestClose={() => {
+            setShowDatePicker(false);
+            setShowTimePicker(false);
+          }}
+        >
+          <TouchableWithoutFeedback 
+            onPress={() => {
+              setShowDatePicker(false);
+              setShowTimePicker(false);
+            }}
+          >
+            <View style={styles.modalOverlay}>
+              <TouchableWithoutFeedback>
+                <View style={styles.pickerContainer}>
+                  {showDatePicker && (
+                    <DateTimePicker
+                      value={selectedDate}
+                      mode="date"
+                      display="default"
+                      onChange={(event, date) => {
+                        if (date) {
+                          setSelectedDate(date);
+                          setShowDatePicker(false);
+                          setShowTimePicker(true);
+                        }
+                      }}
+                    />
+                  )}
+                  {showTimePicker && (
+                    <DateTimePicker
+                      value={selectedTime}
+                      mode="time"
+                      display="default"
+                      onChange={(event, time) => {
+                        if (time) {
+                          setSelectedTime(time);
+                          setShowTimePicker(false);
+                          handleDateTimeSelection(selectedDate, time);
+                        }
+                      }}
+                    />
+                  )}
+                </View>
+              </TouchableWithoutFeedback>
+            </View>
+          </TouchableWithoutFeedback>
+        </Modal>
+      </>
+    );
+  };
+
+  const renderModalContent = () => {
+    if (jobOfferStep === 'datetime') {
+      return (
+        <View style={styles.modalContent}>
+          <TouchableOpacity 
+            onPress={() => setModalVisible(false)}
+            style={styles.closeButton}
+          >
+            <Text style={styles.closeButtonText}>✕</Text>
+          </TouchableOpacity>
+
+          <Text style={styles.modalTitle}>Schedule Interview</Text>
+          {/* ... rest of datetime content ... */}
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.modalContent}>
+        <TouchableOpacity 
+          onPress={() => setModalVisible(false)}
+          style={styles.closeButton}
+        >
+          <Text style={styles.closeButtonText}>✕</Text>
+        </TouchableOpacity>
+
+        <Text style={styles.modalTitle}>Send Job Offer</Text>
+        {/* ... rest of job offer content ... */}
+      </View>
+    );
   };
 
   return (
@@ -1117,6 +1427,148 @@ export default function ChatScreen({ route, navigation }) {
 
       <PhoneNumberModal />
       <ScheduleModal />
+      {role === 'employer' && <PostInterviewModal />}
+      <ScheduleModal />
+
+      {isEmployer && (
+        <View style={styles.actionContainer}>
+          <TouchableOpacity 
+            style={[styles.button, styles.offerButton]}
+            onPress={() => setShowJobOfferModal(true)}
+          >
+            <Text style={styles.buttonText}>Send Job Offer</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <Modal
+        visible={showJobOfferModal}
+        transparent={true}
+        animationType="slide"
+      >
+        <View style={styles.modalContainer}>
+          <ScrollView style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Send Job Offer</Text>
+            
+            <Text style={styles.sectionTitle}>Select Working Days & Hours</Text>
+            {Object.keys(selectedDays).map((day) => (
+              <View key={day} style={styles.dayRow}>
+                <CheckBox
+                  value={selectedDays[day]}
+                  onValueChange={(checked) => {
+                    setSelectedDays(prev => ({...prev, [day]: checked}));
+                  }}
+                />
+                <Text style={styles.dayText}>{day.charAt(0).toUpperCase() + day.slice(1)}</Text>
+                {selectedDays[day] && (
+                  <View style={styles.timeContainer}>
+                    <TouchableOpacity 
+                      onPress={() => {
+                        setActiveDay(day);
+                        setActiveTimeField('startTime');
+                        setShowTimePicker(true);
+                      }}
+                    >
+                      <Text>Start: {schedules[day].startTime}</Text>
+                    </TouchableOpacity>
+                    <Text> - </Text>
+                    <TouchableOpacity 
+                      onPress={() => {
+                        setActiveDay(day);
+                        setActiveTimeField('endTime');
+                        setShowTimePicker(true);
+                      }}
+                    >
+                      <Text>End: {schedules[day].endTime}</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            ))}
+
+            <View style={styles.wageContainer}>
+              <Text style={styles.sectionTitle}>Hourly Wage ($)</Text>
+              <TextInput
+                style={styles.wageInput}
+                placeholder="Hourly wage"
+                keyboardType="numeric"
+                value={hourlyWage}
+                onChangeText={setHourlyWage}
+              />
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity 
+                style={[styles.button, styles.cancelButton]}
+                onPress={() => setShowJobOfferModal(false)}
+              >
+                <Text style={styles.buttonText}>Cancel</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={[styles.button, styles.confirmButton]}
+                onPress={handleJobOffer}
+              >
+                <Text style={styles.buttonText}>Send Offer</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+
+        {showTimePicker && (
+          <DateTimePicker
+            value={new Date(`2000-01-01T${schedules[activeDay][activeTimeField]}`)}
+            mode="time"
+            is24Hour={false}
+            display="default"
+            onChange={(event, selectedTime) => {
+              setShowTimePicker(false);
+              if (selectedTime) {
+                const timeString = selectedTime.toLocaleTimeString([], { 
+                  hour: '2-digit', 
+                  minute: '2-digit',
+                  hour12: false 
+                });
+                setSchedules(prev => ({
+                  ...prev,
+                  [activeDay]: {
+                    ...prev[activeDay],
+                    [activeTimeField]: timeString
+                  }
+                }));
+              }
+            }}
+          />
+        )}
+      </Modal>
+
+      {!isEmployer && pendingOffer && (
+        <View style={styles.offerContainer}>
+          <Text style={styles.offerTitle}>New Job Offer!</Text>
+          <Text style={styles.offerDetail}>Hourly Wage: ${pendingOffer.hourlyWage}</Text>
+          <Text style={styles.offerDetail}>Schedule:</Text>
+          {Object.entries(pendingOffer.schedule).map(([day, times]) => (
+            <Text key={day} style={styles.scheduleText}>
+              {day.charAt(0).toUpperCase() + day.slice(1)}: {times.startTime} - {times.endTime}
+            </Text>
+          ))}
+          <View style={styles.offerButtons}>
+            <TouchableOpacity 
+              style={[styles.button, styles.rejectButton]}
+              onPress={() => handleOfferResponse(false)}
+            >
+              <Text style={styles.buttonText}>Decline</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.button, styles.acceptButton]}
+              onPress={() => handleOfferResponse(true)}
+            >
+              <Text style={styles.buttonText}>Accept</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+      {renderDateTimePickers()}
     </KeyboardAvoidingView>
   );
 }
@@ -1529,5 +1981,140 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     marginTop: 10,
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    padding: 20,
+    borderRadius: 10,
+    width: '90%',
+    maxHeight: '80%',
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginTop: 15,
+    marginBottom: 10,
+  },
+  dayRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+    padding: 5,
+  },
+  dayText: {
+    marginLeft: 10,
+    width: 100,
+  },
+  timeContainer: {
+    flexDirection: 'row',
+    marginLeft: 10,
+  },
+  wageContainer: {
+    marginVertical: 20,
+  },
+  wageInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 5,
+    padding: 10,
+    marginTop: 5,
+  },
+  button: {
+    backgroundColor: '#007AFF',
+    padding: 10,
+    borderRadius: 5,
+    marginTop: 10,
+  },
+  disabledButton: {
+    backgroundColor: '#cccccc',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pickerContainer: {
+    backgroundColor: 'white',
+    padding: 20,
+    borderRadius: 10,
+    width: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    width: '100%',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  backButton: {
+    padding: 10,
+  },
+  backButtonText: {
+    color: '#007AFF',
+    fontSize: 16,
+  },
+  closeButton: {
+    position: 'absolute',
+    right: 10,
+    top: 10,
+    zIndex: 1,
+    padding: 10,
+  },
+  closeButtonText: {
+    fontSize: 20,
+    color: '#666',
+  },
+  dateTimeContainer: {
+    width: '100%',
+    gap: 20,
+    marginBottom: 20,
+  },
+  webDatePicker: {
+    width: '100%',
+    height: 40,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 5,
+    padding: 10,
+    marginBottom: 10,
+  },
+  webTimePicker: {
+    width: '100%',
+    height: 40,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 5,
+    padding: 10,
+  },
+  confirmButton: {
+    backgroundColor: '#007AFF',
+    padding: 15,
+    borderRadius: 5,
+    width: '100%',
+    alignItems: 'center',
+  },
+  scheduleButton: {
+    backgroundColor: '#007AFF',
+    padding: 15,
+    borderRadius: 5,
+    width: '100%',
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  buttonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
 });
