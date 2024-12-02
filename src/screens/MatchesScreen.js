@@ -89,6 +89,16 @@ export default function MatchesScreen({ navigation }) {
     return true;
   });
 
+  const handleChatPress = (match) => {
+    console.log('Navigating to chat with match data:', match);
+    
+    navigation.navigate('Chat', {
+      matchId: match.id,
+      role: userRole,
+      jobTitle: match.jobTitle
+    });
+  };
+
   const renderMatchItem = ({ item }) => {
     const matchDetails = item.otherUser;
     const otherUserId = userRole === 'worker' ? item.employerId : item.workerId;
@@ -96,12 +106,7 @@ export default function MatchesScreen({ navigation }) {
     return (
       <TouchableOpacity
         style={styles.matchItem}
-        onPress={() => navigation.navigate('Chat', {
-          jobTitle: matchDetails.jobTitle || 'Job',
-          company: matchDetails.company || 'Company',
-          role: userRole,
-          matchId: item.id
-        })}
+        onPress={() => handleChatPress(item)}
         onLongPress={async () => {
           try {
             let detailsCollection;

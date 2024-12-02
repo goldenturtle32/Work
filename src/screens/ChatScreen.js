@@ -23,8 +23,8 @@ import {
   addDoc, 
   serverTimestamp 
 } from 'firebase/firestore';
+import { formatPhoneNumber } from '../utils/phoneFormatter';
 
-// Define BACKEND_URL constant
 const BACKEND_URL = 'http://127.0.0.1:5000';
 
 export default function ChatScreen({ route, navigation }) {
@@ -48,6 +48,16 @@ export default function ChatScreen({ route, navigation }) {
   const [startTime, setStartTime] = useState(new Date());
   const [endTime, setEndTime] = useState(new Date());
   const [showCalendar, setShowCalendar] = useState(false);
+  const [pendingInterview, setPendingInterview] = useState(null);
+  const [acceptedInterview, setAcceptedInterview] = useState(null);
+  const [showPhoneModal, setShowPhoneModal] = useState(false);
+  const [rawPhoneNumber, setRawPhoneNumber] = useState('');
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [selectedDays, setSelectedDays] = useState([]);
+  const [workSchedule, setWorkSchedule] = useState({
+    startTime: '',
+    endTime: '',
+  });
 
   const isEmployer = role === 'employer';
   const otherUserId = matchId?.split('_')[isEmployer ? 1 : 0];
@@ -105,6 +115,49 @@ export default function ChatScreen({ route, navigation }) {
 
     return () => unsubscribe();
   }, [matchId]);
+
+  useEffect(() => {
+    if (!matchId || role !== 'worker') {
+      console.log('Skipping interview fetch:', { matchId, role });
+      return;
+    }
+
+    console.log('Fetching interviews with params:', {
+      matchId,
+      role,
+      userId: auth.currentUser?.uid
+    });
+    
+    const unsubscribe = db.collection('interviews')
+      .where('workerId', '==', matchId)
+      .where('status', '==', 'pending')
+      .onSnapshot(snapshot => {
+        console.log('Raw snapshot data:', snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })));
+        
+        const interviews = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        
+        console.log('Processed interviews:', interviews);
+        
+        const pending = interviews[0];
+        if (pending) {
+          console.log('Setting pending interview:', pending);
+          setPendingInterview(pending);
+        } else {
+          console.log('No pending interviews found');
+          setPendingInterview(null);
+        }
+      }, error => {
+        console.error('Error in interview snapshot:', error);
+      });
+
+    return () => unsubscribe();
+  }, [matchId, role]);
 
   const generateSuggestions = async () => {
     try {
@@ -393,7 +446,8 @@ export default function ChatScreen({ route, navigation }) {
 
         await addDoc(collection(db, 'interviews'), {
           employerId: currentUser.uid,
-          workerId: matchId,
+          workerId: otherUserId,
+          matchId: matchId,
           startTime: selectedStartTime,
           endTime: selectedEndTime,
           date: selectedDate,
@@ -634,12 +688,272 @@ export default function ChatScreen({ route, navigation }) {
     // You can then call your sendMessage function
   };
 
+  const handleAcceptInterview = () => {
+    setShowPhoneModal(true);
+  };
+
+  const handlePhoneSubmit = async () => {
+    if (!phoneNumber || phoneNumber.length < 10) {
+      Alert.alert('Invalid Phone Number', 'Please enter a valid phone number');
+      return;
+    }
+
+    try {
+      if (!pendingInterview?.id) return;
+
+      await db.collection('interviews')
+        .doc(pendingInterview.id)
+        .update({
+          status: 'accepted',
+          acceptedAt: serverTimestamp(),
+          workerPhone: phoneNumber
+        });
+
+      setShowPhoneModal(false);
+      Alert.alert('Success', 'Interview accepted successfully');
+    } catch (error) {
+      console.error('Error accepting interview:', error);
+      Alert.alert('Error', 'Failed to accept interview');
+    }
+  };
+
+  const PhoneNumberModal = () => (
+    <Modal
+      animationType="slide"
+      transparent={true}
+      visible={showPhoneModal}
+      onRequestClose={() => setShowPhoneModal(false)}
+    >
+      <View style={styles.modalContainer}>
+        <View style={styles.modalContent}>
+          <Text style={styles.modalTitle}>Enter Your Phone Number</Text>
+          <TextInput
+            style={styles.phoneInput}
+            placeholder="Phone Number"
+            value={phoneNumber}
+            onChangeText={setPhoneNumber}
+            keyboardType="phone-pad"
+          />
+          <TouchableOpacity
+            style={styles.confirmButton}
+            onPress={handlePhoneSubmit}
+          >
+            <Text style={styles.buttonText}>Submit</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.button, styles.cancelButton]}
+            onPress={() => setShowPhoneModal(false)}
+          >
+            <Text style={styles.buttonText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  const InterviewBanner = () => {
+    if (!acceptedInterview) return null;
+
+    const interviewDate = new Date(acceptedInterview.date);
+    const now = new Date();
+    if (interviewDate < now) return null;
+
+    return (
+      <View style={styles.bannerContainer}>
+        <Text style={styles.bannerText}>
+          Interview scheduled for {interviewDate.toLocaleDateString()} at {acceptedInterview.startTime}
+        </Text>
+      </View>
+    );
+  };
+
+  const PendingInterviewCard = () => {
+    console.log('Rendering PendingInterviewCard:', { 
+      pendingInterview, 
+      role,
+      userId: auth.currentUser?.uid 
+    });
+    
+    if (!pendingInterview || role !== 'worker') {
+      console.log('Not showing card because:', {
+        hasPendingInterview: !!pendingInterview,
+        isWorker: role === 'worker'
+      });
+      return null;
+    }
+
+    return (
+      <View style={styles.interviewCard}>
+        <Text style={styles.interviewTitle}>Pending Interview Request</Text>
+        <Text>Date: {pendingInterview.date}</Text>
+        <Text>Time: {pendingInterview.startTime} - {pendingInterview.endTime}</Text>
+        <TouchableOpacity
+          style={styles.acceptButton}
+          onPress={handleAcceptInterview}
+        >
+          <Text style={styles.buttonText}>Accept Interview</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  const handlePhoneChange = (text) => {
+    // Store raw input (digits only)
+    const cleaned = text.replace(/\D/g, '');
+    setRawPhoneNumber(cleaned);
+    
+    // Store formatted version for display
+    const formatted = formatPhoneNumber(cleaned);
+    setPhoneNumber(formatted);
+  };
+
+  const isValidPhoneNumber = (number) => {
+    const cleaned = number.replace(/\D/g, '');
+    return cleaned.length === 10;
+  };
+
+  const handleSubmitPhone = () => {
+    if (!isValidPhoneNumber(rawPhoneNumber)) {
+      Alert.alert('Invalid Phone Number', 'Please enter a valid 10-digit phone number');
+      return;
+    }
+    // ... rest of your submit logic ...
+  };
+
+  const handlePostInterviewDecision = async () => {
+    if (!isEmployer) return;
+    
+    Alert.alert(
+      'Interview Complete',
+      'Would you like to proceed with hiring this worker?',
+      [
+        {
+          text: 'No',
+          style: 'cancel',
+          onPress: () => {
+            // Update interview status to declined
+            updateInterviewStatus('declined');
+          }
+        },
+        {
+          text: 'Yes',
+          onPress: () => {
+            setShowScheduleModal(true);
+          }
+        }
+      ]
+    );
+  };
+
+  const ScheduleModal = () => {
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    
+    return (
+      <Modal
+        visible={showScheduleModal}
+        animationType="slide"
+        transparent={true}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Set Work Schedule</Text>
+            
+            {/* Days Selection */}
+            <View style={styles.daysContainer}>
+              {days.map(day => (
+                <TouchableOpacity
+                  key={day}
+                  style={[
+                    styles.dayButton,
+                    selectedDays.includes(day) && styles.selectedDay
+                  ]}
+                  onPress={() => {
+                    setSelectedDays(prev => 
+                      prev.includes(day) 
+                        ? prev.filter(d => d !== day)
+                        : [...prev, day]
+                    );
+                  }}
+                >
+                  <Text>{day.slice(0, 3)}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* Time Selection */}
+            <View style={styles.timeContainer}>
+              <TouchableOpacity
+                onPress={() => setShowStartTimePicker(true)}
+                style={styles.timeButton}
+              >
+                <Text>Start: {workSchedule.startTime || 'Select'}</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                onPress={() => setShowEndTimePicker(true)}
+                style={styles.timeButton}
+              >
+                <Text>End: {workSchedule.endTime || 'Select'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.submitButton}
+              onPress={handleScheduleSubmit}
+            >
+              <Text style={styles.submitButtonText}>Submit Offer</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    );
+  };
+
+  const handleScheduleSubmit = async () => {
+    if (!selectedDays.length || !workSchedule.startTime || !workSchedule.endTime) {
+      Alert.alert('Error', 'Please select days and times');
+      return;
+    }
+
+    try {
+      // Create job offer document
+      const offerRef = await addDoc(collection(db, 'job_offers'), {
+        matchId,
+        employerId: auth.currentUser.uid,
+        workerId: otherUserId,
+        schedule: {
+          days: selectedDays,
+          startTime: workSchedule.startTime,
+          endTime: workSchedule.endTime
+        },
+        status: 'pending',
+        createdAt: serverTimestamp()
+      });
+
+      // Add system message about the job offer
+      await addDoc(collection(db, 'chats', matchId, 'messages'), {
+        text: `Job offer sent with schedule: ${selectedDays.join(', ')} from ${workSchedule.startTime} to ${workSchedule.endTime}`,
+        system: true,
+        timestamp: serverTimestamp()
+      });
+
+      setShowScheduleModal(false);
+      Alert.alert('Success', 'Job offer sent successfully');
+    } catch (error) {
+      console.error('Error sending job offer:', error);
+      Alert.alert('Error', 'Failed to send job offer');
+    }
+  };
+
   return (
     <KeyboardAvoidingView 
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
     >
+      <View style={styles.interviewContainer}>
+        <PendingInterviewCard />
+      </View>
+      <InterviewBanner />
       {renderMessages()}
       
       <View style={styles.suggestionsWrapper}>
@@ -800,6 +1114,9 @@ export default function ChatScreen({ route, navigation }) {
           onChange={handleEndTimeSelect}
         />
       )}
+
+      <PhoneNumberModal />
+      <ScheduleModal />
     </KeyboardAvoidingView>
   );
 }
@@ -967,11 +1284,14 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   phoneInput: {
+    height: 50,
     borderWidth: 1,
     borderColor: '#ccc',
-    padding: 10,
-    borderRadius: 20,
-    marginVertical: 10,
+    borderRadius: 8,
+    paddingHorizontal: 15,
+    fontSize: 16,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace', // Fixed-width font
+    minWidth: 200, // Set minimum width to prevent layout shifts
   },
   messagesContainer: {
     flexGrow: 1,
@@ -1090,5 +1410,124 @@ const styles = StyleSheet.create({
   closeButtonText: {
     color: 'white',
     fontSize: 16,
+  },
+  interviewCard: {
+    backgroundColor: '#fff',
+    padding: 15,
+    margin: 10,
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  interviewTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  acceptButton: {
+    backgroundColor: '#4CAF50',
+    padding: 10,
+    borderRadius: 5,
+    marginTop: 10,
+    alignItems: 'center',
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  bannerContainer: {
+    backgroundColor: '#4CAF50',
+    padding: 10,
+    width: '100%',
+  },
+  bannerText: {
+    color: 'white',
+    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+  phoneInput: {
+    borderWidth: 1,
+    borderColor: '#ccc',
+    padding: 10,
+    borderRadius: 5,
+    marginBottom: 15,
+    width: '100%',
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    padding: 20,
+    borderRadius: 10,
+    width: '80%',
+    alignItems: 'center',
+  },
+  interviewContainer: {
+    width: '100%',
+    padding: 10,
+    zIndex: 1,
+  },
+  interviewCard: {
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+    marginBottom: 10,
+  },
+  acceptButton: {
+    backgroundColor: '#4CAF50',
+    padding: 10,
+    borderRadius: 5,
+    marginTop: 10,
+    alignItems: 'center',
+  },
+  buttonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+  },
+  daysContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    marginVertical: 10,
+  },
+  dayButton: {
+    padding: 10,
+    margin: 5,
+    borderWidth: 1,
+    borderRadius: 5,
+  },
+  selectedDay: {
+    backgroundColor: '#007AFF',
+  },
+  offerCard: {
+    backgroundColor: '#f0f0f0',
+    padding: 15,
+    margin: 10,
+    borderRadius: 10,
+  },
+  offerButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: 10,
   },
 });

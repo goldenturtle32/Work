@@ -1,18 +1,56 @@
 import React, { useState, useEffect } from 'react';
-import { View, TextInput, TouchableOpacity, FlatList, Text, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  Alert,
+  Modal,
+  StyleSheet,
+  FlatList,
+  TouchableWithoutFeedback,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePickerModal from "react-native-modal-datetime-picker";
 import { db, auth, firebase } from '../firebase';
+import { createInterview } from '../services/firestoreService';
+import { Calendar } from 'react-native-calendars';
+import { 
+  collection, 
+  addDoc, 
+  serverTimestamp 
+} from 'firebase/firestore';
+
+// Define BACKEND_URL constant
+const BACKEND_URL = 'http://127.0.0.1:5000';
 
 export default function ChatScreen({ route, navigation }) {
-  const { jobTitle, company, role, matchId } = route.params;
+  const { matchId, role, jobTitle, company } = route.params;
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState([]);
-  const [isDatePickerVisible, setDatePickerVisibility] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [suggestions, setSuggestions] = useState([]);
-  const BACKEND_URL = 'http://127.0.0.1:5000';
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showTimeSlotModal, setShowTimeSlotModal] = useState(false);
+  const [showWorkerResponseModal, setShowWorkerResponseModal] = useState(false);
+  const [selectedTimeSlots, setSelectedTimeSlots] = useState([]);
+  const [currentInterview, setCurrentInterview] = useState(null);
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [selectedSlot, setSelectedSlot] = useState(null);
+  const [isDatePickerVisible, setDatePickerVisible] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [selectedTime, setSelectedTime] = useState(null);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showStartTimePicker, setShowStartTimePicker] = useState(false);
+  const [showEndTimePicker, setShowEndTimePicker] = useState(false);
+  const [startTime, setStartTime] = useState(new Date());
+  const [endTime, setEndTime] = useState(new Date());
+  const [showCalendar, setShowCalendar] = useState(false);
+
+  const isEmployer = role === 'employer';
+  const otherUserId = matchId?.split('_')[isEmployer ? 1 : 0];
 
   useEffect(() => {
     const unsubscribe = db.collection('chats')
@@ -27,10 +65,8 @@ export default function ChatScreen({ route, navigation }) {
             timestamp: doc.data().timestamp?.toDate() || new Date()
           }));
           setMessages(newMessages);
-          setLoading(false);
         } catch (error) {
           console.error("Error processing messages:", error);
-          setLoading(false);
         }
       }, error => {
         console.error("Error fetching messages:", error);
@@ -38,7 +74,6 @@ export default function ChatScreen({ route, navigation }) {
           'Error',
           'Unable to load messages. Please check your connection and try again.'
         );
-        setLoading(false);
       });
 
     return () => unsubscribe();
@@ -47,6 +82,29 @@ export default function ChatScreen({ route, navigation }) {
   useEffect(() => {
     generateSuggestions();
   }, [messages]);
+
+  useEffect(() => {
+    // Listen for interview updates
+    const unsubscribe = db.collection('interviews')
+      .where('matchId', '==', matchId)
+      .onSnapshot(snapshot => {
+        const interview = snapshot.docs[0]?.data();
+        if (interview) {
+          // Update UI based on interview status
+          if (interview.status === 'scheduled' && !interview.calendarEventId) {
+            createCalendarEvent(interview).then(eventId => {
+              if (eventId) {
+                db.collection('interviews')
+                  .doc(snapshot.docs[0].id)
+                  .update({ calendarEventId: eventId });
+              }
+            });
+          }
+        }
+      });
+
+    return () => unsubscribe();
+  }, [matchId]);
 
   const generateSuggestions = async () => {
     try {
@@ -101,9 +159,8 @@ export default function ChatScreen({ route, navigation }) {
     }
   };
 
-  const sendSuggestion = async (suggestionText) => {
+  const sendSuggestion = (suggestionText) => {
     setMessage(suggestionText);
-    await sendMessage(suggestionText);
   };
 
   const sendMessage = async () => {
@@ -201,26 +258,14 @@ export default function ChatScreen({ route, navigation }) {
     );
   };
 
-  const showDatePicker = () => setDatePickerVisibility(true);
-  const hideDatePicker = () => setDatePickerVisibility(false);
+  const hideDatePicker = () => {
+    setDatePickerVisibility(false);
+  };
 
-  const handleConfirm = async (date) => {
+  const handleConfirmDate = (date) => {
+    console.log("Selected date:", date);
+    setSelectedTimeSlots([...selectedTimeSlots, date]);
     hideDatePicker();
-    const formattedDate = date.toLocaleString();
-    const scheduleMessage = {
-      text: `Call scheduled for ${formattedDate}`,
-      sender: 'system',
-      timestamp: firebase.firestore.FieldValue.serverTimestamp()
-    };
-    
-    try {
-      await db.collection('chats')
-        .doc(matchId)
-        .collection('messages')
-        .add(scheduleMessage);
-    } catch (error) {
-      console.error('Error saving schedule:', error);
-    }
   };
 
   const suggestAction = async (action) => {
@@ -254,48 +299,339 @@ export default function ChatScreen({ route, navigation }) {
   };
 
   const refreshSuggestions = async () => {
-    if (isRefreshing) return;
-    
     setIsRefreshing(true);
-    console.log("Refreshing suggestions...");
-    try {
-      const lastMessages = messages.slice(0, 3).map(msg => ({
-        text: msg.text,
-        sender: msg.sender
-      }));
+    await generateSuggestions();
+    setIsRefreshing(false);
+  };
 
-      const response = await fetch(`${BACKEND_URL}/generate-chat-suggestions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          role: role,
-          jobTitle: jobTitle,
-          company: company,
-          recentMessages: lastMessages,
-          context: {
-            isWorker: role === 'worker',
-            jobTitle: jobTitle,
-            company: company
-          }
-        }),
-      });
+  const ScheduleButton = () => (
+    <TouchableOpacity 
+      style={styles.scheduleButton}
+      onPress={() => setShowTimeSlotModal(true)}
+    >
+      <Text style={styles.scheduleButtonText}>Schedule Interview</Text>
+    </TouchableOpacity>
+  );
 
-      if (!response.ok) {
-        console.error("Failed to get suggestions:", response.status);
-        throw new Error('Failed to get suggestions');
-      }
-      
-      const data = await response.json();
-      console.log("New suggestions received:", data.suggestions);
-      setSuggestions(data.suggestions);
-    } catch (error) {
-      console.error('Error refreshing suggestions:', error);
-      setSuggestions(getStaticSuggestions());
-    } finally {
-      setIsRefreshing(false);
+  const handleConfirm = (date) => {
+    console.log("Selected date:", date);
+    setSelectedTimeSlots([...selectedTimeSlots, date]);
+    setDatePickerVisible(false);
+  };
+
+  const handleCancel = () => {
+    setDatePickerVisible(false);
+  };
+
+  const handleSubmitTimeSlots = async () => {
+    if (selectedTimeSlots.length === 0) {
+      Alert.alert('Error', 'Please add at least one time slot');
+      return;
     }
+
+    try {
+      await createInterview({
+        matchId,
+        employerId: auth.currentUser.uid,
+        workerId: otherUserId,
+        timeSlots: selectedTimeSlots.map(slot => ({
+          datetime: slot,
+          selected: false
+        }))
+      });
+      
+      await sendSystemMessage('Interview time slots have been shared. Please select a preferred time.');
+      setShowTimeSlotModal(false);
+      setSelectedTimeSlots([]);
+    } catch (error) {
+      console.error('Error submitting time slots:', error);
+      Alert.alert('Error', 'Failed to submit time slots');
+    }
+  };
+
+  const sendSystemMessage = async (text) => {
+    try {
+      await db.collection('chats')
+        .doc(matchId)
+        .collection('messages')
+        .add({
+          text,
+          sender: 'system',
+          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          read: false
+        });
+    } catch (error) {
+      console.error('Error sending system message:', error);
+    }
+  };
+
+  const onDateSelect = (event, selectedDate) => {
+    setShowDatePicker(false);
+    if (selectedDate) {
+      setSelectedDate(selectedDate);
+    }
+  };
+
+  const TimeSlotModal = () => {
+    const [selectedStartTime, setSelectedStartTime] = useState('');
+    const [selectedEndTime, setSelectedEndTime] = useState('');
+    const [selectedDate, setSelectedDate] = useState('');
+    const [showCalendar, setShowCalendar] = useState(false);
+
+    const handleTimeSlotSelection = async () => {
+      if (!selectedStartTime || !selectedEndTime || !selectedDate) {
+        Alert.alert('Please select both start time, end time and date');
+        return;
+      }
+
+      try {
+        const currentUser = auth.currentUser;
+        if (!currentUser) {
+          Alert.alert('Error', 'You must be logged in to schedule interviews');
+          return;
+        }
+
+        await addDoc(collection(db, 'interviews'), {
+          employerId: currentUser.uid,
+          workerId: matchId,
+          startTime: selectedStartTime,
+          endTime: selectedEndTime,
+          date: selectedDate,
+          status: 'pending',
+          createdAt: serverTimestamp()
+        });
+
+        Alert.alert('Success', 'Interview scheduled successfully');
+        setShowTimeSlotModal(false);
+      } catch (error) {
+        console.error('Error scheduling interview:', error);
+        Alert.alert('Error', 'Failed to schedule interview');
+      }
+    };
+
+    return (
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showTimeSlotModal}
+        onRequestClose={() => setShowTimeSlotModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Calendar
+              onDayPress={(day) => setSelectedDate(day.dateString)}
+              markedDates={{
+                [selectedDate]: { selected: true }
+              }}
+            />
+            
+            {selectedDate && (
+              <View style={styles.timeInputContainer}>
+                <TextInput
+                  style={styles.timeInput}
+                  placeholder="Start Time (HH:MM)"
+                  value={selectedStartTime}
+                  onChangeText={setSelectedStartTime}
+                />
+                <TextInput
+                  style={styles.timeInput}
+                  placeholder="End Time (HH:MM)"
+                  value={selectedEndTime}
+                  onChangeText={setSelectedEndTime}
+                />
+              </View>
+            )}
+
+            <View style={styles.buttonContainer}>
+              <TouchableOpacity 
+                style={styles.confirmButton}
+                onPress={handleTimeSlotSelection}
+              >
+                <Text style={styles.buttonText}>Confirm</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={[styles.button, styles.cancelButton]}
+                onPress={() => setShowTimeSlotModal(false)}
+              >
+                <Text style={styles.buttonText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    );
+  };
+
+  const WorkerResponseModal = () => {
+    // Early return if no interview data
+    if (!currentInterview) return null;
+
+    return (
+      <Modal
+        visible={showWorkerResponseModal}
+        animationType="slide"
+        transparent={true}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Select Interview Time</Text>
+            <ScrollView>
+              {currentInterview.timeSlots.map((slot, index) => (
+                <TouchableOpacity 
+                  key={index}
+                  style={[
+                    styles.timeSlotOption,
+                    selectedSlot === slot.datetime.toDate().getTime() && styles.selectedSlot
+                  ]}
+                  onPress={() => setSelectedSlot(slot.datetime.toDate().getTime())}
+                >
+                  <Text style={styles.timeSlotText}>
+                    {slot.datetime.toDate().toLocaleString()}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            
+            <TextInput
+              style={styles.phoneInput}
+              placeholder="Your phone number"
+              value={phoneNumber}
+              onChangeText={setPhoneNumber}
+              keyboardType="phone-pad"
+            />
+            
+            <TouchableOpacity
+              style={styles.submitButton}
+              onPress={handleWorkerSubmitSelection}
+            >
+              <Text style={styles.submitButtonText}>Confirm Selection</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={() => setShowWorkerResponseModal(false)}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    );
+  };
+
+  const renderMessages = () => (
+    <FlatList
+      data={messages}
+      renderItem={renderMessageItem}
+      keyExtractor={item => item.id}
+      inverted
+      contentContainerStyle={styles.messagesContainer}
+    />
+  );
+
+  const onDateChange = (event, selected) => {
+    setShowDatePicker(false);
+    if (selected) {
+      setSelectedDate(selected);
+      setShowStartTimePicker(true);
+    }
+  };
+
+  const onStartTimeChange = (event, selected) => {
+    setShowStartTimePicker(false);
+    if (selected) {
+      setStartTime(selected);
+      setShowEndTimePicker(true);
+    }
+  };
+
+  const onEndTimeChange = (event, selected) => {
+    setShowEndTimePicker(false);
+    if (selected) {
+      setEndTime(selected);
+      // Here you can handle saving the interview schedule
+      handleSaveSchedule();
+    }
+  };
+
+  const handleScheduleInterview = () => {
+    setShowCalendar(true);
+  };
+
+  const handleDateSelect = (date) => {
+    setSelectedDate(date.dateString);
+  };
+
+  const handleTimeSelect = async () => {
+    if (!selectedDate || !selectedStartTime || !selectedEndTime) {
+      Alert.alert('Please select both date and times');
+      return;
+    }
+
+    try {
+      const interviewData = {
+        date: selectedDate,
+        startTime: selectedStartTime,
+        endTime: selectedEndTime,
+        employerId: auth.currentUser.uid,
+        workerId: otherUserId,
+        status: 'pending',
+        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+      };
+
+      await createInterview(interviewData);
+      
+      // Send a message about the interview
+      const message = `Interview scheduled for ${selectedDate} from ${selectedStartTime} to ${selectedEndTime}`;
+      await sendMessage(message, 'interview');
+      
+      setShowCalendar(false);
+      setSelectedDate(null);
+      setSelectedStartTime('');
+      setSelectedEndTime('');
+    } catch (error) {
+      console.error('Error scheduling interview:', error);
+      Alert.alert('Error', 'Failed to schedule interview');
+    }
+  };
+
+  const handleSaveInterview = async () => {
+    try {
+      const interviewData = {
+        date: selectedDate,
+        startTime: startTime.toLocaleTimeString(),
+        endTime: endTime.toLocaleTimeString(),
+        workerId: matchId.split('_')[1],
+        employerId: auth.currentUser.uid,
+        status: 'pending',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      };
+
+      await createInterview(interviewData);
+      
+      // Send a message about the interview
+      const message = `Interview scheduled for ${selectedDate} from ${startTime.toLocaleTimeString()} to ${endTime.toLocaleTimeString()}`;
+      setMessage(message);
+      handleSend();
+      
+    } catch (error) {
+      console.error('Error scheduling interview:', error);
+      Alert.alert('Error', 'Failed to schedule interview');
+    }
+  };
+
+  const handleSaveSchedule = async () => {
+    const scheduleData = {
+      date: selectedDate.toISOString().split('T')[0],
+      startTime: startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      endTime: endTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+    
+    // Send a message with the schedule
+    const scheduleMessage = `Interview scheduled for ${scheduleData.date} from ${scheduleData.startTime} to ${scheduleData.endTime}`;
+    setMessage(scheduleMessage);
+    // You can then call your sendMessage function
   };
 
   return (
@@ -304,14 +640,8 @@ export default function ChatScreen({ route, navigation }) {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
     >
-      <FlatList
-        data={messages}
-        keyExtractor={(item) => item.id}
-        renderItem={renderMessageItem}
-        inverted
-        style={styles.chatArea}
-      />
-
+      {renderMessages()}
+      
       <View style={styles.suggestionsWrapper}>
         <ScrollView 
           horizontal 
@@ -340,39 +670,136 @@ export default function ChatScreen({ route, navigation }) {
         </TouchableOpacity>
       </View>
 
+      {/* Message Input */}
       <View style={styles.inputContainer}>
         <TextInput
+          style={styles.input}
           value={message}
           onChangeText={setMessage}
-          placeholder="Type your message..."
-          style={styles.input}
+          placeholder="Type a message..."
           multiline
         />
-        <TouchableOpacity onPress={sendMessage} style={styles.sendButton}>
+        <TouchableOpacity 
+          style={styles.sendButton} 
+          onPress={sendMessage}
+        >
           <Ionicons name="send" size={24} color="#007AFF" />
         </TouchableOpacity>
       </View>
 
-      {role === 'employer' && (
-        <View style={styles.actionContainer}>
-          <TouchableOpacity onPress={showDatePicker} style={styles.actionButton}>
-            <Ionicons name="calendar" size={24} color="#007AFF" />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => suggestAction('qualifications')} style={styles.actionButton}>
-            <Ionicons name="document-text" size={24} color="#007AFF" />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => suggestAction('experience')} style={styles.actionButton}>
-            <Ionicons name="briefcase" size={24} color="#007AFF" />
-          </TouchableOpacity>
-        </View>
+      {isEmployer && (
+        <TouchableOpacity
+          style={styles.scheduleButton}
+          onPress={() => setShowTimeSlotModal(true)}
+        >
+          <Text style={styles.scheduleButtonText}>Schedule Interview</Text>
+        </TouchableOpacity>
       )}
 
-      <DateTimePickerModal
-        isVisible={isDatePickerVisible}
-        mode="datetime"
-        onConfirm={handleConfirm}
-        onCancel={hideDatePicker}
-      />
+      <TimeSlotModal />
+      <WorkerResponseModal />
+
+      {showDatePicker && (
+        <DateTimePicker
+          value={selectedDate}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={onDateChange}
+          minimumDate={new Date()}
+        />
+      )}
+
+      {showStartTimePicker && (
+        <DateTimePicker
+          value={startTime}
+          mode="time"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={onStartTimeChange}
+        />
+      )}
+
+      {showEndTimePicker && (
+        <DateTimePicker
+          value={endTime}
+          mode="time"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={onEndTimeChange}
+        />
+      )}
+
+      {showCalendar && (
+        <Modal
+          transparent={true}
+          visible={showCalendar}
+          onRequestClose={() => setShowCalendar(false)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.calendarContainer}>
+              <Calendar
+                onDayPress={handleDateSelect}
+                minDate={new Date().toISOString().split('T')[0]}
+                markedDates={{
+                  [selectedDate]: {selected: true, selectedColor: '#007AFF'}
+                }}
+              />
+              
+              <View style={styles.timeInputContainer}>
+                <Text style={styles.timeLabel}>Start Time:</Text>
+                <TextInput
+                  style={styles.timeInput}
+                  type="time"
+                  value={selectedStartTime}
+                  onChange={(e) => setSelectedStartTime(e.target.value)}
+                  placeholder="HH:MM"
+                />
+                
+                <Text style={styles.timeLabel}>End Time:</Text>
+                <TextInput
+                  style={styles.timeInput}
+                  type="time"
+                  value={selectedEndTime}
+                  onChange={(e) => setSelectedEndTime(e.target.value)}
+                  placeholder="HH:MM"
+                />
+              </View>
+
+              <TouchableOpacity
+                style={styles.scheduleButton}
+                onPress={handleTimeSelect}
+              >
+                <Text style={styles.scheduleButtonText}>Schedule Interview</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.closeButton}
+                onPress={() => setShowCalendar(false)}
+              >
+                <Text style={styles.closeButtonText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      )}
+
+      {showStartTimePicker && (
+        <DateTimePicker
+          value={startTime}
+          mode="time"
+          is24Hour={false}
+          display="default"
+          onChange={handleStartTimeSelect}
+        />
+      )}
+
+      {showEndTimePicker && (
+        <DateTimePicker
+          value={endTime}
+          mode="time"
+          is24Hour={false}
+          display="default"
+          onChange={handleEndTimeSelect}
+        />
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -467,5 +894,201 @@ const styles = StyleSheet.create({
     padding: 10,
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
+  },
+  scheduleButton: {
+    backgroundColor: '#007AFF',
+    padding: 10,
+    borderRadius: 20,
+    alignItems: 'center',
+    marginVertical: 10,
+  },
+  scheduleButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    padding: 20,
+    borderRadius: 10,
+    width: '90%',
+    maxHeight: '80%',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+  calendar: {
+    marginBottom: 15,
+  },
+  timeSlotContainer: {
+    marginTop: 10,
+  },
+  timeInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+    justifyContent: 'space-between',
+  },
+  timeInput: {
+    borderWidth: 1,
+    borderColor: '#ccc',
+    padding: 8,
+    width: '70%',
+    borderRadius: 5,
+  },
+  buttonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: 15,
+  },
+  confirmButton: {
+    backgroundColor: '#2196F3',
+    padding: 10,
+    borderRadius: 5,
+    width: '45%',
+  },
+  cancelButton: {
+    backgroundColor: '#ff6b6b',
+    padding: 10,
+    borderRadius: 5,
+    width: '45%',
+  },
+  buttonText: {
+    color: 'white',
+    textAlign: 'center',
+    fontWeight: 'bold',
+  },
+  phoneInput: {
+    borderWidth: 1,
+    borderColor: '#ccc',
+    padding: 10,
+    borderRadius: 20,
+    marginVertical: 10,
+  },
+  messagesContainer: {
+    flexGrow: 1,
+    paddingHorizontal: 10,
+  },
+  suggestionsContainer: {
+    maxHeight: 50,
+    paddingHorizontal: 10,
+    marginBottom: 10,
+  },
+  suggestionButton: {
+    backgroundColor: '#f0f0f0',
+    padding: 10,
+    borderRadius: 20,
+    marginRight: 10,
+  },
+  suggestionText: {
+    color: '#007AFF',
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    padding: 10,
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: '#ddd',
+    backgroundColor: 'white',
+  },
+  input: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 20,
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    marginRight: 10,
+    maxHeight: 100,
+  },
+  sendButton: {
+    padding: 10,
+  },
+  timeSlotContainer: {
+    maxHeight: 300,
+    marginVertical: 10,
+  },
+  timeSlot: {
+    padding: 15,
+    borderRadius: 8,
+    marginVertical: 5,
+    backgroundColor: '#f0f0f0',
+  },
+  selectedTimeSlot: {
+    backgroundColor: '#007AFF',
+  },
+  timeSlotText: {
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  selectedTimeSlotText: {
+    color: 'white',
+  },
+  addButton: {
+    backgroundColor: '#007AFF',
+    padding: 15,
+    borderRadius: 8,
+    marginTop: 10,
+  },
+  buttonText: {
+    color: 'white',
+    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  calendarContainer: {
+    backgroundColor: 'white',
+    padding: 20,
+    borderRadius: 10,
+    width: '90%',
+    maxWidth: 400,
+  },
+  timeInputContainer: {
+    marginTop: 20,
+    width: '100%',
+  },
+  timeLabel: {
+    fontSize: 16,
+    marginBottom: 5,
+    color: '#333',
+  },
+  timeInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 5,
+    padding: 10,
+    marginBottom: 15,
+    fontSize: 16,
+  },
+  scheduleButton: {
+    backgroundColor: '#007AFF',
+    padding: 15,
+    borderRadius: 5,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  scheduleButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  closeButton: {
+    marginTop: 10,
+    padding: 10,
+    backgroundColor: '#ff4444',
+    borderRadius: 5,
+    alignItems: 'center',
+  },
+  closeButtonText: {
+    color: 'white',
+    fontSize: 16,
   },
 });
