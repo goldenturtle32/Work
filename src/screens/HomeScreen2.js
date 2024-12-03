@@ -32,12 +32,120 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
   return Math.round(distance);
 };
 
+const checkTimeOverlap = (slot1, slot2) => {
+  const [start1H, start1M] = slot1.startTime.split(':').map(Number);
+  const [end1H, end1M] = slot1.endTime.split(':').map(Number);
+  const [start2H, start2M] = slot2.startTime.split(':').map(Number);
+  const [end2H, end2M] = slot2.endTime.split(':').map(Number);
+
+  const start1 = start1H * 60 + start1M;
+  const end1 = end1H * 60 + end1M;
+  const start2 = start2H * 60 + start2M;
+  const end2 = end2H * 60 + end2M;
+
+  return (start1 < end2 && end1 > start2);
+};
+
+const checkDayAvailabilityMatch = (userAvailability, itemAvailability, date) => {
+  const dayOfWeek = new Date(date).toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+  
+  // Find matching day in user's availability
+  const userDaySlots = Object.entries(userAvailability || {}).find(([userDate]) => {
+    const userDayOfWeek = new Date(userDate).toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+    return userDayOfWeek === dayOfWeek;
+  });
+
+  if (!userDaySlots) return false;
+
+  // Check if any time slots overlap
+  const [_, userData] = userDaySlots;
+  return itemAvailability.slots.some(itemSlot => 
+    userData.slots.some(userSlot => checkTimeOverlap(itemSlot, userSlot))
+  );
+};
+
+// Create a separate component for rendering skills
+const SkillsList = ({ skills, userSkills }) => {
+  const [relevanceMap, setRelevanceMap] = useState(new Map());
+  const [sortedSkills, setSortedSkills] = useState([]);
+
+  useEffect(() => {
+    const checkRelevance = async () => {
+      if (!skills || !userSkills) return;
+      
+      const newRelevanceMap = new Map();
+      const relevantSkills = [];
+      const otherSkills = [];
+      
+      for (const jobSkill of skills) {
+        if (!jobSkill || typeof jobSkill !== 'string') continue;
+        
+        // Check for exact matches first
+        const isRelevant = userSkills.some(userSkill => 
+          userSkill && typeof userSkill === 'string' && 
+          userSkill.toLowerCase() === jobSkill.toLowerCase()
+        );
+        
+        if (isRelevant) {
+          newRelevanceMap.set(jobSkill, true);
+          relevantSkills.push(jobSkill);
+        } else {
+          otherSkills.push(jobSkill);
+        }
+      }
+      
+      // Sort relevant skills first (limited to 5), then other skills
+      setSortedSkills([
+        ...relevantSkills.slice(0, 5),
+        ...otherSkills
+      ]);
+      setRelevanceMap(newRelevanceMap);
+    };
+
+    checkRelevance();
+  }, [skills, userSkills]);
+
+  if (!skills || !Array.isArray(skills) || skills.length === 0) {
+    return (
+      <View style={styles.skillsContainer}>
+        <Text style={styles.value}>No Skills Set</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.skillsContainer}>
+      {sortedSkills.map((skill, index) => {
+        if (!skill || typeof skill !== 'string') return null;
+        
+        return (
+          <View 
+            key={`${skill}-${index}`}
+            style={[
+              styles.skillBubble,
+              relevanceMap.get(skill) && styles.matchingSkillBubble
+            ]}
+          >
+            <Text style={[
+              styles.skillText,
+              relevanceMap.get(skill) && styles.matchingSkillText
+            ]}>
+              {skill}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+};
+
 export default function HomeScreen({ navigation }) {
   const [items, setItems] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const swiperRef = useRef(null);
+  const [userSkills, setUserSkills] = useState([]);
 
   let [fontsLoaded] = useFonts({
     LibreBodoni_400Regular,
@@ -124,6 +232,42 @@ export default function HomeScreen({ navigation }) {
 
     fetchUserAndItems();
   }, []);
+
+  useEffect(() => {
+    const fetchUserSkills = async () => {
+      try {
+        const userDoc = await db.collection('user_attributes')
+          .doc(auth.currentUser.uid)
+          .get();
+        if (userDoc.exists) {
+          setUserSkills(userDoc.data().skills || []);
+        }
+      } catch (error) {
+        console.error('Error fetching user skills:', error);
+      }
+    };
+    fetchUserSkills();
+  }, []);
+
+  const checkSkillRelevance = async (skill1, skill2) => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/check-skill-relevance`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          skill1,
+          skill2
+        })
+      });
+      const data = await response.json();
+      return data.isRelevant;
+    } catch (error) {
+      console.error('Error checking skill relevance:', error);
+      return false;
+    }
+  };
 
   const handleSwipe = async (cardIndex, interested) => {
     const item = items[cardIndex];
@@ -273,6 +417,12 @@ export default function HomeScreen({ navigation }) {
 
   const renderCard = (item) => {
     if (!item) return null;
+    
+    // Calculate weekly hours and estimated pay
+    const weeklyHours = item.availability ? item.weeklyHours : null;
+    const estimatedWeeklyPayMin = weeklyHours ? (item.salaryRange?.min || 0) * weeklyHours : null;
+    const estimatedWeeklyPayMax = weeklyHours ? (item.salaryRange?.max || 0) * weeklyHours : null;
+
     return (
       <TouchableOpacity
         style={styles.card}
@@ -307,27 +457,27 @@ export default function HomeScreen({ navigation }) {
               </View>
 
               <View style={styles.infoContainer}>
-                <Text style={styles.label}>Weekly Hours</Text>
-                <Text style={styles.value}>{item.weeklyHours || 0} hours</Text>
+                <Text style={styles.label}>Estimated Weekly Hours</Text>
+                <Text style={styles.value}>
+                  {weeklyHours ? `${weeklyHours} hours` : 'No Availability Set'}
+                </Text>
               </View>
 
               <View style={styles.infoContainer}>
                 <Text style={styles.label}>Estimated Weekly Pay</Text>
                 <Text style={styles.value}>
-                  ${((item.salaryRange?.min || 0) * (item.weeklyHours || 0)).toLocaleString()} - 
-                  ${((item.salaryRange?.max || 0) * (item.weeklyHours || 0)).toLocaleString()}
+                  {weeklyHours ? 
+                    `$${estimatedWeeklyPayMin.toLocaleString()} - $${estimatedWeeklyPayMax.toLocaleString()}` : 
+                    'No Availability Set'}
                 </Text>
               </View>
 
               <View style={styles.infoContainer}>
-                <Text style={styles.label}>Skills</Text>
-                <View style={styles.skillsContainer}>
-                  {item.requiredSkills?.map((skill, index) => (
-                    <View key={index} style={styles.skillBubble}>
-                      <Text style={styles.skillText}>{skill}</Text>
-                    </View>
-                  ))}
-                </View>
+                <Text style={styles.label}>Relevant Skills</Text>
+                <SkillsList 
+                  skills={Array.isArray(item.requiredSkills) ? item.requiredSkills : []} 
+                  userSkills={Array.isArray(userSkills) ? userSkills : []} 
+                />
               </View>
 
               <View style={styles.infoContainer}>
@@ -337,21 +487,7 @@ export default function HomeScreen({ navigation }) {
                 </Text>
               </View>
 
-              <View style={styles.infoContainer}>
-                <Text style={styles.label}>Availability</Text>
-                <View style={styles.availabilityContainer}>
-                  {item.availability && Object.entries(item.availability).map(([date, dayData], index) => (
-                    <View key={index} style={styles.scheduleRow}>
-                      {dayData.slots?.map((slot, slotIndex) => (
-                        <Text key={`${index}-${slotIndex}`} style={[styles.value, styles.scheduleText]}>
-                          {new Date(date).toLocaleDateString('en-US', { weekday: 'long' })}: 
-                          {slot.startTime} - {slot.endTime}
-                        </Text>
-                      ))}
-                    </View>
-                  ))}
-                </View>
-              </View>
+              {renderAvailabilitySection(item)}
             </View>
           ) : (
             <View style={styles.cardContent}>
@@ -367,30 +503,19 @@ export default function HomeScreen({ navigation }) {
                   <Text style={styles.jobText}>{job.jobType || 'No Job Type'}</Text>
                   <Text style={styles.industryText}>{job.industry || 'No Industry'}</Text>
                   <View style={styles.skillsContainer}>
-                    {Array.isArray(job.skills) && job.skills.map((skill, skillIndex) => (
-                      <View key={skillIndex} style={styles.skillBubble}>
-                        <Text style={styles.skillText}>{skill}</Text>
-                      </View>
-                    ))}
+                    {Array.isArray(job.skills) && job.skills.map((skill, skillIndex) => {
+                      if (typeof skill !== 'string') return null;
+                      return (
+                        <View key={skillIndex} style={styles.skillBubble}>
+                          <Text style={styles.skillText}>{skill}</Text>
+                        </View>
+                      );
+                    })}
                   </View>
                 </View>
               ))}
 
-              <View style={styles.infoContainer}>
-                <Text style={styles.label}>Availability</Text>
-                <View style={styles.availabilityContainer}>
-                  {item.availability && Object.entries(item.availability).map(([date, dayData], index) => (
-                    <View key={index} style={styles.scheduleRow}>
-                      {dayData.slots?.map((slot, slotIndex) => (
-                        <Text key={`${index}-${slotIndex}`} style={[styles.value, styles.scheduleText]}>
-                          {new Date(date).toLocaleDateString('en-US', { weekday: 'long' })}: 
-                          {slot.startTime} - {slot.endTime}
-                        </Text>
-                      ))}
-                    </View>
-                  ))}
-                </View>
-              </View>
+              {renderAvailabilitySection(item)}
 
               <View style={styles.infoContainer}>
                 <Text style={styles.label}>Distance</Text>
@@ -402,6 +527,44 @@ export default function HomeScreen({ navigation }) {
           )}
         </LinearGradient>
       </TouchableOpacity>
+    );
+  };
+
+  const renderAvailabilitySection = (item) => {
+    if (!item?.availability) return null;
+    
+    return (
+      <View style={styles.infoContainer}>
+        <Text style={styles.label}>Availability</Text>
+        <View style={styles.availabilityContainer}>
+          {Object.entries(item.availability).map(([date, dayData], index) => {
+            const hasMatch = checkDayAvailabilityMatch(currentUser?.availability, dayData, date);
+            
+            return (
+              <View key={index} style={styles.scheduleRow}>
+                {dayData.slots?.map((slot, slotIndex) => (
+                  <View 
+                    key={`${index}-${slotIndex}`} 
+                    style={[
+                      styles.availabilityBubble,
+                      hasMatch && styles.availabilityBubbleMatch
+                    ]}
+                  >
+                    <Text style={[
+                      styles.value, 
+                      styles.scheduleText,
+                      hasMatch && styles.scheduleTextMatch
+                    ]}>
+                      {new Date(date).toLocaleDateString('en-US', { weekday: 'long' })}: 
+                      {slot.startTime} - {slot.endTime}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            );
+          })}
+        </View>
+      </View>
     );
   };
 
@@ -638,9 +801,9 @@ const styles = StyleSheet.create({
     marginBottom: 5,
   },
   value: {
-    fontFamily: 'DMSerifText_400Regular',
-    fontSize: 16,
     color: '#ffffff',
+    fontSize: 14,
+    fontFamily: 'LibreBodoni_400Regular',
   },
   skillsContainer: {
     flexDirection: 'row',
@@ -691,5 +854,27 @@ const styles = StyleSheet.create({
   skillsContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+  },
+  availabilityBubble: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    margin: 4,
+  },
+  availabilityBubbleMatch: {
+    backgroundColor: 'rgba(46, 204, 64, 0.2)',
+  },
+  scheduleTextMatch: {
+    color: '#4ade80',
+  },
+  matchingSkillBubble: {
+    backgroundColor: '#3b82f6',
+    borderColor: '#60a5fa',
+    borderWidth: 1,
+  },
+  matchingSkillText: {
+    color: '#ffffff',
+    fontWeight: 'bold',
   },
 });
