@@ -1,19 +1,17 @@
-const API_BASE_URL = process.env.NODE_ENV === 'development' 
-  ? 'http://localhost:5000'
-  : 'https://your-production-api.com';
+const BASE_URL = 'https://yourbackendapi.com';
 
 export const fetchJobs = async () => {
-  const response = await fetch(`${API_BASE_URL}/jobs`);
+  const response = await fetch(`${BASE_URL}/jobs`);
   return response.json();
 };
 
 export const fetchUserProfile = async (userId) => {
-  const response = await fetch(`${API_BASE_URL}/users/${userId}`);
+  const response = await fetch(`${BASE_URL}/users/${userId}`);
   return response.json();
 };
 
 export const applyForJob = async (jobId, userId) => {
-  const response = await fetch(`${API_BASE_URL}/jobs/apply`, {
+  const response = await fetch(`${BASE_URL}/jobs/apply`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
