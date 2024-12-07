@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Dimensions, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, Dimensions, TouchableOpacity, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import Swiper from 'react-native-deck-swiper';
 import { db, auth, firebase } from '../firebase';  // Make sure firebase is imported here
 import { Ionicons } from '@expo/vector-icons';
@@ -16,6 +16,7 @@ import {
   DMSerifText_400Regular 
 } from '@expo-google-fonts/dm-serif-text';
 import NewMatchModal from '../components/NewMatchModal';
+import styled from 'styled-components/native';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -140,6 +141,49 @@ const SkillsList = ({ skills, userSkills }) => {
   );
 };
 
+const Dot = styled.View`
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  margin: 0 4px;
+  background-color: ${props => props.active ? '#007AFF' : '#C4C4C4'};
+  transition: background-color 0.3s ease;
+`;
+
+const DotsContainer = styled.View`
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+`;
+
+const StyledWrapper = styled.View`
+  flex: 1;
+  justify-content: center;
+  align-items: center;
+`;
+
+const Loader = () => {
+  const [activeDot, setActiveDot] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setActiveDot((prev) => (prev + 1) % 3);
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <StyledWrapper>
+      <DotsContainer>
+        <Dot active={activeDot === 0} />
+        <Dot active={activeDot === 1} />
+        <Dot active={activeDot === 2} />
+      </DotsContainer>
+    </StyledWrapper>
+  );
+};
+
 export default function HomeScreen({ navigation }) {
   const [items, setItems] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
@@ -149,6 +193,7 @@ export default function HomeScreen({ navigation }) {
   const [userSkills, setUserSkills] = useState([]);
   const [showMatchModal, setShowMatchModal] = useState(false);
   const [matchedJob, setMatchedJob] = useState(null);
+  const [matchData, setMatchData] = useState(null);
 
   let [fontsLoaded] = useFonts({
     LibreBodoni_400Regular,
@@ -278,7 +323,6 @@ export default function HomeScreen({ navigation }) {
     const itemId = currentUser.role === 'worker' ? item.id : item.uid;
 
     try {
-      // Keep existing user_job_preferences creation
       const userJobPrefData = new UserJobPreference({
         userId: currentUserUid,
         role: currentUser.role,
@@ -288,9 +332,7 @@ export default function HomeScreen({ navigation }) {
 
       await db.collection('user_job_preferences').add(userJobPrefData.toObject());
 
-      // Add match checking logic only for right swipes
       if (interested) {
-        // Check if the other person has already swiped right
         const otherUserPrefs = await db.collection('user_job_preferences')
           .where('userId', '==', itemId)
           .where('swipedUserId', '==', currentUserUid)
@@ -299,18 +341,21 @@ export default function HomeScreen({ navigation }) {
 
         if (!otherUserPrefs.empty) {
           console.log("It's a match!");
-          // Create the match
           const matchId = currentUser.role === 'worker' 
             ? `${currentUserUid}_${itemId}` 
             : `${itemId}_${currentUserUid}`;
 
-          await db.collection('matches').doc(matchId).set({
+          const matchData = {
+            id: matchId,
             workerId: currentUser.role === 'worker' ? currentUserUid : itemId,
             employerId: currentUser.role === 'employer' ? currentUserUid : itemId,
             timestamp: firebase.firestore.FieldValue.serverTimestamp()
-          });
+          };
+
+          await db.collection('matches').doc(matchId).set(matchData);
 
           setMatchedJob(item);
+          setMatchData(matchData);
           setShowMatchModal(true);
         }
       }
@@ -509,94 +554,108 @@ export default function HomeScreen({ navigation }) {
   }
 
   return (
-    <View style={styles.container}>
-      {items.length > 0 ? (
-        <Swiper
-          ref={swiperRef}
-          cards={items}
-          renderCard={renderCard}
-          onSwipedRight={(cardIndex) => handleSwipe(cardIndex, true)}
-          onSwipedLeft={(cardIndex) => handleSwipe(cardIndex, false)}
-          onSwipedAll={onSwipedAll}
-          cardIndex={0}
-          backgroundColor={'#f0f0f0'}
-          stackSize={3}
-          stackSeparation={15}
-          animateCardOpacity
-          verticalSwipe={false}
-          overlayLabels={{
-            left: {
-              title: 'NOPE',
-              style: {
-                label: {
-                  backgroundColor: '#FF4136',
-                  color: 'white',
-                  fontSize: 24,
-                  borderRadius: 10,
-                  padding: 10,
-                },
-                wrapper: {
-                  flexDirection: 'column',
-                  alignItems: 'flex-end',
-                  justifyContent: 'flex-start',
-                  marginTop: 20,
-                  marginLeft: -20,
-                },
-              },
-            },
-            right: {
-              title: 'LIKE',
-              style: {
-                label: {
-                  backgroundColor: '#2ECC40',
-                  color: 'white',
-                  fontSize: 24,
-                  borderRadius: 10,
-                  padding: 10,
-                },
-                wrapper: {
-                  flexDirection: 'column',
-                  alignItems: 'flex-start',
-                  justifyContent: 'flex-start',
-                  marginTop: 20,
-                  marginLeft: 20,
-                },
-              },
-            },
-          }}
-        />
+    <KeyboardAvoidingView 
+      style={styles.container}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
+      {isLoading ? (
+        <ActivityIndicator size="large" color="#0000ff" />
+      ) : items.length === 0 ? (
+        <Loader />
       ) : (
-        <View style={styles.noItemsContainer}>
-          <Text style={styles.noItemsText}>No items available at the moment.</Text>
+        <View style={styles.container}>
+          {items.length > 0 ? (
+            <Swiper
+              ref={swiperRef}
+              cards={items}
+              renderCard={renderCard}
+              onSwipedRight={(cardIndex) => handleSwipe(cardIndex, true)}
+              onSwipedLeft={(cardIndex) => handleSwipe(cardIndex, false)}
+              onSwipedAll={onSwipedAll}
+              cardIndex={0}
+              backgroundColor={'#f0f0f0'}
+              stackSize={3}
+              stackSeparation={15}
+              animateCardOpacity
+              verticalSwipe={false}
+              overlayLabels={{
+                left: {
+                  title: 'NOPE',
+                  style: {
+                    label: {
+                      backgroundColor: '#FF4136',
+                      color: 'white',
+                      fontSize: 24,
+                      borderRadius: 10,
+                      padding: 10,
+                    },
+                    wrapper: {
+                      flexDirection: 'column',
+                      alignItems: 'flex-end',
+                      justifyContent: 'flex-start',
+                      marginTop: 20,
+                      marginLeft: -20,
+                    },
+                  },
+                },
+                right: {
+                  title: 'LIKE',
+                  style: {
+                    label: {
+                      backgroundColor: '#2ECC40',
+                      color: 'white',
+                      fontSize: 24,
+                      borderRadius: 10,
+                      padding: 10,
+                    },
+                    wrapper: {
+                      flexDirection: 'column',
+                      alignItems: 'flex-start',
+                      justifyContent: 'flex-start',
+                      marginTop: 20,
+                      marginLeft: 20,
+                    },
+                  },
+                },
+              }}
+            />
+          ) : (
+            <View style={styles.noItemsContainer}>
+              <Text style={styles.noItemsText}>No items available at the moment.</Text>
+            </View>
+          )}
+
+          <View style={styles.navigation}>
+            <TouchableOpacity style={styles.navButton} onPress={() => {
+              if (swiperRef.current && swiperRef.current.jumpToCardIndex) {
+                swiperRef.current.jumpToCardIndex(0);
+              }
+            }}>
+              <Ionicons name="home" size={24} color="#ffffff" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Matches')}>
+              <Ionicons name="heart" size={24} color="#ffffff" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Profile')}>
+              <Ionicons name="person" size={24} color="#ffffff" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Settings')}>
+              <Ionicons name="settings" size={24} color="#ffffff" />
+            </TouchableOpacity>
+          </View>
+
+          <NewMatchModal 
+            visible={showMatchModal}
+            onClose={() => {
+              setShowMatchModal(false);
+              setMatchData(null);
+            }}
+            jobData={matchedJob}
+            matchData={matchData}
+          />
         </View>
       )}
-
-      <View style={styles.navigation}>
-        <TouchableOpacity style={styles.navButton} onPress={() => {
-          if (swiperRef.current && swiperRef.current.jumpToCardIndex) {
-            swiperRef.current.jumpToCardIndex(0);
-          }
-        }}>
-          <Ionicons name="home" size={24} color="#ffffff" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Matches')}>
-          <Ionicons name="heart" size={24} color="#ffffff" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Profile')}>
-          <Ionicons name="person" size={24} color="#ffffff" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Settings')}>
-          <Ionicons name="settings" size={24} color="#ffffff" />
-        </TouchableOpacity>
-      </View>
-
-      <NewMatchModal 
-        visible={showMatchModal}
-        onClose={() => setShowMatchModal(false)}
-        jobData={matchedJob}
-        matchData={{}} // You can pass relevant match data here
-      />
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

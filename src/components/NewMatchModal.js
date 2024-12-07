@@ -1,12 +1,40 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, Modal, StyleSheet, Dimensions, TouchableOpacity } from 'react-native';
 import MiniJobDetails from './MiniJobDetails';
 import MiniChatScreen from './MiniChatScreen';
+import { db, firebase } from '../firebase';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
 const NewMatchModal = ({ visible, onClose, jobData, matchData }) => {
   const [currentScreen, setCurrentScreen] = useState(0);
+
+  useEffect(() => {
+    if (visible && matchData) {
+      const createChat = async () => {
+        try {
+          const chatRef = db.collection('chats').doc(matchData.id);
+          const chatDoc = await chatRef.get();
+          
+          if (!chatDoc.exists) {
+            await chatRef.set({
+              createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+              lastMessage: null,
+              lastMessageTime: firebase.firestore.FieldValue.serverTimestamp(),
+              participants: [
+                matchData.workerId,
+                matchData.employerId
+              ]
+            });
+          }
+        } catch (error) {
+          console.error('Error creating chat:', error);
+        }
+      };
+
+      createChat();
+    }
+  }, [visible, matchData]);
 
   return (
     <Modal visible={visible} transparent animationType="fade">
