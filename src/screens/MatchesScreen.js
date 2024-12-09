@@ -82,22 +82,29 @@ export default function MatchesScreen({ navigation }) {
     fetchMatches();
   }, []);
 
-  const filteredMatches = matches.filter(match => {
-    if (filter === 'all') return true;
-    if (filter === 'messaged') return match.lastMessage !== null;
-    if (filter === 'accepted') return match.jobAccepted;
-    return true;
-  });
-
   const handleChatPress = (match) => {
     console.log('Navigating to chat with match data:', match);
     
-    navigation.navigate('Chat', {
-      matchId: match.id,
-      role: userRole,
-      jobTitle: match.jobTitle
-    });
+    // Check if match is accepted
+    if (match.accepted === 1) {
+      navigation.navigate('JobDetailsMatched', {
+        matchId: match.id
+      });
+    } else {
+      navigation.navigate('Chat', {
+        matchId: match.id,
+        role: userRole,
+        jobTitle: match.jobTitle
+      });
+    }
   };
+
+  const filteredMatches = matches.filter(match => {
+    if (filter === 'all') return true;
+    if (filter === 'messaged') return match.lastMessage !== null;
+    if (filter === 'accepted') return match.accepted === 1;
+    return true;
+  });
 
   const renderMatchItem = ({ item }) => {
     const matchDetails = item.otherUser;
@@ -105,7 +112,10 @@ export default function MatchesScreen({ navigation }) {
     
     return (
       <TouchableOpacity
-        style={styles.matchItem}
+        style={[
+          styles.matchItem,
+          item.accepted === 1 && styles.acceptedMatch
+        ]}
         onPress={() => handleChatPress(item)}
         onLongPress={async () => {
           try {
@@ -190,8 +200,17 @@ export default function MatchesScreen({ navigation }) {
               Last message: {item.lastMessage}
             </Text>
           )}
+          {item.accepted === 1 && (
+            <View style={styles.acceptedBadge}>
+              <Text style={styles.acceptedText}>Accepted</Text>
+            </View>
+          )}
         </View>
-        <Ionicons name="chevron-forward" size={24} color="#666" />
+        <Ionicons 
+          name={item.accepted === 1 ? "checkmark-circle" : "chevron-forward"} 
+          size={24} 
+          color={item.accepted === 1 ? "#4CAF50" : "#666"} 
+        />
       </TouchableOpacity>
     );
   };
@@ -359,5 +378,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#f8fafc',
+  },
+  acceptedMatch: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#4CAF50',
+  },
+  acceptedBadge: {
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginTop: 4,
+  },
+  acceptedText: {
+    color: '#4CAF50',
+    fontSize: 12,
+    fontWeight: '600',
   },
 });

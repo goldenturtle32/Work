@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import HomeScreen from '../screens/HomeScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import JobDetailScreen from '../screens/JobDetailScreen';
+import JobDetailsMatched from '../screens/JobDetailsMatched';
 import MatchAnalysisScreen from '../screens/MatchAnalysisScreen';
 import AvailabilityScreen from '../screens/AvailabilityScreen';
 import MatchesScreen from '../screens/MatchesScreen';
@@ -69,6 +70,11 @@ export default function AppNavigator() {
         name="JobDetail" 
         component={JobDetailScreen}
         options={{ title: 'Job Details' }}
+      />
+      <Stack.Screen 
+        name="JobDetailsMatched" 
+        component={JobDetailsMatched}
+        options={{ title: 'Matched Job Details' }}
       />
       <Stack.Screen 
         name="MatchAnalysis" 
