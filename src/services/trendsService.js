@@ -2,10 +2,10 @@ import axios from 'axios';
 
 const BACKEND_URL = 'http://127.0.0.1:5000';
 
-export const fetchTrendingIndustries = async (searchTerm = '') => {
+export const fetchTrendingIndustries = async (searchTerm = '', location = '') => {
   try {
     const response = await axios.get(`${BACKEND_URL}/trending-industries`, {
-      params: { searchTerm }
+      params: { searchTerm, location }
     });
     return response.data.industries;
   } catch (error) {
@@ -14,10 +14,10 @@ export const fetchTrendingIndustries = async (searchTerm = '') => {
   }
 };
 
-export const fetchTrendingJobs = async (industry) => {
+export const fetchTrendingJobs = async (industry, location = '') => {
   try {
     const response = await axios.get(`${BACKEND_URL}/trending-jobs`, {
-      params: { industry }
+      params: { industry, location }
     });
     return response.data.jobs;
   } catch (error) {
@@ -26,11 +26,11 @@ export const fetchTrendingJobs = async (industry) => {
   }
 };
 
-export const fetchTrendingSkills = async (jobTitle, industry) => {
+export const fetchTrendingSkills = async (jobTitle, industry, location = '') => {
   try {
-    console.log(`Requesting skills for ${jobTitle} in ${industry}`); // Debug log
+    console.log(`Requesting skills for ${jobTitle} in ${industry} in ${location}`); // Debug log
     const response = await axios.get(`${BACKEND_URL}/trending-skills`, {
-      params: { jobTitle, industry }
+      params: { jobTitle, industry, location }
     });
     console.log("API Response:", response.data); // Debug log
     

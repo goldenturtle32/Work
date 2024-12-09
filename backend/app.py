@@ -14,6 +14,10 @@ import pandas as pd
 from time import sleep
 from random import uniform
 import traceback
+from serpapi import GoogleSearch
+from collections import Counter
+import re
+
 lock = threading.Lock()
 last_request_time = datetime.now() - timedelta(seconds=60)  # Initialize to allow immediate first request
 
@@ -40,6 +44,70 @@ if not api_key:
 client = OpenAI(api_key=api_key)
 
 pytrends = TrendReq(hl='en-US', tz=360)
+
+SERP_API_KEY = os.getenv('SERP_API_KEY')  # Make sure this is set in your environment
+
+# Add this near the top where other environment variables are loaded
+print(f"SERP API Key loaded: {'*' * 5}{SERP_API_KEY[-5:] if SERP_API_KEY else 'None'}")
+
+# Industry search terms for classification
+industry_search_terms = {
+    'Technology': [
+        ['software', 'tech', 'IT', 'digital', 'computer'],
+        ['artificial intelligence', 'machine learning', 'data science'],
+        ['cybersecurity', 'cloud computing', 'blockchain']
+    ],
+    'Healthcare': [
+        ['medical', 'health', 'healthcare', 'clinical'],
+        ['hospital', 'pharmacy', 'nursing', 'dental'],
+        ['biotech', 'life sciences', 'pharmaceutical']
+    ],
+    # Add more industries and their related terms
+}
+
+# Skill keywords for parsing job descriptions
+skill_keywords = {
+    'Technical': [
+        'Python', 'JavaScript', 'Java', 'SQL', 'AWS', 'Azure',
+        'Docker', 'Kubernetes', 'React', 'Angular', 'Node.js',
+        'Machine Learning', 'AI', 'Data Science', 'Cloud Computing'
+    ],
+    'Soft Skills': [
+        'Communication', 'Leadership', 'Problem Solving',
+        'Team Collaboration', 'Project Management', 'Time Management',
+        'Critical Thinking', 'Adaptability', 'Organization'
+    ],
+    # Add more skill categories
+}
+
+# Add this near the top of the file with other dictionaries
+industry_jobs = {
+    'Technology': [
+        'Software Engineer',
+        'Data Scientist',
+        'IT Support',
+        'System Administrator',
+        'DevOps Engineer',
+        'Product Manager',
+        'QA Engineer',
+        'Network Engineer',
+        'Business Analyst',
+        'Project Manager'
+    ],
+    'Healthcare': [
+        'Registered Nurse',
+        'Medical Assistant',
+        'Physician',
+        'Nurse Practitioner',
+        'Physical Therapist',
+        'Healthcare Administrator',
+        'Medical Technologist',
+        'Pharmacist',
+        'Dental Hygienist',
+        'Medical Records Specialist'
+    ],
+    # Add more industries and their common jobs
+}
 
 def generate_fallback_analysis(job_data, user_data):
     """Generate a basic analysis without using OpenAI"""
@@ -402,372 +470,130 @@ def get_pytrends_client():
         print(f"Error initializing PyTrends: {str(e)}")
         return None
 
+def format_location(location, try_city=False):
+    """Helper function to format location for SERP API"""
+    if not location:
+        return 'United States'
+        
+    # If location contains a comma (city, state format)
+    if ',' in location:
+        city, state_code = location.split(',')
+        state_code = state_code.strip()
+        # Map of state codes to full names
+        state_names = {
+            'CA': 'California',
+            'NY': 'New York',
+            'TX': 'Texas',
+            # Add more as needed
+        }
+        if try_city:
+            return f"{city.strip()}, {state_names.get(state_code, state_code)}"
+        return state_names.get(state_code, state_code)
+    
+    return location
+
 @app.route('/trending-industries', methods=['GET'])
 def get_trending_industries():
     try:
         search_term = request.args.get('searchTerm', '').lower()
-        print(f"Searching for industries with term: {search_term}")
+        user_location = request.args.get('location', 'United States')
         
-        global trends_cache_time, trends_cache
-        current_time = datetime.now()
+        print(f"\n=== Getting Industries for search: '{search_term}' ===")
         
-        with lock:
-            if (trends_cache_time is None or 
-                current_time - trends_cache_time > cache_duration or 
-                not trends_cache):
-                
-                try:
-                    print("Fetching fresh trends data...")
-                    pytrends = TrendReq(hl='en-US', tz=360)
-                    
-                    # Use job-specific keywords
-                    keywords_batches = [
-                        ["technology jobs hiring", "healthcare jobs hiring"],
-                        ["finance jobs available", "retail jobs hiring"],
-                        ["manufacturing jobs open", "construction jobs hiring"]
-                    ]
-                    
-                    industry_interests = {}
-                    
-                    for batch in keywords_batches:
-                        try:
-                            print(f"Processing batch: {batch}")
-                            time.sleep(1)
-                            
-                            pytrends.build_payload(
-                                batch,
-                                timeframe='today 3-m',  # Last 3 months for recent trends
-                                geo='US'
-                            )
-                            
-                            interest_data = pytrends.interest_over_time()
-                            
-                            if interest_data is not None and not interest_data.empty:
-                                # Calculate trend momentum (recent growth)
-                                recent_data = interest_data.tail(12)  # Last 12 weeks
-                                older_data = interest_data.head(12)   # Previous 12 weeks
-                                
-                                for keyword in batch:
-                                    recent_avg = recent_data[keyword].mean()
-                                    older_avg = older_data[keyword].mean()
-                                    growth = ((recent_avg - older_avg) / older_avg) * 100 if older_avg > 0 else 0
-                                    
-                                    # Clean industry name
-                                    industry = (keyword
-                                        .replace(' jobs hiring', '')
-                                        .replace(' jobs available', '')
-                                        .replace(' jobs open', '')
-                                        .title())
-                                    
-                                    # Score combines current interest and growth
-                                    score = recent_avg * (1 + growth/100)
-                                    industry_interests[industry] = score
-                                    print(f"Added trending industry: {industry} (score: {score}, growth: {growth}%)")
-                            
-                        except Exception as batch_error:
-                            print(f"Error processing batch {batch}: {str(batch_error)}")
-                            continue
-                    
-                    # Sort industries by score
-                    trends_cache = sorted(
-                        industry_interests.items(),
-                        key=lambda x: x[1],
-                        reverse=True
-                    )
-                    print(f"Sorted trending industries: {trends_cache}")
-                    trends_cache_time = current_time
-                    
-                except Exception as e:
-                    print(f"PyTrends error: {str(e)}")
-                    trends_cache = []
-                    trends_cache_time = current_time
+        # Get base industries from API
+        industries = get_trending_industries_serp(search_term, user_location)
+        
+        # If there's a search term, also search directly for it
+        if search_term:
+            params = {
+                "api_key": SERP_API_KEY,
+                "engine": "google_jobs",
+                "q": f"{search_term} jobs",
+                "location": format_location(user_location),
+                "hl": "en",
+                "gl": "us",
+                "chips": "date_posted:today"
+            }
             
-            # Default industries with lower weights
-            default_industries = [
-                ("Education", 45),
-                ("Transportation", 40),
-                ("Entertainment", 35),
-                ("Hospitality", 30)
-            ]
+            search = GoogleSearch(params)
+            results = search.get_dict()
             
-            # Get just the industry names from trends_cache
-            trending_industries = [ind for ind, _ in trends_cache]
-            
-            # Add default industries that aren't already included
-            result = trending_industries + [
-                ind for ind, _ in default_industries 
-                if ind not in trending_industries
-            ]
-            
-            # Filter by search term if provided
-            if search_term:
-                filtered_industries = [
-                    industry for industry in result 
-                    if search_term in industry.lower()
-                ]
-                result = filtered_industries if filtered_industries else result[:10]
-            else:
-                result = result[:10]
-            
-            print(f"Returning industries (first is most trending): {result}")
-            return jsonify({
-                "success": True,
-                "industries": result
-            })
-            
-    except Exception as e:
-        print(f"Error in trending industries: {str(e)}")
+            if 'jobs_results' in results:
+                print(f"Found additional results for search term: {search_term}")
+                # Add the search term itself if jobs were found
+                if not any(i.lower() == search_term.lower() for i in industries):
+                    industries.append(search_term.title())
+        
         return jsonify({
             "success": True,
-            "industries": [
-                "Technology", "Healthcare", "Finance", "Manufacturing",
-                "Construction", "Retail", "Education", "Transportation",
-                "Entertainment", "Hospitality"
-            ]
+            "industries": industries
         })
-
-@app.route('/trending-jobs', methods=['GET'])
-def get_trending_jobs():
-    try:
-        industry = request.args.get('industry', '')
-        print(f"Fetching jobs for industry: {industry}")
-        
-        try:
-            if industry:
-                job_interests = {}
-                
-                # Industry-specific search terms
-                industry_search_terms = {
-                    "Technology": [
-                        ["software engineer jobs", "data scientist jobs"],
-                        ["web developer jobs", "product manager tech"],
-                        ["devops engineer jobs", "it support jobs"]
-                    ],
-                    "Healthcare": [
-                        ["registered nurse jobs", "medical assistant jobs"],
-                        ["physician jobs", "healthcare admin jobs"],
-                        ["physical therapist jobs", "pharmacist jobs"]
-                    ],
-                    "Retail": [
-                        ["retail manager jobs", "sales associate jobs"],
-                        ["store supervisor jobs", "merchandiser jobs"],
-                        ["retail buyer jobs", "cashier jobs"]
-                    ],
-                    "Finance": [
-                        ["financial analyst jobs", "accountant jobs"],
-                        ["investment banker jobs", "financial advisor jobs"],
-                        ["risk analyst jobs", "credit analyst jobs"]
-                    ],
-                    "Manufacturing": [
-                        ["production manager jobs", "manufacturing engineer jobs"],
-                        ["quality control jobs", "plant manager jobs"],
-                        ["process engineer jobs", "maintenance technician jobs"]
-                    ],
-                    "Construction": [
-                        ["construction manager jobs", "project manager construction"],
-                        ["site supervisor jobs", "civil engineer jobs"],
-                        ["construction estimator jobs", "safety manager jobs"]
-                    ],
-                    "Education": [
-                        ["teacher jobs", "professor jobs"],
-                        ["school administrator jobs", "education coordinator jobs"],
-                        ["curriculum developer jobs", "school counselor jobs"]
-                    ],
-                    "Transportation": [
-                        ["logistics manager jobs", "supply chain jobs"],
-                        ["fleet manager jobs", "transportation coordinator jobs"],
-                        ["shipping manager jobs", "dispatcher jobs"]
-                    ],
-                    "Entertainment": [
-                        ["producer jobs", "director entertainment"],
-                        ["content creator jobs", "event manager jobs"],
-                        ["talent manager jobs", "production coordinator jobs"]
-                    ],
-                    "Hospitality": [
-                        ["hotel manager jobs", "restaurant manager jobs"],
-                        ["chef jobs", "event coordinator hospitality"],
-                        ["guest services manager", "hospitality supervisor"]
-                    ]
-                }
-                
-                # Get search terms for the specific industry
-                search_batches = industry_search_terms.get(industry, [
-                    [f"{industry.lower()} manager jobs", f"{industry.lower()} specialist jobs"],
-                    [f"{industry.lower()} supervisor jobs", f"{industry.lower()} coordinator jobs"]
-                ])
-                
-                for batch in search_batches:
-                    try:
-                        print(f"Processing job batch: {batch}")
-                        time.sleep(1)  # Rate limiting
-                        
-                        pytrends.build_payload(
-                            batch,
-                            timeframe='today 3-m',
-                            geo='US'
-                        )
-                        
-                        interest_data = pytrends.interest_over_time()
-                        
-                        if interest_data is not None and not interest_data.empty:
-                            recent_data = interest_data.tail(12)
-                            older_data = interest_data.head(12)
-                            
-                            for keyword in batch:
-                                recent_avg = recent_data[keyword].mean()
-                                older_avg = older_data[keyword].mean()
-                                growth = ((recent_avg - older_avg) / older_avg) * 100 if older_avg > 0 else 0
-                                
-                                # Clean job title
-                                job_title = (keyword
-                                    .replace(' jobs', '')
-                                    .replace(industry.lower(), '')
-                                    .replace('tech', '')
-                                    .strip()
-                                    .title())
-                                
-                                score = recent_avg * (1 + growth/100)
-                                job_interests[job_title] = score
-                                print(f"Added trending job: {job_title} (score: {score}, growth: {growth}%)")
-                    
-                    except Exception as batch_error:
-                        print(f"Error processing batch {batch}: {str(batch_error)}")
-                        continue
-                
-                if job_interests:
-                    trending_jobs = sorted(
-                        job_interests.items(),
-                        key=lambda x: x[1],
-                        reverse=True
-                    )
-                    
-                    jobs_list = [job for job, _ in trending_jobs]
-                    return jsonify({
-                        "success": True,
-                        "jobs": jobs_list[:10]  # Return top 10 trending jobs
-                    })
-                
-                return jsonify({
-                    "success": True,
-                    "jobs": []  # Return empty list if no jobs found
-                })
-            
-        except Exception as e:
-            print(f"PyTrends error in jobs: {str(e)}")
-            print(f"Error traceback: {traceback.format_exc()}")
-            return jsonify({
-                "success": True,
-                "jobs": []
-            })
-            
     except Exception as e:
-        print(f"Error in trending jobs: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e)
         }), 500
 
-def make_pytrends_request(func):
-    """Helper function for rate-limited requests"""
-    max_retries = 3
-    base_delay = 2
-    
-    for attempt in range(max_retries):
-        try:
-            # Initialize PyTrends with minimal settings
-            pytrends = TrendReq(
-                hl='en-US',
-                tz=360
-            )
+@app.route('/trending-jobs', methods=['GET'])
+def get_trending_jobs():
+    try:
+        industry = request.args.get('industry', '')
+        search_term = request.args.get('searchTerm', '').lower()
+        user_location = request.args.get('location', 'United States')
+        
+        print(f"\n=== Getting Jobs for industry: '{industry}', search: '{search_term}' ===")
+        
+        # Get base jobs from API
+        jobs = get_trending_jobs_serp(industry, user_location)
+        
+        # If there's a search term, filter and search for it
+        if search_term:
+            # Filter existing jobs
+            filtered_jobs = [job for job in jobs if search_term in job.lower()]
             
-            # Add delay between attempts
-            if attempt > 0:
-                sleep(base_delay * attempt)
+            # Search for new jobs with the term
+            params = {
+                "api_key": SERP_API_KEY,
+                "engine": "google_jobs",
+                "q": f"{search_term} {industry}",
+                "location": format_location(user_location),
+                "hl": "en",
+                "gl": "us",
+                "chips": "date_posted:today"
+            }
             
-            # Execute the provided function
-            result = func(pytrends)
-            return result
+            search = GoogleSearch(params)
+            results = search.get_dict()
             
-        except Exception as e:
-            print(f"PyTrends attempt {attempt + 1} failed: {str(e)}")
-            if attempt == max_retries - 1:
-                raise e
+            if 'jobs_results' in results:
+                print(f"Found additional results for search term: {search_term}")
+                new_jobs = [job['title'] for job in results.get('jobs_results', [])]
+                # Combine filtered existing jobs with new jobs
+                jobs = list(set(filtered_jobs + new_jobs))
+        
+        return jsonify({
+            "success": True,
+            "jobs": jobs
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 @app.route('/trending-skills', methods=['GET'])
 def get_trending_skills():
     try:
         job_title = request.args.get('jobTitle', '')
         industry = request.args.get('industry', '')
-        print(f"Fetching skills for job: {job_title} in industry: {industry}")
-        
-        if not job_title:
-            return jsonify({
-                "success": False,
-                "error": "Job title is required"
-            }), 400
-
-        # Try multiple search terms for better coverage
-        search_terms = [
-            f"{job_title} required skills",
-            f"{job_title} qualifications",
-            f"{industry} {job_title} skills"
-        ]
-        
-        trending_skills = set()
-        
-        for search_term in search_terms:
-            try:
-                print(f"Querying PyTrends for: {search_term}")
-                pytrends.build_payload([search_term], timeframe='today 3-m', geo='US')
-                time.sleep(1)  # Rate limiting
-                
-                # Try both topics and queries
-                topics = pytrends.related_topics()
-                if topics and search_term in topics:
-                    for topic_type in ['top', 'rising']:
-                        if topic_type in topics[search_term]:
-                            df = topics[search_term][topic_type]
-                            if isinstance(df, pd.DataFrame) and not df.empty:
-                                for _, row in df.iterrows():
-                                    skill = clean_skill_name(row['topic_title'])
-                                    if skill:
-                                        trending_skills.add(skill)
-                                        print(f"Found skill: {skill}")
-                
-                queries = pytrends.related_queries()
-                if queries and search_term in queries:
-                    for query_type in ['top', 'rising']:
-                        if query_type in queries[search_term]:
-                            df = queries[search_term][query_type]
-                            if isinstance(df, pd.DataFrame) and not df.empty:
-                                for _, row in df.iterrows():
-                                    skill = clean_skill_name(row['query'])
-                                    if skill:
-                                        trending_skills.add(skill)
-                                        print(f"Found skill from query: {skill}")
-            
-            except Exception as e:
-                print(f"Error processing search term {search_term}: {str(e)}")
-                continue
-        
-        if trending_skills:
-            skills_list = list(trending_skills)
-            print(f"Found trending skills: {skills_list}")
-            return jsonify({
-                "success": True,
-                "skills": skills_list[:10]
-            })
-        
-        # Fall back to industry-based skills
-        industry_skills = get_industry_based_skills(industry)
-        print(f"Using industry-based skills for {job_title}")
+        user_location = request.args.get('location', 'United States')  # Get location from request
+        print(f"Fetching skills for job: {job_title} in industry: {industry} in {user_location}")
+        skills = get_trending_skills_serp(job_title, industry, user_location)
         return jsonify({
             "success": True,
-            "skills": industry_skills
+            "skills": skills
         })
-            
     except Exception as e:
-        print(f"Error in trending skills: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e)
@@ -799,38 +625,26 @@ def get_industry_based_skills(industry):
         "Organization", "Attention to Detail"
     ])
 
-def clean_skill_name(query):
-    """Clean and validate skill names"""
-    # Common terms to remove
-    remove_terms = [
-        'how to', 'what is', 'learn', 'certification',
-        'course', 'training', 'skills in', 'skills for',
-        'requirements', 'qualifications', 'needed', 'required'
+def clean_skill_name(text):
+    """Clean and standardize skill names"""
+    # Remove common phrases that aren't skills
+    remove_phrases = [
+        'ability to', 'experience in', 'experience with',
+        'knowledge of', 'proficiency in', 'skilled in',
+        'years of', 'or more', 'required', 'preferred'
     ]
     
-    # Technical skills and tools to preserve
-    technical_terms = [
-        'python', 'sql', 'java', 'javascript', 'excel',
-        'tableau', 'power bi', 'aws', 'azure', 'machine learning',
-        'data analysis', 'statistics', 'r programming'
-    ]
+    text = text.lower()
+    for phrase in remove_phrases:
+        text = text.replace(phrase, '')
     
-    query = query.lower()
+    # Clean up the text
+    text = text.strip()
+    if len(text) < 3 or text.isdigit():
+        return None
     
-    # Preserve technical terms
-    for term in technical_terms:
-        if term in query:
-            return term.title()
-    
-    # Remove common terms
-    for term in remove_terms:
-        query = query.replace(term, '')
-    
-    # Clean and validate
-    skill = query.strip().title()
-    if len(skill) > 2 and not any(char.isdigit() for char in skill):
-        return skill
-    return None
+    # Capitalize each word
+    return text.title()
 
 @app.route('/suggest-skills', methods=['POST'])
 def suggest_skills():
@@ -946,6 +760,368 @@ def clean_job_title(query):
     if len(title) > 2 and not any(char.isdigit() for char in title):
         return title
     return None
+
+def test_location_format(location):
+    """Test function to try different location formats"""
+    try:
+        print(f"\n=== Testing Location Format ===")
+        print(f"Original location: {location}")
+        
+        # Test different formats
+        formats = {
+            'original': location,
+            'state_only': location.split(',')[1].strip() if ',' in location else location,
+            'state_code': location.split(',')[1].strip() if ',' in location else location,
+            'california': 'California',  # Test with full state name
+            'ca': 'CA',  # Test with state code
+            'usa': 'USA'
+        }
+        
+        for format_name, test_location in formats.items():
+            print(f"\nTrying format: {format_name}")
+            params = {
+                "api_key": SERP_API_KEY,
+                "engine": "google_jobs",
+                "q": "jobs",
+                "location": test_location,
+                "hl": "en",
+                "gl": "us",
+                "chips": "date_posted:today"
+            }
+            
+            search = GoogleSearch(params)
+            results = search.get_dict()
+            
+            success = 'error' not in results
+            print(f"Location: {test_location}")
+            print(f"Success: {success}")
+            if not success:
+                print(f"Error: {results.get('error')}")
+            else:
+                print(f"Got {len(results.get('jobs_results', []))} results")
+                
+        return formats
+        
+    except Exception as e:
+        print(f"Test error: {str(e)}")
+        return None
+
+def get_trending_industries_serp(search_term='', location='United States'):
+    try:
+        print(f"\n=== Getting Trending Industries ===")
+        print(f"Original location: {location}")
+        
+        formatted_location = format_location(location)
+        print(f"Formatted location: {formatted_location}")
+        
+        # If there's a search term, use it to filter industries
+        if search_term:
+            # First try to match against our known industries
+            known_industries = {
+                'technology': 'Technology',
+                'healthcare': 'Healthcare',
+                'finance': 'Finance',
+                'education': 'Education',
+                'manufacturing': 'Manufacturing',
+                'retail': 'Retail',
+                'entertainment': 'Entertainment',
+                'construction': 'Construction',
+                'transportation': 'Transportation',
+                'hospitality': 'Hospitality',
+                'software': 'Technology',
+                'medical': 'Healthcare',
+                'banking': 'Finance',
+                'engineering': 'Engineering',
+                'marketing': 'Marketing',
+                'sales': 'Sales',
+                'media': 'Media',
+                'energy': 'Energy',
+                'automotive': 'Automotive',
+                'consulting': 'Consulting'
+            }
+            
+            # Filter known industries based on search term
+            matching_industries = [
+                value for key, value in known_industries.items()
+                if search_term.lower() in key
+            ]
+            if matching_industries:
+                return matching_industries
+        
+        # For empty search or no matches, get trending industries from Google
+        params = {
+            "api_key": SERP_API_KEY,
+            "engine": "google_jobs",
+            "q": "top industries hiring careers",
+            "location": formatted_location,
+            "hl": "en",
+            "gl": "us",
+            "chips": "date_posted:today"
+        }
+        
+        print(f"Search params: {params}")
+        search = GoogleSearch(params)
+        results = search.get_dict()
+        
+        industries = set()
+        
+        if 'jobs_results' in results:
+            for job in results['jobs_results']:
+                # Extract from description
+                if 'description' in job:
+                    desc = job['description'].lower()
+                    # Look for industry keywords
+                    for industry in INDUSTRY_KEYWORDS:
+                        if industry.lower() in desc:
+                            industries.add(industry)
+                
+                # Extract from company info
+                if 'company_name' in job:
+                    company = job['company_name'].lower()
+                    for industry in INDUSTRY_KEYWORDS:
+                        if industry.lower() in company:
+                            industries.add(industry)
+        
+        # If we don't have enough industries, add common ones
+        if len(industries) < 5:
+            industries.update([
+                'Technology',
+                'Healthcare',
+                'Finance',
+                'Education',
+                'Manufacturing',
+                'Retail',
+                'Entertainment'
+            ])
+        
+        final_industries = sorted(list(industries))[:10]
+        print(f"Final industries list: {final_industries}")
+        return final_industries
+
+    except Exception as e:
+        print(f"Error in get_trending_industries_serp: {str(e)}")
+        return ['Technology', 'Healthcare', 'Finance', 'Education', 'Manufacturing']
+
+def get_trending_jobs_serp(industry, location='United States'):
+    try:
+        print(f"\n=== Getting Trending Jobs ===")
+        print(f"Industry: {industry}")
+        print(f"Original location: {location}")
+        
+        formatted_location = format_location(location)
+        print(f"Formatted location: {formatted_location}")
+        
+        params = {
+            "api_key": SERP_API_KEY,
+            "engine": "google_jobs",
+            "q": f"{industry} jobs",
+            "location": formatted_location,
+            "hl": "en",
+            "gl": "us",
+            "chips": "date_posted:today"
+        }
+        
+        print(f"Search params: {params}")
+        
+        search = GoogleSearch(params)
+        results = search.get_dict()
+        
+        if 'error' in results:
+            print(f"SERP API error: {results.get('error')}")
+            return get_default_jobs(industry)
+        
+        # Extract job titles
+        job_titles = []
+        for job in results.get('jobs_results', []):
+            title = clean_job_title(job.get('title', ''))
+            if title:
+                job_titles.append(title)
+        
+        # Get most common job titles
+        job_counts = Counter(job_titles)
+        top_jobs = [job for job, _ in job_counts.most_common(10)]
+        
+        if not top_jobs:
+            return get_default_jobs(industry)
+        
+        print(f"Final jobs list: {top_jobs}")
+        return top_jobs
+
+    except Exception as e:
+        print(f"Error in get_trending_jobs_serp: {str(e)}")
+        print(f"Full traceback: {traceback.format_exc()}")
+        return get_default_jobs(industry)
+
+def get_trending_skills_serp(job_title, industry, location='United States'):
+    try:
+        print(f"\n=== Getting Trending Skills ===")
+        print(f"Job Title: {job_title}")
+        print(f"Industry: {industry}")
+        print(f"Original location: {location}")
+        
+        # Try city-level search first
+        city_location = format_location(location, try_city=True)
+        print(f"Trying city-level location: {city_location}")
+        
+        # Modify search query to better extract skills
+        search_query = f"{job_title} {industry} required skills qualifications requirements"
+        
+        params = {
+            "api_key": SERP_API_KEY,
+            "engine": "google_jobs",
+            "q": search_query,
+            "location": city_location,
+            "hl": "en",
+            "gl": "us",
+            "chips": "date_posted:today"
+        }
+        
+        search = GoogleSearch(params)
+        results = search.get_dict()
+        
+        if 'error' in results:
+            print(f"SERP API error: {results.get('error')}")
+            return get_default_skills(job_title, industry)
+            
+        # Extract skills from job descriptions
+        skills_count = Counter()
+        job_results = results.get('jobs_results', [])
+        print(f"Found {len(job_results)} job postings")
+        
+        # Industry-specific skill keywords
+        industry_skills = {
+            'Automotive': [
+                'diagnostics', 'repair', 'maintenance', 'mechanical',
+                'electrical systems', 'brake systems', 'engine repair',
+                'transmission', 'certification', 'ASE', 'troubleshooting',
+                'preventive maintenance', 'tools', 'equipment operation',
+                'vehicle inspection', 'automotive technology'
+            ],
+            'Technology': [
+                'programming', 'software development', 'coding', 'agile',
+                'cloud', 'AWS', 'Azure', 'databases', 'SQL', 'Python',
+                'Java', 'JavaScript', 'DevOps', 'cybersecurity'
+            ],
+            # Add more industry-specific skills as needed
+        }
+        
+        # Common professional skills
+        common_skills = [
+            'communication', 'leadership', 'problem solving',
+            'teamwork', 'project management', 'time management',
+            'customer service', 'analytical skills', 'attention to detail',
+            'organization', 'multitasking', 'critical thinking'
+        ]
+        
+        for job in job_results:
+            description = job.get('description', '').lower()
+            print(f"Processing job: {job.get('title', 'Unknown Title')}")
+            
+            # Check for industry-specific skills
+            if industry in industry_skills:
+                for skill in industry_skills[industry]:
+                    if skill.lower() in description:
+                        skills_count[skill.title()] += 1
+                        print(f"Found industry skill: {skill}")
+            
+            # Check for common professional skills
+            for skill in common_skills:
+                if skill.lower() in description:
+                    skills_count[skill.title()] += 1
+                    print(f"Found common skill: {skill}")
+            
+            # Look for skill sections in description
+            skill_sections = [
+                section for section in description.split('\n')
+                if any(keyword in section.lower() for keyword in 
+                    ['requirements', 'qualifications', 'skills', 'competencies'])
+            ]
+            
+            # Process each skill section
+            for section in skill_sections:
+                # Split by common delimiters
+                items = re.split(r'[•\-,;.]', section)
+                for item in items:
+                    item = item.strip()
+                    if len(item) > 3:  # Ignore very short items
+                        # Add any clearly identified skills
+                        if 'skill' in item.lower() or 'ability to' in item.lower():
+                            cleaned_skill = clean_skill_name(item)
+                            if cleaned_skill:
+                                skills_count[cleaned_skill] += 1
+                                print(f"Found listed skill: {cleaned_skill}")
+        
+        # Get top skills, ensuring a mix of industry-specific and common skills
+        top_skills = [skill for skill, count in skills_count.most_common(10)]
+        
+        if not top_skills:
+            print("No skills found in job descriptions, using defaults")
+            return get_default_skills(job_title, industry)
+        
+        print(f"Final skills list from API: {top_skills}")
+        return top_skills
+
+    except Exception as e:
+        print(f"Error in get_trending_skills_serp: {str(e)}")
+        return get_default_skills(job_title, industry)
+
+# Helper functions for default values
+def get_default_jobs(industry):
+    default_jobs = {
+        'Technology': ['Software Engineer', 'Data Scientist', 'IT Support', 'System Administrator', 
+                      'DevOps Engineer', 'Product Manager', 'QA Engineer', 'Network Engineer', 
+                      'Business Analyst', 'Project Manager'],
+        'Healthcare': ['Registered Nurse', 'Medical Assistant', 'Physician', 'Nurse Practitioner',
+                      'Physical Therapist', 'Healthcare Administrator', 'Medical Technologist',
+                      'Pharmacist', 'Dental Hygienist', 'Medical Records Specialist'],
+        # Add more industries as needed
+    }
+    return default_jobs.get(industry, [
+        'Project Manager', 'Business Analyst', 'Operations Manager',
+        'Sales Representative', 'Marketing Manager', 'Account Manager',
+        'Administrative Assistant', 'Customer Service Representative',
+        'Human Resources Manager', 'Financial Analyst'
+    ])
+
+def get_default_skills(job_title, industry):
+    return [
+        'Communication', 'Problem Solving', 'Team Collaboration',
+        'Project Management', 'Data Analysis', 'Microsoft Office',
+        'Customer Service', 'Leadership', 'Time Management',
+        'Critical Thinking'
+    ]
+
+# Add these constants at the top of your file
+INDUSTRY_KEYWORDS = [
+    'Technology',
+    'Healthcare',
+    'Finance',
+    'Education',
+    'Manufacturing',
+    'Retail',
+    'Entertainment',
+    'Construction',
+    'Transportation',
+    'Hospitality',
+    'Engineering',
+    'Marketing',
+    'Sales',
+    'Media',
+    'Energy',
+    'Automotive',
+    'Consulting',
+    'Real Estate',
+    'Agriculture',
+    'Telecommunications'
+]
+
+SKILL_KEYWORDS = [
+    'Python', 'Java', 'JavaScript', 'SQL', 'AWS', 'Azure', 'Docker',
+    'Kubernetes', 'React', 'Angular', 'Node.js', 'Machine Learning',
+    'Data Analysis', 'Project Management', 'Agile', 'Scrum',
+    'Communication', 'Leadership', 'Problem Solving', 'Team Collaboration',
+    # Add more skills as needed
+]
 
 if __name__ == '__main__':
     app.run(debug=True) 

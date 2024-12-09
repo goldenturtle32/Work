@@ -1,43 +1,48 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Animated, PanResponder } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, ScrollView, StyleSheet, ActivityIndicator, Alert, Platform } from 'react-native';
 import { db, auth } from '../firebase';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import User from '../models/User';
+import { Picker } from '@react-native-picker/picker';
+import { BarChart } from 'react-native-chart-kit';
 import { 
   useFonts,
   Domine_400Regular,
   Domine_700Bold
 } from '@expo-google-fonts/domine';
-import Modal from 'react-native-modal';
-import Slider from '@react-native-community/slider';
-import WebMap from '../components/WebMap';
 
-export default function ProfileScreen({ navigation, route }) {
+export default function ProfileScreen({ navigation }) {
   const [profileData, setProfileData] = useState({
     email: '',
     name: '',
     phone: '',
-    socialLogins: [],
-    selectedJobs: [],
-    skills: [],
-    industryPrefs: [],
+    role: '',
     location: null,
-    searchRadius: 0,
+    skills: [],
+    selectedJobs: [],
     availability: {},
-    locationPreference: 0,
+    user_overview: '',
   });
   
+  const [matchStats, setMatchStats] = useState({
+    activeJobs: 0,
+    weeklyEarnings: 0,
+  });
+
+  const [employerStats, setEmployerStats] = useState({
+    totalSwipes: 0,
+    rightSwipes: 0,
+    potentialApplicants: 0,
+    interviewsScheduled: 0,
+  });
+
+  const [selectedJobIndex, setSelectedJobIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const currentUser = auth.currentUser;
-  const [isLocationModalVisible, setIsLocationModalVisible] = useState(false);
-  const [tempLocationPreference, setTempLocationPreference] = useState(0);
-  const isWeb = Platform.OS === 'web';
 
   useEffect(() => {
     const fetchUserData = async () => {
       try {
-        // Determine which collection to fetch from based on user role
         const userDoc = await db.collection('users').doc(currentUser.uid).get();
         const userRole = userDoc.data()?.role;
         const collectionName = userRole === 'employer' ? 'job_attributes' : 'user_attributes';
@@ -48,22 +53,16 @@ export default function ProfileScreen({ navigation, route }) {
         ]);
 
         if (userData.exists && attributesDoc.exists) {
-          const userDataObj = userData.data();
-          const attributesData = attributesDoc.data();
+          setProfileData({
+            ...userData.data(),
+            ...attributesDoc.data(),
+          });
 
-          setProfileData(prevData => ({
-            ...prevData,
-            ...userDataObj,
-            ...attributesData,
-            selectedJobs: attributesData.selectedJobs || [],
-            skills: attributesData.skills || [],
-            industryPrefs: attributesData.industryPrefs || [],
-            availability: attributesData.availability || {},
-            locationPreference: attributesData.locationPreference || 1609.34, // Default to 1 mile
-          }));
-
-          // Set initial temp location preference
-          setTempLocationPreference(attributesData.locationPreference || 1609.34);
+          if (userRole === 'worker') {
+            await fetchWorkerStats();
+          } else {
+            await fetchEmployerStats();
+          }
         }
         setLoading(false);
       } catch (error) {
@@ -76,125 +75,215 @@ export default function ProfileScreen({ navigation, route }) {
     fetchUserData();
   }, [currentUser.uid]);
 
-  const formatAvailability = () => {
-    console.log('Raw availability data:', profileData.availability);
-    const availabilityArray = [];
-    
-    if (!profileData.availability) return [];
-
-    // Process each date in the availability object
-    Object.entries(profileData.availability).forEach(([date, dayData]) => {
-      if (dayData?.slots?.length > 0) {
-        const dayOfWeek = new Date(date).toLocaleDateString('en-US', { weekday: 'long' });
-        
-        dayData.slots.forEach(slot => {
-          if (slot.startTime && slot.endTime) {
-            availabilityArray.push({
-              day: dayOfWeek,
-              time: `${slot.startTime} - ${slot.endTime}`,
-              repeatType: dayData.repeatType || 'custom'
-            });
-          }
-        });
-      }
-    });
-    
-    // Sort by day of week
-    const dayOrder = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    availabilityArray.sort((a, b) => {
-      return dayOrder.indexOf(a.day) - dayOrder.indexOf(b.day);
-    });
-    
-    // Remove duplicates (same day, time and repeat type)
-    const uniqueAvailability = availabilityArray.filter((slot, index, self) =>
-      index === self.findIndex((s) => (
-        s.day === slot.day && 
-        s.time === slot.time && 
-        s.repeatType === slot.repeatType
-      ))
-    );
-    
-    console.log('Formatted availability:', uniqueAvailability);
-    return uniqueAvailability;
-  };
-
-  const renderSelectedJobs = () => {
-    return (
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Selected Jobs</Text>
-        {profileData.selectedJobs && profileData.selectedJobs.length > 0 ? (
-          profileData.selectedJobs.map((job, index) => (
-            <View key={index} style={styles.jobItem}>
-              <Text style={styles.jobTitle}>{job.industry} - {job.title}</Text>
-              <View style={styles.jobSkills}>
-                {job.skills && job.skills.length > 0 ? (
-                  job.skills.map((skill, skillIndex) => (
-                    <Text key={skillIndex} style={styles.jobSkillText}>
-                      {skill.name} ({skill.yearsOfExperience} yr{skill.yearsOfExperience !== 1 ? 's' : ''})
-                    </Text>
-                  ))
-                ) : (
-                  <Text style={styles.noDataText}>No skills selected</Text>
-                )}
-              </View>
-            </View>
-          ))
-        ) : (
-          <Text style={styles.noDataText}>No jobs selected</Text>
-        )}
-      </View>
-    );
-  };
-
-  const renderSkills = () => {
-    return (
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Skills</Text>
-        <View style={styles.skillsContainer}>
-          {profileData.skills && profileData.skills.length > 0 ? (
-            profileData.skills.map((skill, index) => (
-              <View key={index} style={styles.skillItem}>
-                <Text style={styles.skillText}>
-                  {skill.name} ({skill.yearsOfExperience} yr{skill.yearsOfExperience !== 1 ? 's' : ''})
-                </Text>
-              </View>
-            ))
-          ) : (
-            <Text style={styles.noDataText}>No skills added</Text>
-          )}
-        </View>
-      </View>
-    );
-  };
-
-  const handleSaveRadius = async () => {
+  const fetchWorkerStats = async () => {
     try {
-      // Get user role
-      const userDoc = await db.collection('users').doc(currentUser.uid).get();
-      const userRole = userDoc.data()?.role;
-      const collectionName = userRole === 'employer' ? 'job_attributes' : 'user_attributes';
+      const matchesSnapshot = await db.collection('matches')
+        .where('workerId', '==', currentUser.uid)
+        .where('accepted', '==', 1)
+        .get();
 
-      // Update the database
-      await db.collection(collectionName).doc(currentUser.uid).update({
-        locationPreference: tempLocationPreference
+      const activeJobs = matchesSnapshot.size;
+      let totalWeeklyEarnings = 0;
+
+      // Calculate weekly earnings based on accepted jobs
+      matchesSnapshot.forEach(doc => {
+        const matchData = doc.data();
+        // Add calculation logic here
+        totalWeeklyEarnings += 500; // Placeholder value
       });
-      
-      // Update local state
-      setProfileData(prev => ({
-        ...prev,
-        locationPreference: tempLocationPreference
-      }));
-      
-      setIsLocationModalVisible(false);
+
+      setMatchStats({
+        activeJobs,
+        weeklyEarnings: totalWeeklyEarnings,
+      });
     } catch (error) {
-      console.error('Error updating location preference:', error);
-      Alert.alert('Error', 'Failed to update location preference');
+      console.error('Error fetching worker stats:', error);
     }
   };
 
+  const fetchEmployerStats = async () => {
+    try {
+      const prefsSnapshot = await db.collection('user_job_preferences')
+        .where('swipedUserId', '==', currentUser.uid)
+        .get();
+
+      const totalSwipes = prefsSnapshot.size;
+      const rightSwipes = prefsSnapshot.docs.filter(doc => doc.data().interested).length;
+
+      setEmployerStats({
+        totalSwipes,
+        rightSwipes,
+        potentialApplicants: rightSwipes, // Placeholder
+        interviewsScheduled: Math.floor(rightSwipes * 0.3), // Placeholder
+      });
+    } catch (error) {
+      console.error('Error fetching employer stats:', error);
+    }
+  };
+
+  const renderWorkerProfile = () => (
+    <ScrollView style={styles.scrollView}>
+      {/* Header Section */}
+      <LinearGradient colors={['#1e3a8a', '#3b82f6']} style={styles.headerSection}>
+        <Text style={styles.name}>{profileData.name}</Text>
+        <View style={styles.contactInfo}>
+          <Text style={styles.contactText}>{profileData.email}</Text>
+          {profileData.phone && (
+            <Text style={styles.contactText}>{profileData.phone}</Text>
+          )}
+          {profileData.location && (
+            <Text style={styles.contactText}>
+              {profileData.location.city || 'Location not set'}
+            </Text>
+          )}
+        </View>
+      </LinearGradient>
+
+      {/* Skills & Jobs Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Skills & Experience</Text>
+        <View style={styles.skillsContainer}>
+          {profileData.skills.map((skill, index) => (
+            <View key={index} style={styles.skillBubble}>
+              <Text style={styles.skillText}>
+                {skill.name} ({skill.yearsOfExperience}yr)
+              </Text>
+            </View>
+          ))}
+        </View>
+        <Text style={styles.overviewText}>{profileData.user_overview}</Text>
+      </View>
+
+      {/* Stats Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Current Stats</Text>
+        <View style={styles.statsContainer}>
+          <View style={styles.statItem}>
+            <Text style={styles.statLabel}>Active Jobs</Text>
+            <Text style={styles.statValue}>{matchStats.activeJobs}</Text>
+          </View>
+          <View style={styles.statItem}>
+            <Text style={styles.statLabel}>Weekly Earnings</Text>
+            <BarChart
+              data={{
+                labels: ['Week'],
+                datasets: [{
+                  data: [matchStats.weeklyEarnings]
+                }]
+              }}
+              width={200}
+              height={100}
+              chartConfig={{
+                backgroundColor: '#1e3a8a',
+                backgroundGradientFrom: '#1e3a8a',
+                backgroundGradientTo: '#3b82f6',
+                decimalPlaces: 0,
+                color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
+              }}
+              style={styles.chart}
+            />
+          </View>
+        </View>
+      </View>
+
+      {/* Availability Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Availability</Text>
+        {Object.entries(profileData.availability || {}).map(([date, dayData], index) => (
+          <View key={index} style={styles.availabilityItem}>
+            <Text style={styles.dayText}>
+              {new Date(date).toLocaleDateString('en-US', { weekday: 'long' })}
+            </Text>
+            {dayData.slots?.map((slot, slotIndex) => (
+              <Text key={slotIndex} style={styles.timeText}>
+                {slot.startTime} - {slot.endTime}
+              </Text>
+            ))}
+          </View>
+        ))}
+      </View>
+    </ScrollView>
+  );
+
+  const renderEmployerProfile = () => (
+    <ScrollView style={styles.scrollView}>
+      {/* Job Selector */}
+      <View style={styles.jobSelectorContainer}>
+        <Picker
+          selectedValue={selectedJobIndex}
+          onValueChange={(itemValue) => setSelectedJobIndex(itemValue)}
+          style={styles.picker}
+        >
+          {profileData.selectedJobs.map((job, index) => (
+            <Picker.Item key={index} label={job.title} value={index} />
+          ))}
+        </Picker>
+      </View>
+
+      {/* Header Section */}
+      <LinearGradient colors={['#1e3a8a', '#3b82f6']} style={styles.headerSection}>
+        <Text style={styles.name}>{profileData.selectedJobs[selectedJobIndex]?.title}</Text>
+        <Text style={styles.contactText}>{profileData.email}</Text>
+      </LinearGradient>
+
+      {/* Requirements Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Job Requirements</Text>
+        <View style={styles.skillsContainer}>
+          {profileData.selectedJobs[selectedJobIndex]?.skills.map((skill, index) => (
+            <View key={index} style={styles.skillBubble}>
+              <Text style={styles.skillText}>{skill}</Text>
+            </View>
+          ))}
+        </View>
+        <Text style={styles.overviewText}>{profileData.user_overview}</Text>
+      </View>
+
+      {/* Stats Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Job Statistics</Text>
+        <View style={styles.statsContainer}>
+          <View style={styles.statItem}>
+            <Text style={styles.statLabel}>Total Views</Text>
+            <Text style={styles.statValue}>{employerStats.totalSwipes}</Text>
+          </View>
+          <View style={styles.statItem}>
+            <Text style={styles.statLabel}>Interested Candidates</Text>
+            <Text style={styles.statValue}>{employerStats.rightSwipes}</Text>
+          </View>
+          <View style={styles.statItem}>
+            <Text style={styles.statLabel}>Best Fit Candidates</Text>
+            <Text style={styles.statValue}>{employerStats.potentialApplicants}</Text>
+          </View>
+          <View style={styles.statItem}>
+            <Text style={styles.statLabel}>Interviews Scheduled</Text>
+            <Text style={styles.statValue}>{employerStats.interviewsScheduled}</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* Availability Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Required Availability</Text>
+        {Object.entries(profileData.availability || {}).map(([date, dayData], index) => (
+          <View key={index} style={styles.availabilityItem}>
+            <Text style={styles.dayText}>
+              {new Date(date).toLocaleDateString('en-US', { weekday: 'long' })}
+            </Text>
+            {dayData.slots?.map((slot, slotIndex) => (
+              <Text key={slotIndex} style={styles.timeText}>
+                {slot.startTime} - {slot.endTime}
+              </Text>
+            ))}
+          </View>
+        ))}
+      </View>
+    </ScrollView>
+  );
+
   if (loading) {
     return (
-      <View style={styles.container}>
+      <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#1e3a8a" />
       </View>
     );
@@ -202,141 +291,7 @@ export default function ProfileScreen({ navigation, route }) {
 
   return (
     <View style={styles.container}>
-      <ScrollView style={styles.scrollView}>
-        {/* Basic Info Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Basic Information</Text>
-          <View style={styles.infoRow}>
-            <Ionicons name="mail-outline" size={24} color="#1e3a8a" />
-            <Text style={styles.infoText}>{profileData.email || 'No email'}</Text>
-          </View>
-          {profileData.phone && (
-            <View style={styles.infoRow}>
-              <Ionicons name="call-outline" size={24} color="#1e3a8a" />
-              <Text style={styles.infoText}>{profileData.phone}</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Name Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Name</Text>
-          <View style={styles.infoRow}>
-            <Ionicons name="person-outline" size={24} color="#1e3a8a" />
-            <Text style={styles.infoText}>{profileData.name || 'Not set'}</Text>
-          </View>
-        </View>
-
-        {/* Skills Section */}
-        {renderSkills()}
-
-        {/* Selected Jobs Section */}
-        {renderSelectedJobs()}
-
-        {/* Availability Section */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Availability</Text>
-            <TouchableOpacity 
-              style={styles.editButton}
-              onPress={() => navigation.navigate('Availability')}
-            >
-              <Ionicons name="calendar-outline" size={24} color="#1e3a8a" />
-            </TouchableOpacity>
-          </View>
-          <View style={styles.bubbleContainer}>
-            {formatAvailability().length > 0 ? (
-              formatAvailability().map((slot, index) => (
-                <View key={index} style={styles.availabilityBubble}>
-                  <Text style={styles.bubbleText}>
-                    {slot.day}: {slot.time}
-                    {slot.repeatType !== 'custom' && ` (${slot.repeatType})`}
-                  </Text>
-                </View>
-              ))
-            ) : (
-              <Text style={styles.noDataText}>No availability set</Text>
-            )}
-          </View>
-        </View>
-
-        {/* Location Section */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Location Preferences</Text>
-            <TouchableOpacity 
-              style={styles.editButton}
-              onPress={() => {
-                setTempLocationPreference(profileData.locationPreference);
-                setIsLocationModalVisible(true);
-              }}
-            >
-              <Ionicons name="create-outline" size={24} color="#1e3a8a" />
-            </TouchableOpacity>
-          </View>
-          {profileData.location && (
-            <View style={styles.infoRow}>
-              <Ionicons name="location-outline" size={24} color="#1e3a8a" />
-              <Text style={styles.infoText}>
-                Search radius: {(profileData.locationPreference / 1609.34).toFixed(1)} miles
-              </Text>
-            </View>
-          )}
-        </View>
-
-        {/* Location Modal */}
-        {isLocationModalVisible && (
-          <Modal
-            isVisible={true}
-            onBackdropPress={() => setIsLocationModalVisible(false)}
-            style={styles.modal}
-          >
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>Edit Location Radius</Text>
-              
-              <View style={styles.radiusControl}>
-                <Text style={styles.radiusText}>
-                  Search Radius: {(tempLocationPreference / 1609.34).toFixed(1)} miles
-                </Text>
-                <Slider
-                  style={styles.slider}
-                  minimumValue={1609.34} // 1 mile in meters
-                  maximumValue={80467.2} // 50 miles in meters
-                  step={1609.34} // 1 mile increments
-                  value={tempLocationPreference}
-                  onValueChange={setTempLocationPreference}
-                  minimumTrackTintColor="#1e3a8a"
-                  maximumTrackTintColor="#cbd5e1"
-                />
-              </View>
-
-              {isWeb && profileData.location && (
-                <View style={styles.modalMapContainer}>
-                  <WebMap
-                    location={profileData.location}
-                    radius={tempLocationPreference}
-                  />
-                </View>
-              )}
-
-              <View style={styles.modalButtons}>
-                <TouchableOpacity 
-                  style={[styles.modalButton, styles.cancelButton]}
-                  onPress={() => setIsLocationModalVisible(false)}
-                >
-                  <Text style={styles.cancelButtonText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.modalButton, styles.saveButton]}
-                  onPress={handleSaveRadius}
-                >
-                  <Text style={styles.saveButtonText}>Save</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </Modal>
-        )}
-      </ScrollView>
+      {profileData.role === 'worker' ? renderWorkerProfile() : renderEmployerProfile()}
     </View>
   );
 }
@@ -344,196 +299,118 @@ export default function ProfileScreen({ navigation, route }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#f0f0f0',
   },
   scrollView: {
-    padding: 16,
+    flex: 1,
+  },
+  headerSection: {
+    padding: 20,
+    borderRadius: 15,
+    margin: 10,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  name: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#ffffff',
+    marginBottom: 10,
+  },
+  contactInfo: {
+    marginTop: 10,
+  },
+  contactText: {
+    color: '#ffffff',
+    fontSize: 16,
+    marginVertical: 2,
   },
   section: {
     backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    margin: 10,
+    padding: 15,
+    borderRadius: 15,
     elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.22,
+    shadowRadius: 2.22,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#1f2937',
-    marginBottom: 12,
-  },
-  infoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  infoText: {
-    marginLeft: 8,
-    fontSize: 16,
-    color: '#4b5563',
-  },
-  bubbleContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  bubble: {
-    backgroundColor: '#1e3a8a',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-  },
-  bubbleText: {
-    color: '#ffffff',
-    fontSize: 14,
-  },
-  availabilityBubble: {
-    backgroundColor: '#3b82f6',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-  },
-  jobCard: {
-    backgroundColor: '#f8fafc',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 8,
-  },
-  jobTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#1f2937',
-  },
-  jobIndustry: {
-    fontSize: 14,
-    color: '#4b5563',
-    marginBottom: 8,
-  },
-  smallBubble: {
-    backgroundColor: '#dbeafe',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  smallBubbleText: {
-    color: '#1e3a8a',
-    fontSize: 12,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  editButton: {
-    padding: 4,
-  },
-  noDataText: {
-    color: '#6b7280',
-    fontStyle: 'italic',
-  },
-  modal: {
-    margin: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 20,
-    width: Platform.OS === 'web' ? '80%' : '90%',
-    maxWidth: 600,
-    maxHeight: '90%',
-  },
-  modalTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#1f2937',
-    marginBottom: 20,
-    textAlign: 'center',
+    color: '#1e3a8a',
+    marginBottom: 15,
   },
-  modalMapContainer: {
-    height: 300,
-    marginVertical: 20,
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  radiusControl: {
-    backgroundColor: '#f8fafc',
-    padding: 15,
-    borderRadius: 8,
-    marginBottom: 10,
-  },
-  radiusText: {
-    fontSize: 16,
-    color: '#1f2937',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  slider: {
-    width: '100%',
-    height: 40,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 20,
-  },
-  modalButton: {
-    flex: 1,
-    padding: 15,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginHorizontal: 5,
-  },
-  cancelButton: {
-    backgroundColor: '#f3f4f6',
-  },
-  saveButton: {
-    backgroundColor: '#1e3a8a',
-  },
-  cancelButtonText: {
-    color: '#4b5563',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  saveButtonText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  jobSkills: {
+  skillsContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginTop: 5,
+    marginBottom: 10,
   },
-  jobSkillText: {
-    fontSize: 14,
-    color: '#666',
-    backgroundColor: '#f0f0f0',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-    marginRight: 8,
-    marginBottom: 4,
-  },
-  skillItem: {
-    backgroundColor: '#f0f0f0',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 4,
-    marginRight: 8,
-    marginBottom: 8,
+  skillBubble: {
+    backgroundColor: '#e5e7eb',
+    borderRadius: 20,
+    padding: 8,
+    margin: 4,
   },
   skillText: {
+    color: '#1e3a8a',
     fontSize: 14,
-    color: '#333',
+  },
+  overviewText: {
+    color: '#4b5563',
+    fontSize: 16,
+    lineHeight: 24,
+  },
+  statsContainer: {
+    marginTop: 10,
+  },
+  statItem: {
+    marginBottom: 15,
+  },
+  statLabel: {
+    fontSize: 16,
+    color: '#4b5563',
+    marginBottom: 5,
+  },
+  statValue: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#1e3a8a',
+  },
+  chart: {
+    marginVertical: 8,
+    borderRadius: 16,
+  },
+  availabilityItem: {
+    marginVertical: 5,
+  },
+  dayText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#1e3a8a',
+  },
+  timeText: {
+    fontSize: 14,
+    color: '#4b5563',
+    marginLeft: 10,
+  },
+  jobSelectorContainer: {
+    backgroundColor: '#ffffff',
+    margin: 10,
+    borderRadius: 15,
+    overflow: 'hidden',
+  },
+  picker: {
+    height: 50,
+    width: '100%',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });

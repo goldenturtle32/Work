@@ -205,7 +205,8 @@ export default function AttributeSelectionScreen({ route, navigation }) {
   useEffect(() => {
     const fetchInitialTrends = async () => {
       try {
-        const industries = await fetchTrendingIndustries();
+        const locationString = cityName && stateCode ? `${cityName}, ${stateCode}` : '';
+        const industries = await fetchTrendingIndustries('', locationString);
         setTrendingData(prev => ({
           ...prev,
           industries: industries
@@ -220,7 +221,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     };
 
     fetchInitialTrends();
-  }, []);
+  }, [cityName, stateCode]);
 
   const fetchLocation = async () => {
     try {
@@ -273,8 +274,8 @@ export default function AttributeSelectionScreen({ route, navigation }) {
   const updateIndustrySuggestions = useCallback(
     debounce(async (searchTerm) => {
         try {
-            // Get trending industries that match the search term
-            const trendingIndustries = await fetchTrendingIndustries(searchTerm);
+            const locationString = cityName && stateCode ? `${cityName}, ${stateCode}` : '';
+            const trendingIndustries = await fetchTrendingIndustries(searchTerm, locationString);
             
             // Get all industries that start with the search term
             const startsWith = data.industries.filter(industry => 
@@ -315,7 +316,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
             console.error('Error updating industry suggestions:', error);
         }
     }, 300),
-    [data.industries]
+    [data.industries, cityName, stateCode]
   );
 
   const updateJobTypeSuggestions = useCallback(
@@ -323,8 +324,9 @@ export default function AttributeSelectionScreen({ route, navigation }) {
       try {
         if (!industry) return;
         
-        console.log(`Fetching jobs for industry: ${industry}`);
-        const jobs = await fetchTrendingJobs(industry);
+        const locationString = cityName && stateCode ? `${cityName}, ${stateCode}` : '';
+        console.log(`Fetching jobs for industry: ${industry} in ${locationString}`);
+        const jobs = await fetchTrendingJobs(industry, locationString);
         
         setTrendingData(prev => ({
           ...prev,
@@ -346,7 +348,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
         }));
       }
     },
-    []  // Remove trendingData.jobs dependency to avoid stale data
+    [cityName, stateCode]
   );
 
   const updateSkillSuggestions = useCallback(
@@ -354,8 +356,9 @@ export default function AttributeSelectionScreen({ route, navigation }) {
         try {
             if (!jobType || !attributes.industryPrefs[0]) return;
             
-            console.log(`Fetching skills for ${jobType} in ${attributes.industryPrefs[0]}`);
-            const skills = await fetchTrendingSkills(jobType, attributes.industryPrefs[0]);
+            const locationString = cityName && stateCode ? `${cityName}, ${stateCode}` : '';
+            console.log(`Fetching skills for ${jobType} in ${attributes.industryPrefs[0]} in ${locationString}`);
+            const skills = await fetchTrendingSkills(jobType, attributes.industryPrefs[0], locationString);
             
             if (Array.isArray(skills) && skills.length > 0) {
                 console.log(`Received skills: ${skills}`);
@@ -397,7 +400,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
             }));
         }
     }, 300),
-    [attributes.industryPrefs]
+    [attributes.industryPrefs, cityName, stateCode]
 );
 
   const handleSkillSelection = (skill) => {
@@ -429,6 +432,8 @@ export default function AttributeSelectionScreen({ route, navigation }) {
         skills: []
       }));
       setInputValues(prev => ({ ...prev, industryPrefs: '' }));
+      
+      // Immediately fetch job types for the new industry
       updateJobTypeSuggestions(industry);
     }
   };
@@ -784,6 +789,44 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     );
   };
 
+  const handleIndustryInputChange = (text) => {
+    setInputValues(prev => ({ ...prev, industryPrefs: text }));
+    
+    // Filter existing suggestions
+    const filteredIndustries = trendingData.industries.filter(industry => 
+      industry.toLowerCase().includes(text.toLowerCase())
+    );
+    
+    // Update suggestions immediately with filtered results
+    setSuggestions(prev => ({
+      ...prev,
+      industries: filteredIndustries
+    }));
+    
+    // Fetch new suggestions from API
+    updateIndustrySuggestions(text);
+  };
+
+  const handleJobTypeInputChange = (text) => {
+    setInputValues(prev => ({ ...prev, jobTypePrefs: text }));
+    
+    // If we have an industry selected, filter and fetch job types
+    if (attributes.industryPrefs[0]) {
+      // Filter existing job types
+      const filteredJobs = trendingData.jobs[attributes.industryPrefs[0]]?.filter(job => 
+        job.toLowerCase().includes(text.toLowerCase())
+      ) || [];
+      
+      setSuggestions(prev => ({
+        ...prev,
+        jobTypes: filteredJobs
+      }));
+      
+      // Fetch new job types from API
+      updateJobTypeSuggestions(attributes.industryPrefs[0], text);
+    }
+  };
+
   return (
     <View style={styles.mainContainer}>
       <KeyboardAvoidingView
@@ -818,11 +861,10 @@ export default function AttributeSelectionScreen({ route, navigation }) {
               <TextInput
                 style={styles.input}
                 value={inputValues.industryPrefs}
-                onChangeText={(text) => handleInputChange('industryPrefs', text)}
+                onChangeText={handleIndustryInputChange}
                 placeholder="Type to search industries"
                 onFocus={handleIndustryInputFocus}
                 onBlur={() => {
-                  // Delay hiding the suggestions to allow for selection
                   setTimeout(() => setIsIndustryInputFocused(false), 200);
                 }}
               />
@@ -874,11 +916,8 @@ export default function AttributeSelectionScreen({ route, navigation }) {
                   <Text style={styles.label}>Job Type Preferences:</Text>
                   <TextInput
                     style={styles.input}
-                    value={inputValues.jobTypePrefs || ''}  // Use inputValues instead of attributes
-                    onChangeText={(text) => {
-                      setInputValues(prev => ({ ...prev, jobTypePrefs: text }));
-                      updateSkillSuggestions(text);
-                    }}
+                    value={inputValues.jobTypePrefs}
+                    onChangeText={handleJobTypeInputChange}
                     placeholder="Type to search job types"
                     onFocus={() => setIsJobTypeInputFocused(true)}
                     onBlur={() => setTimeout(() => setIsJobTypeInputFocused(false), 200)}
