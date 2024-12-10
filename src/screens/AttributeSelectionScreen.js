@@ -20,6 +20,7 @@ import { debounce } from 'lodash';
 import { Ionicons } from '@expo/vector-icons';
 import { fetchTrendingIndustries, fetchTrendingJobs, fetchTrendingSkills } from '../services/trendsService';
 import Slider from '@react-native-community/slider';
+import ProgressStepper from '../components/ProgressStepper';
 
 const isWeb = typeof document !== 'undefined';
 let WebMap;
@@ -148,6 +149,8 @@ export default function AttributeSelectionScreen({ route, navigation }) {
 
   const [isJobTypeInputFocused, setIsJobTypeInputFocused] = useState(false);
 
+  const [currentStep, setCurrentStep] = useState(1);
+
   useEffect(() => {
     const fetchUserRole = async () => {
       try {
@@ -222,6 +225,14 @@ export default function AttributeSelectionScreen({ route, navigation }) {
 
     fetchInitialTrends();
   }, [cityName, stateCode]);
+
+  useEffect(() => {
+    // Example logic to determine current step
+    if (attributes.name) setCurrentStep(2);
+    if (attributes.jobTypePrefs) setCurrentStep(3);
+    if (attributes.location) setCurrentStep(4);
+    if (generatedOverview) setCurrentStep(5);
+  }, [attributes, generatedOverview]);
 
   const fetchLocation = async () => {
     try {
@@ -837,6 +848,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
           style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
         >
+          <ProgressStepper currentStep={currentStep} />
           <Text style={styles.title}>Fill in Your Attributes</Text>
 
           {error && <Text style={styles.error}>{error}</Text>}

@@ -83,14 +83,17 @@ export default function MatchesScreen({ navigation }) {
   }, []);
 
   const handleChatPress = (match) => {
-    console.log('Navigating to chat with match data:', match);
+    console.log('Navigating with match data:', match);
     
     // Check if match is accepted
     if (match.accepted === 1) {
+      console.log('Navigating to JobDetailsMatched for accepted match:', match.id);
       navigation.navigate('JobDetailsMatched', {
-        matchId: match.id
+        matchId: match.id,
+        jobDetails: match.otherUser  // Pass the job details directly
       });
     } else {
+      console.log('Navigating to Chat for unaccepted match:', match.id);
       navigation.navigate('Chat', {
         matchId: match.id,
         role: userRole,
@@ -100,23 +103,44 @@ export default function MatchesScreen({ navigation }) {
   };
 
   const filteredMatches = matches.filter(match => {
-    if (filter === 'all') return true;
-    if (filter === 'messaged') return match.lastMessage !== null;
-    if (filter === 'accepted') return match.accepted === 1;
-    return true;
+    switch(filter) {
+      case 'all':
+        return true;
+      case 'messaged':
+        return match.lastMessage !== null;
+      case 'accepted':
+        console.log('Checking accepted match:', match.id, match.accepted);
+        return match.accepted === 1;
+      default:
+        return true;
+    }
   });
 
   const renderMatchItem = ({ item }) => {
     const matchDetails = item.otherUser;
     const otherUserId = userRole === 'worker' ? item.employerId : item.workerId;
+    const isAccepted = item.accepted === 1;
+    
+    console.log(`Rendering match ${item.id}, accepted: ${isAccepted}`);
     
     return (
       <TouchableOpacity
         style={[
           styles.matchItem,
-          item.accepted === 1 && styles.acceptedMatch
+          isAccepted && styles.acceptedMatch
         ]}
-        onPress={() => handleChatPress(item)}
+        onPress={() => {
+          if (filter === 'accepted' && isAccepted) {
+            // If we're in the accepted tab and the match is accepted, go to JobDetailsMatched
+            navigation.navigate('JobDetailsMatched', {
+              matchId: item.id,
+              jobDetails: matchDetails
+            });
+          } else {
+            // Otherwise use the normal handleChatPress logic
+            handleChatPress(item);
+          }
+        }}
         onLongPress={async () => {
           try {
             let detailsCollection;
@@ -200,16 +224,16 @@ export default function MatchesScreen({ navigation }) {
               Last message: {item.lastMessage}
             </Text>
           )}
-          {item.accepted === 1 && (
+          {isAccepted && (
             <View style={styles.acceptedBadge}>
               <Text style={styles.acceptedText}>Accepted</Text>
             </View>
           )}
         </View>
         <Ionicons 
-          name={item.accepted === 1 ? "checkmark-circle" : "chevron-forward"} 
+          name={isAccepted ? "checkmark-circle" : "chevron-forward"} 
           size={24} 
-          color={item.accepted === 1 ? "#4CAF50" : "#666"} 
+          color={isAccepted ? "#4CAF50" : "#666"} 
         />
       </TouchableOpacity>
     );
