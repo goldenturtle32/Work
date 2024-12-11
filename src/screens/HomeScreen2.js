@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Dimensions, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, Dimensions, TouchableOpacity, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import Swiper from 'react-native-deck-swiper';
 import { db, auth, firebase } from '../firebase';  // Make sure firebase is imported here
 import { Ionicons } from '@expo/vector-icons';
@@ -15,6 +15,9 @@ import {
 import { 
   DMSerifText_400Regular 
 } from '@expo-google-fonts/dm-serif-text';
+import NewMatchModal from '../components/NewMatchModal';
+import styled from 'styled-components/native';
+import DotLoader from '../components/Loader';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -139,6 +142,49 @@ const SkillsList = ({ skills, userSkills }) => {
   );
 };
 
+const Dot = styled.View`
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  margin: 0 4px;
+  background-color: ${props => props.active ? '#007AFF' : '#C4C4C4'};
+  transition: background-color 0.3s ease;
+`;
+
+const DotsContainer = styled.View`
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+`;
+
+const StyledWrapper = styled.View`
+  flex: 1;
+  justify-content: center;
+  align-items: center;
+`;
+
+const Loader = () => {
+  const [activeDot, setActiveDot] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setActiveDot((prev) => (prev + 1) % 3);
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <StyledWrapper>
+      <DotsContainer>
+        <Dot active={activeDot === 0} />
+        <Dot active={activeDot === 1} />
+        <Dot active={activeDot === 2} />
+      </DotsContainer>
+    </StyledWrapper>
+  );
+};
+
 export default function HomeScreen({ navigation }) {
   const [items, setItems] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
@@ -146,6 +192,9 @@ export default function HomeScreen({ navigation }) {
   const [error, setError] = useState(null);
   const swiperRef = useRef(null);
   const [userSkills, setUserSkills] = useState([]);
+  const [showMatchModal, setShowMatchModal] = useState(false);
+  const [matchedJob, setMatchedJob] = useState(null);
+  const [matchData, setMatchData] = useState(null);
 
   let [fontsLoaded] = useFonts({
     LibreBodoni_400Regular,
@@ -272,134 +321,43 @@ export default function HomeScreen({ navigation }) {
   const handleSwipe = async (cardIndex, interested) => {
     const item = items[cardIndex];
     const currentUserUid = auth.currentUser.uid;
-    
-    // Debug logging
-    console.log('Item full object:', item);
-    console.log('Item properties:', Object.keys(item));
-    
-    // Fix the swipedUserId determination based on role and item type
-    let swipedUserId;
-    if (currentUser.role === 'worker') {
-      swipedUserId = item.id; // For jobs
-    } else {
-      // For employers swiping on workers
-      swipedUserId = item.uid || item.id;
-      
-      // Debug logging
-      console.log('Worker candidate item:', {
-        uid: item.uid,
-        id: item.id,
-        determined_swipedUserId: swipedUserId
-      });
-    }
-
-    // Validation check with more detailed logging
-    if (!swipedUserId) {
-      console.error('Failed to determine swipedUserId:', {
-        role: currentUser.role,
-        itemId: item.id,
-        itemUid: item.uid,
-        item: JSON.stringify(item, null, 2), // Pretty print the item
-        itemType: item.constructor.name
-      });
-      Alert.alert('Error', 'Could not process swipe. Please try again.');
-      return;
-    }
-
-    console.log(`Swiped ${interested ? 'right' : 'left'} on item:`, swipedUserId);
-    console.log(`Current user: ${currentUserUid}, role: ${currentUser.role}`);
-    console.log('Item being swiped:', item);
+    const itemId = currentUser.role === 'worker' ? item.id : item.uid;
 
     try {
       const userJobPrefData = new UserJobPreference({
         userId: currentUserUid,
         role: currentUser.role,
-        swipedUserId: swipedUserId,
+        swipedUserId: itemId,
         interested: interested,
       });
 
-      console.log('UserJobPreference data:', userJobPrefData);
+      await db.collection('user_job_preferences').add(userJobPrefData.toObject());
 
-      const userJobPrefObject = {
-        ...userJobPrefData.toObject(),
-        timestamp: firebase.firestore.FieldValue.serverTimestamp()
-      };
-
-      // Create a separate document for each swipe preference using the correct IDs
-      const prefDocId = `${currentUserUid}_${swipedUserId}`;
-      
-      // Update user_job_preferences with a unique document ID
-      await db.collection('user_job_preferences').doc(prefDocId).set(userJobPrefObject);
-
-      console.log('User job preferences updated successfully');
-
-      // If it's a right swipe, check for a match
       if (interested) {
-        // For worker->employer matches: workerId_employerId
-        // For employer->worker matches: workerId_employerId
-        const matchId = currentUser.role === 'worker' 
-          ? `${currentUserUid}_${swipedUserId}` // worker_employer
-          : `${swipedUserId}_${currentUserUid}`; // worker_employer (same format)
-        
-        console.log('Checking for match with ID:', matchId);
-        
-        // Check if the other person has already swiped right
-        const otherUserPrefId = currentUser.role === 'worker'
-          ? `${swipedUserId}_${currentUserUid}` // employer_worker
-          : `${currentUserUid}_${swipedUserId}`; // worker_employer
-        
-        const otherUserPref = await db.collection('user_job_preferences')
-          .doc(otherUserPrefId)
+        const otherUserPrefs = await db.collection('user_job_preferences')
+          .where('userId', '==', itemId)
+          .where('swipedUserId', '==', currentUserUid)
+          .where('interested', '==', true)
           .get();
 
-        if (otherUserPref.exists && otherUserPref.data().interested) {
-          console.log("Found matching preference! Creating match...");
-          
-          try {
-            // Create match document...
-            await matchRef.set(matchData);
-            
-            // Get additional details for the popup
-            const matchedItemDetails = currentUser.role === 'worker' 
-              ? await db.collection('job_attributes').doc(swipedUserId).get()
-              : await db.collection('user_attributes').doc(swipedUserId).get();
-            
-            const matchDetails = matchedItemDetails.data();
-            
-            Alert.alert(
-              "It's a Match! 🎉",
-              currentUser.role === 'worker' 
-                ? `You matched with ${matchDetails.jobTitle} at ${matchDetails.company}!\n\nSalary: $${matchDetails.salaryRange?.min}-${matchDetails.salaryRange?.max}/hr`
-                : `You matched with a candidate!\n\nSkills: ${matchDetails.skills?.slice(0,3).join(', ')}\nExperience: ${matchDetails.experience?.totalYears} years`,
-              [
-                {
-                  text: "Message",
-                  onPress: () => navigation.navigate('Chat', {
-                    jobTitle: matchDetails.jobTitle || 'Job',
-                    company: matchDetails.company || 'Company',
-                    role: currentUser.role
-                  })
-                },
-                {
-                  text: "View Profile",
-                  onPress: () => navigation.navigate('JobDetail', {
-                    itemId: swipedUserId,
-                    itemType: currentUser.role === 'worker' ? 'job' : 'worker',
-                    currentUserData: currentUser,
-                    item: matchDetails
-                  })
-                },
-                {
-                  text: "Keep Swiping",
-                  style: "cancel"
-                }
-              ]
-            );
-          } catch (error) {
-            console.error("Error creating match:", error);
-          }
-        } else {
-          console.log("No match yet - waiting for other user to swipe right");
+        if (!otherUserPrefs.empty) {
+          console.log("It's a match!");
+          const matchId = currentUser.role === 'worker' 
+            ? `${currentUserUid}_${itemId}` 
+            : `${itemId}_${currentUserUid}`;
+
+          const matchData = {
+            id: matchId,
+            workerId: currentUser.role === 'worker' ? currentUserUid : itemId,
+            employerId: currentUser.role === 'employer' ? currentUserUid : itemId,
+            timestamp: firebase.firestore.FieldValue.serverTimestamp()
+          };
+
+          await db.collection('matches').doc(matchId).set(matchData);
+
+          setMatchedJob(item);
+          setMatchData(matchData);
+          setShowMatchModal(true);
         }
       }
     } catch (error) {
@@ -412,6 +370,8 @@ export default function HomeScreen({ navigation }) {
   const onSwipedLeft = (cardIndex) => handleSwipe(cardIndex, false);
 
   const onSwipedAll = () => {
+    console.log("All cards swiped, items length:", items.length);
+    setItems([]); // Clear the items when all cards are swiped
     Alert.alert('End of List', 'You have swiped through all available items.');
   };
 
@@ -568,6 +528,11 @@ export default function HomeScreen({ navigation }) {
     );
   };
 
+  useEffect(() => {
+    console.log("Current items length:", items.length);
+    console.log("isLoading:", isLoading);
+  }, [items, isLoading]);
+
   if (!fontsLoaded) {
     return <ActivityIndicator />;
   }
@@ -597,87 +562,111 @@ export default function HomeScreen({ navigation }) {
   }
 
   return (
-    <View style={styles.container}>
-      {items.length > 0 ? (
-        <Swiper
-          ref={swiperRef}
-          cards={items}
-          renderCard={renderCard}
-          onSwipedRight={(cardIndex) => handleSwipe(cardIndex, true)}
-          onSwipedLeft={(cardIndex) => handleSwipe(cardIndex, false)}
-          onSwipedAll={onSwipedAll}
-          cardIndex={0}
-          backgroundColor={'#f0f0f0'}
-          stackSize={3}
-          stackSeparation={15}
-          animateCardOpacity
-          verticalSwipe={false}
-          overlayLabels={{
-            left: {
-              title: 'NOPE',
-              style: {
-                label: {
-                  backgroundColor: '#FF4136',
-                  color: 'white',
-                  fontSize: 24,
-                  borderRadius: 10,
-                  padding: 10,
-                },
-                wrapper: {
-                  flexDirection: 'column',
-                  alignItems: 'flex-end',
-                  justifyContent: 'flex-start',
-                  marginTop: 20,
-                  marginLeft: -20,
-                },
-              },
-            },
-            right: {
-              title: 'LIKE',
-              style: {
-                label: {
-                  backgroundColor: '#2ECC40',
-                  color: 'white',
-                  fontSize: 24,
-                  borderRadius: 10,
-                  padding: 10,
-                },
-                wrapper: {
-                  flexDirection: 'column',
-                  alignItems: 'flex-start',
-                  justifyContent: 'flex-start',
-                  marginTop: 20,
-                  marginLeft: 20,
-                },
-              },
-            },
-          }}
-        />
+    <KeyboardAvoidingView 
+      style={styles.container}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
+      {isLoading ? (
+        <ActivityIndicator size="large" color="#0000ff" />
+      ) : items.length === 0 ? (
+        <View style={styles.loaderContainer}>
+          <DotLoader />
+          <Text style={styles.noItemsText}>No more items to show</Text>
+        </View>
       ) : (
-        <View style={styles.noItemsContainer}>
-          <Text style={styles.noItemsText}>No items available at the moment.</Text>
+        <View style={styles.container}>
+          {items.length > 0 ? (
+            <Swiper
+              ref={swiperRef}
+              cards={items}
+              renderCard={renderCard}
+              onSwipedRight={(cardIndex) => handleSwipe(cardIndex, true)}
+              onSwipedLeft={(cardIndex) => handleSwipe(cardIndex, false)}
+              onSwipedAll={onSwipedAll}
+              cardIndex={0}
+              backgroundColor={'#f0f0f0'}
+              stackSize={3}
+              stackSeparation={15}
+              animateCardOpacity
+              verticalSwipe={false}
+              overlayLabels={{
+                left: {
+                  title: 'NOPE',
+                  style: {
+                    label: {
+                      backgroundColor: '#FF4136',
+                      color: 'white',
+                      fontSize: 24,
+                      borderRadius: 10,
+                      padding: 10,
+                    },
+                    wrapper: {
+                      flexDirection: 'column',
+                      alignItems: 'flex-end',
+                      justifyContent: 'flex-start',
+                      marginTop: 20,
+                      marginLeft: -20,
+                    },
+                  },
+                },
+                right: {
+                  title: 'LIKE',
+                  style: {
+                    label: {
+                      backgroundColor: '#2ECC40',
+                      color: 'white',
+                      fontSize: 24,
+                      borderRadius: 10,
+                      padding: 10,
+                    },
+                    wrapper: {
+                      flexDirection: 'column',
+                      alignItems: 'flex-start',
+                      justifyContent: 'flex-start',
+                      marginTop: 20,
+                      marginLeft: 20,
+                    },
+                  },
+                },
+              }}
+            />
+          ) : (
+            <View style={styles.noItemsContainer}>
+              <Text style={styles.noItemsText}>No items available at the moment.</Text>
+            </View>
+          )}
+
+          <View style={styles.navigation}>
+            <TouchableOpacity style={styles.navButton} onPress={() => {
+              if (swiperRef.current && swiperRef.current.jumpToCardIndex) {
+                swiperRef.current.jumpToCardIndex(0);
+              }
+            }}>
+              <Ionicons name="home" size={24} color="#ffffff" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Matches')}>
+              <Ionicons name="heart" size={24} color="#ffffff" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Profile')}>
+              <Ionicons name="person" size={24} color="#ffffff" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Settings')}>
+              <Ionicons name="settings" size={24} color="#ffffff" />
+            </TouchableOpacity>
+          </View>
+
+          <NewMatchModal 
+            visible={showMatchModal}
+            onClose={() => {
+              setShowMatchModal(false);
+              setMatchData(null);
+            }}
+            jobData={matchedJob}
+            matchData={matchData}
+          />
         </View>
       )}
-
-      <View style={styles.navigation}>
-        <TouchableOpacity style={styles.navButton} onPress={() => {
-          if (swiperRef.current && swiperRef.current.jumpToCardIndex) {
-            swiperRef.current.jumpToCardIndex(0);
-          }
-        }}>
-          <Ionicons name="home" size={24} color="#ffffff" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Matches')}>
-          <Ionicons name="heart" size={24} color="#ffffff" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Profile')}>
-          <Ionicons name="person" size={24} color="#ffffff" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Settings')}>
-          <Ionicons name="settings" size={24} color="#ffffff" />
-        </TouchableOpacity>
-      </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -876,5 +865,15 @@ const styles = StyleSheet.create({
   matchingSkillText: {
     color: '#ffffff',
     fontWeight: 'bold',
+  },
+  loaderContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  noItemsText: {
+    marginTop: 20,
+    fontSize: 16,
+    color: '#666',
   },
 });

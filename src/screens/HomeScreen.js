@@ -17,6 +17,7 @@ import {
 } from '@expo-google-fonts/dm-serif-text';
 import NewMatchModal from '../components/NewMatchModal';
 import styled from 'styled-components/native';
+import DotLoader from '../components/Loader';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -369,6 +370,8 @@ export default function HomeScreen({ navigation }) {
   const onSwipedLeft = (cardIndex) => handleSwipe(cardIndex, false);
 
   const onSwipedAll = () => {
+    console.log("All cards swiped, items length:", items.length);
+    setItems([]); // Clear the items when all cards are swiped
     Alert.alert('End of List', 'You have swiped through all available items.');
   };
 
@@ -525,6 +528,11 @@ export default function HomeScreen({ navigation }) {
     );
   };
 
+  useEffect(() => {
+    console.log("Current items length:", items.length);
+    console.log("isLoading:", isLoading);
+  }, [items, isLoading]);
+
   if (!fontsLoaded) {
     return <ActivityIndicator />;
   }
@@ -560,11 +568,14 @@ export default function HomeScreen({ navigation }) {
     >
       {isLoading ? (
         <ActivityIndicator size="large" color="#0000ff" />
-      ) : items.length === 0 ? (
-        <Loader />
       ) : (
         <View style={styles.container}>
-          {items.length > 0 ? (
+          {items.length === 0 ? (
+            <View style={styles.loaderContainer}>
+              <DotLoader />
+              <Text style={styles.noItemsText}>No more items to show</Text>
+            </View>
+          ) : (
             <Swiper
               ref={swiperRef}
               cards={items}
@@ -619,10 +630,6 @@ export default function HomeScreen({ navigation }) {
                 },
               }}
             />
-          ) : (
-            <View style={styles.noItemsContainer}>
-              <Text style={styles.noItemsText}>No items available at the moment.</Text>
-            </View>
           )}
 
           <View style={styles.navigation}>
@@ -854,5 +861,17 @@ const styles = StyleSheet.create({
   matchingSkillText: {
     color: '#ffffff',
     fontWeight: 'bold',
+  },
+  loaderContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    height: SCREEN_HEIGHT * 0.7,
+    marginBottom: 20,
+  },
+  noItemsText: {
+    marginTop: 20,
+    fontSize: 16,
+    color: '#666',
   },
 });
