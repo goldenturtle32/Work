@@ -203,7 +203,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     if (userRole) {
       fetchOverviewQuestions();
     }
-  }, [userRole]);
+  }, [userRole, attributes.jobTitle, attributes.industryPrefs]);
 
   useEffect(() => {
     const fetchInitialTrends = async () => {
@@ -491,9 +491,51 @@ export default function AttributeSelectionScreen({ route, navigation }) {
         throw new Error('User not authenticated');
       }
 
-      if (userRole === 'worker' && selectedJobs.length === 0) {
-        Alert.alert('No Jobs Selected', 'Please add at least one job before submitting.');
-        return;
+      // Different validation for employers
+      if (userRole === 'employer') {
+        if (!attributes.jobTitle || !attributes.industryPrefs.length) {
+          Alert.alert('Missing Information', 'Please fill in job title and industry preferences.');
+          return;
+        }
+
+        // Generate overview before submitting if not already generated
+        if (!generatedOverview) {
+          try {
+            const response = await fetch(`${BACKEND_URL}/generate-overview`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                role: userRole,
+                responses: overviewResponses,
+                industryPrefs: attributes.industryPrefs,
+                jobTitle: attributes.jobTitle
+              }),
+            });
+
+            const data = await response.json();
+            if (data.success) {
+              setGeneratedOverview(data.overview);
+              setAttributes(prev => ({
+                ...prev,
+                user_overview: data.overview
+              }));
+            } else {
+              throw new Error(data.error || 'Failed to generate overview');
+            }
+          } catch (error) {
+            console.error('Error generating overview:', error);
+            Alert.alert('Error', 'Failed to generate job overview. Please try again.');
+            return;
+          }
+        }
+      } else {
+        // Existing worker validation
+        if (selectedJobs.length === 0) {
+          Alert.alert('No Jobs Selected', 'Please add at least one job before submitting.');
+          return;
+        }
       }
 
       const locationData = attributes.location
@@ -508,6 +550,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
         uid: currentUser.uid,
         email: currentUser.email,
         role: userRole,
+        user_overview: generatedOverview // Include the generated overview
       };
 
       console.log('Data to submit:', dataToSubmit);
@@ -516,7 +559,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
       await db.collection('user_attributes').doc(currentUser.uid).set(dataToSubmit);
       console.log('Data saved successfully');
 
-      // Try immediate navigation without Alert
+      // Navigate to next screen
       navigation.reset({
         index: 0,
         routes: [
@@ -529,7 +572,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
 
     } catch (error) {
       console.error('Error in handleSubmit:', error);
-      Alert.alert('Error', 'Failed to save attributes');
+      Alert.alert('Error', 'Failed to save attributes. Please try again.');
     }
   };
 
@@ -596,6 +639,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
           role: userRole,
           selectedJobs: attributes.selectedJobs || [],
           industryPrefs: attributes.industryPrefs || [],
+          jobTitle: attributes.jobTitle || '',
         }),
       });
 
@@ -677,28 +721,35 @@ export default function AttributeSelectionScreen({ route, navigation }) {
   // Add this function to check if form is valid
   const isFormValid = () => {
     console.log('Checking form validity:', {
-      selectedJobs: selectedJobs,
-      userRole: userRole
+      userRole,
+      jobTitle: attributes.jobTitle,
+      industryPrefs: attributes.industryPrefs,
+      salaryRange: attributes.salaryRange,
+      generatedOverview
     });
     
-    if (userRole === 'worker') {
-      // For workers, only require selected jobs
-      const isValid = selectedJobs.length > 0;
-      console.log('Worker form validity:', isValid);
-      return isValid;
-    } else {
-      // For employers
+    if (userRole === 'employer') {
+      // For employers, check required fields
       const hasJobDetails = attributes.jobTitle && 
         attributes.salaryRange && 
         attributes.salaryRange.min && 
         attributes.salaryRange.max;
       
       const hasIndustry = attributes.industryPrefs.length > 0;
-      const hasJobType = attributes.jobTypePrefs !== '';
-      const hasSkills = attributes.skills.length > 0;
+      const hasOverview = !!generatedOverview;
       
-      const isValid = hasJobDetails && hasIndustry && hasJobType && hasSkills;
-      console.log('Employer form validity:', isValid);
+      const isValid = hasJobDetails && hasIndustry && hasOverview;
+      console.log('Employer form validity:', {
+        hasJobDetails,
+        hasIndustry,
+        hasOverview,
+        isValid
+      });
+      return isValid;
+    } else {
+      // For workers, only require selected jobs
+      const isValid = selectedJobs.length > 0;
+      console.log('Worker form validity:', isValid);
       return isValid;
     }
   };
@@ -1129,22 +1180,15 @@ export default function AttributeSelectionScreen({ route, navigation }) {
             )}
           </View>
 
-          {/* Submit Button at the bottom */}
-          <TouchableOpacity
-            style={[
-              styles.submitButton,
-              !isFormValid() && styles.submitButtonDisabled
-            ]}
-            onPress={handleSubmit}
-            disabled={!isFormValid()}
-          >
-            <Text style={[
-              styles.submitButtonText,
-              !isFormValid() && styles.submitButtonTextDisabled
-            ]}>
-              Submit Attributes
-            </Text>
-          </TouchableOpacity>
+          {/* Submit Button */}
+          {isFormValid() && (
+            <TouchableOpacity
+              style={styles.submitButton}
+              onPress={handleSubmit}
+            >
+              <Text style={styles.submitButtonText}>Submit Attributes</Text>
+            </TouchableOpacity>
+          )}
 
           {/* Add bottom padding for scrolling */}
           <View style={styles.bottomPadding} />

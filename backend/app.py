@@ -309,6 +309,8 @@ def generate_overview_questions():
         data = request.json
         role = data.get('role')
         selected_jobs = data.get('selectedJobs', [])
+        industry_prefs = data.get('industryPrefs', [])
+        job_title = data.get('jobTitle', '')
         
         if role == 'worker':
             job_titles = [job.get('title', '') for job in selected_jobs]
@@ -326,11 +328,40 @@ def generate_overview_questions():
                 "success": True,
                 "questions": questions
             })
-        else:
+        else:  # employer questions
+            # Generate questions based on industry and job title
+            questions = [
+                f"What are the primary responsibilities for this {job_title} position?",
+                "What qualifications or experience are required for this role?",
+                "What makes your company culture unique?",
+                "What growth or advancement opportunities are available?",
+                "What benefits or perks do you offer employees?"
+            ]
+            
+            # Add industry-specific questions
+            industry_questions = {
+                'Technology': [
+                    "What development methodologies does your team use?",
+                    "What is your tech stack?",
+                    "How do you handle project deadlines and releases?"
+                ],
+                'Healthcare': [
+                    "What patient populations will this role work with?",
+                    "What medical technologies or systems do you use?",
+                    "What are your quality of care standards?"
+                ],
+                # Add more industry-specific questions as needed
+            }
+            
+            # Add relevant industry questions
+            for industry in industry_prefs:
+                if industry in industry_questions:
+                    questions.extend(industry_questions[industry][:2])  # Add up to 2 industry-specific questions
+            
             return jsonify({
-                "success": False,
-                "error": "Employer questions not implemented"
-            }), 501
+                "success": True,
+                "questions": questions[:7]  # Limit to 7 questions total
+            })
             
     except Exception as e:
         print(f"Error generating questions: {str(e)}")
@@ -347,6 +378,7 @@ def generate_overview():
         responses = data.get('responses', {})
         selected_jobs = data.get('selectedJobs', [])
         industry_prefs = data.get('industryPrefs', [])
+        job_title = data.get('jobTitle', '')
 
         if role == 'worker':
             # Create a prompt that focuses on professional experience
@@ -370,11 +402,31 @@ def generate_overview():
                 "success": True,
                 "overview": response
             })
-        else:
+        else:  # employer overview
+            # Create a prompt for generating employer job overview
+            prompt = f"""Create a professional job overview based on these responses:
+            Job Title: {job_title}
+            Industry: {industry_prefs[0] if industry_prefs else 'General'}
+            Responses: {responses}
+            
+            Focus on creating an engaging, informative job description that:
+            - Clearly outlines the role and responsibilities
+            - Highlights key qualifications and requirements
+            - Describes growth opportunities and benefits
+            - Showcases the company culture
+            Keep it professional, concise, and appealing to potential candidates."""
+
+            messages = [
+                {"role": "system", "content": "You are an expert at writing compelling job descriptions that attract qualified candidates."},
+                {"role": "user", "content": prompt}
+            ]
+            
+            response = make_openai_request(messages)
+            
             return jsonify({
-                "success": False,
-                "error": "Employer overview generation not implemented"
-            }), 501
+                "success": True,
+                "overview": response
+            })
             
     except Exception as e:
         print(f"Error generating overview: {str(e)}")

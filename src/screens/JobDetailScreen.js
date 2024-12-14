@@ -276,123 +276,187 @@ export default function JobDetailScreen({ route, navigation }) {
     loadJobDetails();
   }, [item, currentUserData]);
 
-  const renderJobDetails = () => {
-    if (!item) return null;
-
+  const renderWorkerView = () => {
     return (
-      <>
-        <Text style={styles.title}>{item.jobTitle || 'No Title'}</Text>
-        
-        {/* Location Section */}
-        <Text style={styles.sectionTitle}>Location</Text>
-        <View style={styles.infoContainer}>
-          <Text style={styles.description}>{locationDisplay}</Text>
-          {item?.distance && (
-            <Text style={styles.description}>
-              {item.distance.toFixed(1)} miles away
-              {'\n'}Estimated commute:{'\n'}
-              By Car: ~{Math.round(item.distance * 1.5)} minutes{'\n'}
-              By Transit: ~{Math.round(item.distance * 3)} minutes
-            </Text>
-          )}
+      <ScrollView style={styles.container}>
+        {/* Primary Info Section */}
+        <View style={styles.section}>
+          <Text style={styles.name}>{item.name || 'Name not available'}</Text>
         </View>
 
-        {/* Pay Information */}
-        <Text style={styles.sectionTitle}>Compensation</Text>
-        <View style={styles.infoContainer}>
-          <Text style={styles.description}>
-            Pay Range: ${item.salaryRange?.min || 'N/A'}/hr - ${item.salaryRange?.max || 'N/A'}/hr{'\n'}
-            Weekly Hours: {item.weeklyHours || 0} hours{'\n'}
-            Estimated Weekly Pay: ${((item.salaryRange?.min || 0) * (item.weeklyHours || 0)).toLocaleString()} - 
-            ${((item.salaryRange?.max || 0) * (item.weeklyHours || 0)).toLocaleString()}
-          </Text>
+        {/* Skills Match Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Skills Match</Text>
+          <View style={styles.skillsContainer}>
+            {item.skills?.map((skill, index) => (
+              <View key={index} style={[
+                styles.skillBubble,
+                matchingSkills.includes(skill) && styles.matchingSkillBubble
+              ]}>
+                <Text style={styles.skillText}>{skill}</Text>
+              </View>
+            ))}
+          </View>
         </View>
 
-        {/* Benefits Section */}
-        <Text style={styles.sectionTitle}>Benefits</Text>
-        <View style={styles.benefitsContainer}>
-          {getBenefits().map((benefit, index) => (
-            <View key={index} style={styles.benefitBubble}>
-              <Text style={styles.benefitText}>{benefit}</Text>
-            </View>
-          ))}
+        {/* Job Overview & Match Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Why This Is a Great Match</Text>
+          <Text style={styles.analysisText}>{llmAnalysis}</Text>
+          
+          <View style={styles.matchAnalysisContainer}>
+            <QuickMatchOverview analysis={analysis} />
+            {analysis?.details?.map((detail, index) => (
+              <Text key={index} style={styles.matchDetail}>• {detail}</Text>
+            ))}
+          </View>
         </View>
 
-        {/* Skills Section */}
-        <Text style={styles.sectionTitle}>Required Skills</Text>
-        <View style={styles.skillsContainer}>
-          {item.requiredSkills?.map((skill, index) => (
-            <View key={index} style={styles.skillBubble}>
-              <Text style={styles.skillText}>{skill}</Text>
-            </View>
-          ))}
-        </View>
-
-        {/* Match Analysis */}
-        <Text style={styles.sectionTitle}>Match Analysis</Text>
-        <View style={styles.matchAnalysisContainer}>
-          {analyzeMatch().map((match, index) => (
-            <Text key={index} style={styles.matchDetail}>• {match}</Text>
-          ))}
-        </View>
-
-        {/* Availability Match */}
-        <Text style={styles.sectionTitle}>Schedule Compatibility</Text>
-        <View style={styles.scheduleMatchContainer}>
-          {analyzeScheduleMatch().length > 0 ? (
-            analyzeScheduleMatch().map((timeSlot, index) => (
+        {/* Schedule Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Schedule Compatibility</Text>
+          <View style={styles.scheduleMatchContainer}>
+            {analyzeScheduleMatch().map((timeSlot, index) => (
               <Text key={index} style={styles.scheduleMatch}>{timeSlot}</Text>
-            ))
-          ) : (
-            <Text style={styles.description}>No matching availability found</Text>
-          )}
+            ))}
+          </View>
         </View>
-
-        {/* LLM Analysis Section */}
-        <Text style={styles.sectionTitle}>Why This Is a Great Match</Text>
-        <View style={styles.infoContainer}>
-          <Text style={styles.description}>{llmAnalysis}</Text>
-        </View>
-      </>
+      </ScrollView>
     );
   };
 
-  const renderUserDetails = () => {
-    if (!item) return null;
+  const renderEmployerView = () => {
+    // Calculate worker's average salary from their job history/preferences
+    const workerAverageSalary = currentUser?.salaryHistory?.reduce((acc, curr) => acc + curr, 0) / 
+      currentUser?.salaryHistory?.length || currentUser?.salaryPrefs?.desired;
 
     return (
-      <>
-        <Text style={styles.title}>{item.email}</Text>
-        <Text style={styles.subtitle}>{item.role}</Text>
-        <Text style={styles.sectionTitle}>Skills</Text>
-        <Text style={styles.description}>{item.skills.join(', ')}</Text>
-        <Text style={styles.sectionTitle}>Experience</Text>
-        <Text style={styles.description}>{`${item.experience.totalYears} years`}</Text>
-        <Text style={styles.sectionTitle}>Education</Text>
-        <Text style={styles.description}>{item.education}</Text>
-        <Text style={styles.sectionTitle}>Certifications</Text>
-        <Text style={styles.description}>{item.certifications.join(', ')}</Text>
-        <Text style={styles.sectionTitle}>Job Title Preferences</Text>
-        <Text style={styles.description}>{item.jobTitlePrefs.join(', ')}</Text>
-        <Text style={styles.sectionTitle}>Job Type Preferences</Text>
-        <Text style={styles.description}>{item.jobTypePrefs.join(', ')}</Text>
-        <Text style={styles.sectionTitle}>Industry Preferences</Text>
-        <Text style={styles.description}>{item.industryPrefs.join(', ')}</Text>
-        <Text style={styles.sectionTitle}>Salary Preferences</Text>
-        <Text style={styles.description}>{`$${item.salaryPrefs.min} - $${item.salaryPrefs.max}`}</Text>
-        <Text style={styles.sectionTitle}>Category</Text>
-        <Text style={styles.description}>{item.category}</Text>
-        <Text style={styles.sectionTitle}>Average Review</Text>
-        <Text style={styles.description}>{item.reviewsAverage.toFixed(1)}</Text>
-      </>
+      <ScrollView style={styles.container}>
+        {/* Primary Info Section */}
+        <View style={styles.section}>
+          <Text style={styles.jobTitle}>{item.jobTitle || 'Job Title not available'}</Text>
+          <Text style={styles.company}>{item.company || 'Company not available'}</Text>
+        </View>
+
+        {/* Location Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Location & Travel</Text>
+          <Text style={styles.locationText}>{item.location?.address || 'Location unavailable'}</Text>
+          <View style={styles.distanceInfo}>
+            <Text style={styles.distanceDetail}>
+              Distance from worker: {item.distance?.toFixed(1) || '0'} miles
+            </Text>
+            <Text style={styles.travelEstimates}>Estimated Travel Time:</Text>
+            <View style={styles.travelMethods}>
+              <View style={styles.travelMethod}>
+                <Ionicons name="car" size={20} color="#666" />
+                <Text style={styles.travelTime}>
+                  ~{Math.round((item.distance || 0) * 2)} mins
+                </Text>
+              </View>
+              <View style={styles.travelMethod}>
+                <Ionicons name="bus" size={20} color="#666" />
+                <Text style={styles.travelTime}>
+                  ~{Math.round((item.distance || 0) * 4)} mins
+                </Text>
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {/* Compensation Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Compensation Analysis</Text>
+          <View style={styles.salaryComparison}>
+            <Text style={styles.salaryDetail}>
+              Position Pay Range: ${item.salaryRange?.min}/hr - ${item.salaryRange?.max}/hr
+            </Text>
+            <Text style={styles.salaryDetail}>
+              Worker's Average Salary: ${workerAverageSalary?.toFixed(2)}/hr
+            </Text>
+            <View style={styles.salaryAnalysis}>
+              {workerAverageSalary && (
+                <Text style={[
+                  styles.salaryMatch,
+                  workerAverageSalary <= item.salaryRange?.max ? 
+                  styles.salaryMatchGood : styles.salaryMatchPoor
+                ]}>
+                  {workerAverageSalary <= item.salaryRange?.max ? 
+                    '✓ Salary range matches worker\'s expectations' :
+                    '⚠ Salary range below worker\'s average'}
+                </Text>
+              )}
+            </View>
+          </View>
+        </View>
+
+        {/* Skills Match Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Required Skills</Text>
+          <View style={styles.skillsContainer}>
+            {item.requiredSkills?.map((skill, index) => {
+              const isMatching = currentUser?.skills?.includes(skill);
+              return (
+                <View 
+                  key={index} 
+                  style={[
+                    styles.skillBubble,
+                    isMatching && styles.matchingSkillBubble
+                  ]}
+                >
+                  <Text style={[
+                    styles.skillText,
+                    isMatching && styles.matchingSkillText
+                  ]}>
+                    {skill} {isMatching && '✓'}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+
+        {/* Worker Overview Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Worker Overview</Text>
+          <View style={styles.workerDetails}>
+            <Text style={styles.workerDetail}>
+              Experience: {currentUser?.experience?.totalYears || 0} years
+            </Text>
+            <Text style={styles.workerDetail}>
+              Preferred Schedule: {currentUser?.availability?.preferredShift || 'Flexible'}
+            </Text>
+            <Text style={styles.workerDetail}>
+              Education: {currentUser?.education?.level || 'Not specified'}
+            </Text>
+          </View>
+        </View>
+
+        {/* Match Analysis Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Match Analysis</Text>
+          <QuickMatchOverview analysis={analysis} />
+          <Text style={styles.analysisText}>{llmAnalysis}</Text>
+        </View>
+
+        {/* Schedule Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Schedule Compatibility</Text>
+          <View style={styles.scheduleMatchContainer}>
+            {analyzeScheduleMatch().map((timeSlot, index) => (
+              <Text key={index} style={styles.scheduleMatch}>{timeSlot}</Text>
+            ))}
+          </View>
+        </View>
+      </ScrollView>
     );
   };
 
   const renderDetails = () => {
     if (itemType === 'job') {
-      return renderJobDetails();
+      return renderEmployerView();
     } else {
-      return renderUserDetails();
+      return renderWorkerView();
     }
   };
 
@@ -495,20 +559,28 @@ export default function JobDetailScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#f5f5f5',
   },
   section: {
-    backgroundColor: '#fff',
-    padding: 16,
+    backgroundColor: '#ffffff',
     marginVertical: 8,
     marginHorizontal: 16,
-    borderRadius: 8,
+    padding: 16,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 3,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#1f2937',
-    marginBottom: 8,
+    color: '#333',
+    marginBottom: 12,
   },
   sectionText: {
     fontSize: 16,
@@ -691,5 +763,72 @@ const styles = StyleSheet.create({
   },
   scheduleMatchContainer: {
     marginBottom: 16,
+  },
+  matchingSkillBubble: {
+    backgroundColor: '#e8f5e9',
+    borderColor: '#4caf50',
+    borderWidth: 1,
+  },
+  distanceInfo: {
+    marginTop: 12,
+  },
+  distanceDetail: {
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 8,
+  },
+  travelEstimates: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 8,
+  },
+  travelMethods: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: 8,
+  },
+  travelMethod: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  travelTime: {
+    marginLeft: 8,
+    fontSize: 14,
+    color: '#666',
+  },
+  salaryComparison: {
+    marginVertical: 8,
+  },
+  salaryDetail: {
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 8,
+  },
+  salaryAnalysis: {
+    marginTop: 8,
+  },
+  salaryMatch: {
+    fontSize: 14,
+    padding: 8,
+    borderRadius: 4,
+  },
+  salaryMatchGood: {
+    backgroundColor: '#e8f5e9',
+    color: '#2e7d32',
+  },
+  salaryMatchPoor: {
+    backgroundColor: '#ffebee',
+    color: '#c62828',
+  },
+  matchingSkillText: {
+    color: '#2e7d32',
+  },
+  workerDetails: {
+    marginTop: 8,
+  },
+  workerDetail: {
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 8,
   },
 });
