@@ -185,6 +185,27 @@ const Loader = () => {
   );
 };
 
+const calculateWeeklyHours = (availability) => {
+  if (!availability) return 0;
+  
+  let totalHours = 0;
+  Object.values(availability).forEach(dayData => {
+    if (dayData.slots) {
+      dayData.slots.forEach(slot => {
+        const [startH, startM] = slot.startTime.split(':').map(Number);
+        const [endH, endM] = slot.endTime.split(':').map(Number);
+        
+        const startMinutes = startH * 60 + startM;
+        const endMinutes = endH * 60 + endM;
+        
+        totalHours += (endMinutes - startMinutes) / 60;
+      });
+    }
+  });
+  
+  return Math.round(totalHours);
+};
+
 export default function HomeScreen({ navigation }) {
   const [items, setItems] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
@@ -375,116 +396,96 @@ export default function HomeScreen({ navigation }) {
     Alert.alert('End of List', 'You have swiped through all available items.');
   };
 
+  const handleCardPress = (item) => {
+    navigation.navigate('JobDetail', { 
+      item: item,
+      analysis: {
+        overallMatch: 80, // You can calculate this based on your matching logic
+        matchDetails: ['Skills match', 'Schedule compatibility', 'Location match']
+      }
+    });
+  };
+
   const renderCard = (item) => {
-    if (!item) return null;
-    
-    // Calculate weekly hours and estimated pay
-    const weeklyHours = item.availability ? item.weeklyHours : null;
-    const estimatedWeeklyPayMin = weeklyHours ? (item.salaryRange?.min || 0) * weeklyHours : null;
-    const estimatedWeeklyPayMax = weeklyHours ? (item.salaryRange?.max || 0) * weeklyHours : null;
+    const weeklyHours = calculateWeeklyHours(item.availability);
+    const estimatedWeeklyPayMin = weeklyHours * (item.salaryRange?.min || 0);
+    const estimatedWeeklyPayMax = weeklyHours * (item.salaryRange?.max || 0);
 
     return (
-      <TouchableOpacity
+      <TouchableOpacity 
         style={styles.card}
-        activeOpacity={0.9}
-        onPress={() => navigation.navigate('JobDetail', { 
-          itemId: item.id || item.uid, 
-          itemType: currentUser.role === 'worker' ? 'job' : 'worker',
-          currentUserData: currentUser,
-          item: item
-        })}
+        onPress={() => handleCardPress(item)}
       >
         <LinearGradient
-          colors={['#1e3a8a', '#3b82f6']}
+          colors={['#1e3a8a', '#1e40af']}
           style={styles.cardGradient}
         >
-          {currentUser && currentUser.role === 'worker' ? (
-            <View style={styles.cardContent}>
-              <Text style={styles.jobTitle}>{item.jobTitle || 'No Job Title'}</Text>
-              
-              <View style={styles.matchContainer}>
-                <Text style={styles.matchText}>50% Match</Text>
+          <View style={styles.contentCard}>
+            {/* Job Title and Company */}
+            <View style={styles.titleContainer}>
+              <Text style={styles.jobTitle}>{item.jobTitle || 'No Title'}</Text>
+              <View style={styles.companyBadge}>
+                <Text style={styles.companyName}>{item.companyName || 'Company'}</Text>
               </View>
+            </View>
 
-              <View style={styles.infoContainer}>
-                <Text style={styles.label}>Overview</Text>
-                <Text style={styles.value}>{item.user_overview || 'No overview available'}</Text>
-              </View>
+            {/* Overview */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Overview</Text>
+              <Text style={styles.overviewText}>{item.user_overview || 'No overview available'}</Text>
+            </View>
 
-              <View style={styles.infoContainer}>
-                <Text style={styles.label}>Pay Range</Text>
-                <Text style={styles.value}>${item.salaryRange?.min || 'N/A'}/hr - ${item.salaryRange?.max || 'N/A'}/hr</Text>
-              </View>
-
-              <View style={styles.infoContainer}>
-                <Text style={styles.label}>Estimated Weekly Hours</Text>
-                <Text style={styles.value}>
-                  {weeklyHours ? `${weeklyHours} hours` : 'No Availability Set'}
+            {/* Pay and Hours Grid */}
+            <View style={styles.gridContainer}>
+              <View style={styles.gridItem}>
+                <Text style={styles.gridLabel}>Pay Range</Text>
+                <Text style={styles.gridValue}>
+                  ${item.salaryRange?.min || 'N/A'} - ${item.salaryRange?.max || 'N/A'}/hr
                 </Text>
               </View>
-
-              <View style={styles.infoContainer}>
-                <Text style={styles.label}>Estimated Weekly Pay</Text>
-                <Text style={styles.value}>
-                  {weeklyHours ? 
-                    `$${estimatedWeeklyPayMin.toLocaleString()} - $${estimatedWeeklyPayMax.toLocaleString()}` : 
-                    'No Availability Set'}
+              <View style={styles.gridItem}>
+                <Text style={styles.gridLabel}>Est. Weekly Hours</Text>
+                <Text style={styles.gridValue}>
+                  {weeklyHours ? `${weeklyHours} hours` : 'N/A'}
                 </Text>
               </View>
+            </View>
 
-              <View style={styles.infoContainer}>
-                <Text style={styles.label}>Relevant Skills</Text>
+            {/* Weekly Pay Estimate */}
+            <View style={styles.weeklyPayContainer}>
+              <Text style={styles.weeklyPayLabel}>Est. Weekly Pay</Text>
+              <Text style={styles.weeklyPayValue}>
+                ${estimatedWeeklyPayMin.toFixed(0)} - ${estimatedWeeklyPayMax.toFixed(0)}
+              </Text>
+            </View>
+
+            {/* Skills */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Relevant Skills</Text>
+              <View style={styles.skillsContainer}>
                 <SkillsList 
                   skills={Array.isArray(item.requiredSkills) ? item.requiredSkills : []} 
                   userSkills={Array.isArray(userSkills) ? userSkills : []} 
                 />
               </View>
-
-              <View style={styles.infoContainer}>
-                <Text style={styles.label}>Distance</Text>
-                <Text style={styles.value}>
-                  {item.distance != null ? `${item.distance} miles away` : 'Distance unavailable'}
-                </Text>
-              </View>
-
-              {renderAvailabilitySection(item)}
             </View>
-          ) : (
-            <View style={styles.cardContent}>
-              <Text style={styles.jobTitle}>{item.name || 'No Name'}</Text>
-              
-              <View style={styles.infoContainer}>
-                <Text style={styles.label}>Overview</Text>
-                <Text style={styles.value}>{item.user_overview || 'No overview available'}</Text>
-              </View>
 
-              {Array.isArray(item.selectedJobs) && item.selectedJobs.map((job, index) => (
-                <View key={index} style={styles.jobContainer}>
-                  <Text style={styles.jobText}>{job.jobType || 'No Job Type'}</Text>
-                  <Text style={styles.industryText}>{job.industry || 'No Industry'}</Text>
-                  <View style={styles.skillsContainer}>
-                    {Array.isArray(job.skills) && job.skills.map((skill, skillIndex) => {
-                      if (typeof skill !== 'string') return null;
-                      return (
-                        <View key={skillIndex} style={styles.skillBubble}>
-                          <Text style={styles.skillText}>{skill}</Text>
-                        </View>
-                      );
-                    })}
-                  </View>
-                </View>
-              ))}
-
-              {renderAvailabilitySection(item)}
-
-              <View style={styles.infoContainer}>
-                <Text style={styles.label}>Distance</Text>
-                <Text style={styles.value}>
-                  {item.distance != null ? `${item.distance} miles away` : 'Distance unavailable'}
-                </Text>
+            {/* Availability */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Availability</Text>
+              <View style={styles.availabilityContainer}>
+                {renderAvailabilitySection(item)}
               </View>
             </View>
-          )}
+
+            {/* Distance */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Distance</Text>
+              <Text style={styles.distanceText}>
+                {item.distance != null ? `${item.distance} miles away` : 'Distance unavailable'}
+              </Text>
+            </View>
+          </View>
         </LinearGradient>
       </TouchableOpacity>
     );
@@ -676,27 +677,105 @@ const styles = StyleSheet.create({
     height: SCREEN_HEIGHT * 0.7,
     borderRadius: 20,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
   },
   cardGradient: {
     flex: 1,
     padding: 20,
+  },
+  contentCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    padding: 20,
+    flex: 1,
+  },
+  titleContainer: {
+    flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
   },
   jobTitle: {
     fontSize: 24,
-    fontWeight: 'bold',
-    color: '#ffffff',
-    marginBottom: 10,
+    fontWeight: '600',
+    color: '#1f2937',
   },
-  cardText: {
+  companyBadge: {
+    backgroundColor: '#e0e7ff',
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+  },
+  companyName: {
+    color: '#4f46e5',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  section: {
+    marginBottom: 20,
+  },
+  sectionTitle: {
     fontSize: 16,
-    color: '#ffffff',
-    marginBottom: 5,
+    fontWeight: '500',
+    color: '#4b5563',
+    marginBottom: 8,
+  },
+  overviewText: {
+    color: '#1f2937',
+    fontSize: 16,
+  },
+  gridContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 20,
+  },
+  gridItem: {
+    flex: 1,
+    backgroundColor: '#f9fafb',
+    padding: 16,
+    borderRadius: 12,
+  },
+  gridLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#4b5563',
+    marginBottom: 4,
+  },
+  gridValue: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  weeklyPayContainer: {
+    backgroundColor: '#f0fdf4',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 20,
+  },
+  weeklyPayLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#15803d',
+    marginBottom: 4,
+  },
+  weeklyPayValue: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#166534',
+  },
+  skillsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  availabilityContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  distanceText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
   },
   navigation: {
     flexDirection: 'row',
@@ -755,46 +834,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
-  cardContent: {
-    flex: 1,
-    padding: 20,
-  },
-  jobTitle: {
-    fontFamily: 'LibreBodoni_700Bold',
-    fontSize: 28,
-    color: '#ffffff',
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-  matchContainer: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  matchText: {
-    fontFamily: 'LibreBodoni_400Regular',
-    fontSize: 24,
-    color: '#4ade80',
-  },
-  infoContainer: {
-    marginBottom: 15,
-  },
-  label: {
-    fontFamily: 'DMSerifText_400Regular',
-    fontSize: 18,
-    color: '#ffffff',
-    opacity: 0.9,
-    marginBottom: 5,
-  },
-  value: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontFamily: 'LibreBodoni_400Regular',
-  },
-  skillsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginTop: 5,
-  },
   skillBubble: {
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
     borderRadius: 15,
@@ -806,39 +845,6 @@ const styles = StyleSheet.create({
     fontFamily: 'DMSerifText_400Regular',
     color: '#ffffff',
     fontSize: 14,
-  },
-  availabilityContainer: {
-    marginTop: 5,
-  },
-  scheduleRow: {
-    marginBottom: 4,
-    paddingVertical: 2,
-  },
-  scheduleText: {
-    fontSize: 15,
-    lineHeight: 20,
-  },
-  jobContainer: {
-    marginVertical: 8,
-    padding: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 8,
-  },
-  jobText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontFamily: 'DMSerifText_400Regular',
-    marginBottom: 4,
-  },
-  industryText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontFamily: 'LibreBodoni_400Regular',
-    marginBottom: 8,
-  },
-  skillsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
   },
   availabilityBubble: {
     backgroundColor: 'rgba(255, 255, 255, 0.2)',

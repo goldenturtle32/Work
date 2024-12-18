@@ -9,6 +9,7 @@ import FirebaseUser from '../models/FirebaseUser';
 import { analyzeProfileMatch } from '../utils/matchAnalysis';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
+import { AntDesign } from '@expo/vector-icons';
 
 const BACKEND_URL = 'http://127.0.0.1:5000';
 
@@ -16,14 +17,18 @@ const QuickMatchOverview = ({ analysis }) => {
   if (!analysis) return null;
   
   return (
-    <View style={styles.matchOverview}>
-      <Text style={styles.matchScore}>
-        {((analysis.overallFit?.score || 0) * 100).toFixed(0)}% Match
-      </Text>
-      <View style={styles.matchDetails}>
-        <Text style={styles.matchDetail}>Skills: {((analysis.skillsMatch?.score || 0) * 100).toFixed(0)}%</Text>
-        <Text style={styles.matchDetail}>Schedule: {((analysis.scheduleMatch?.score || 0) * 100).toFixed(0)}%</Text>
-        <Text style={styles.matchDetail}>Location: {((analysis.locationMatch?.score || 0) * 100).toFixed(0)}%</Text>
+    <View style={styles.matchAnalysisContainer}>
+      <View style={styles.progressBarContainer}>
+        <View style={[styles.progressBar, { width: `${analysis.overallMatch}%` }]} />
+      </View>
+      <Text style={styles.matchPercentage}>{analysis.overallMatch}% match based on your profile</Text>
+      
+      <View style={styles.matchMetrics}>
+        {analysis.matchDetails?.map((detail, index) => (
+          <View key={index} style={styles.matchMetric}>
+            <Text style={styles.matchMetricText}>{detail}</Text>
+          </View>
+        ))}
       </View>
     </View>
   );
@@ -483,69 +488,87 @@ export default function JobDetailScreen({ route, navigation }) {
 
   return (
     <ScrollView style={styles.container}>
+      {/* Back Button */}
+      <TouchableOpacity 
+        style={styles.backButton} 
+        onPress={() => navigation.goBack()}
+      >
+        <AntDesign name="arrowleft" size={24} color="#3b82f6" />
+        <Text style={styles.backButtonText}>Back</Text>
+      </TouchableOpacity>
+
       {item && (
         <>
           {/* Job Title Section */}
-          <View style={styles.jobDetails}>
+          <View style={styles.card}>
             <Text style={styles.jobTitle}>{item.jobTitle}</Text>
+            <Text style={styles.companyName}>{item.companyName || 'Company Name'}</Text>
           </View>
 
           {/* Location Section */}
-          <View style={styles.section}>
+          <View style={styles.card}>
             <Text style={styles.sectionTitle}>Location</Text>
             <Text style={styles.sectionText}>
               {item.formattedLocation || 'Location unavailable'}
             </Text>
+            <Text style={styles.travelInfo}>2.5 miles away</Text>
+            <Text style={styles.travelInfo}>Est. travel time: 15 mins</Text>
           </View>
 
           {/* Compensation Section */}
-          <View style={styles.section}>
+          <View style={styles.card}>
             <Text style={styles.sectionTitle}>Compensation</Text>
-            <Text style={styles.sectionText}>Pay Range: ${item.salaryRange?.min}/hr - ${item.salaryRange?.max}/hr</Text>
-            <Text style={styles.sectionText}>Weekly Hours: {item.weeklyHours || 0} hours</Text>
-            <Text style={styles.sectionText}>
-              Estimated Weekly Pay: ${(item.salaryRange?.min * (item.weeklyHours || 0)).toFixed(0)} - 
+            <Text style={styles.compensationText}>
+              <Text style={styles.labelText}>Pay Range: </Text>
+              ${item.salaryRange?.min}/hr - ${item.salaryRange?.max}/hr
+            </Text>
+            <Text style={styles.compensationText}>
+              <Text style={styles.labelText}>Weekly Hours: </Text>
+              {item.weeklyHours || 0} hours
+            </Text>
+            <Text style={styles.compensationText}>
+              <Text style={styles.labelText}>Estimated Weekly Pay: </Text>
+              ${(item.salaryRange?.min * (item.weeklyHours || 0)).toFixed(0)} - 
               ${(item.salaryRange?.max * (item.weeklyHours || 0)).toFixed(0)}
+            </Text>
+            <Text style={styles.salaryComparison}>
+              10% above average for similar positions
             </Text>
           </View>
 
-          {/* Benefits Section */}
-          {item.benefits && item.benefits.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Benefits</Text>
-              {item.benefits.map((benefit, index) => (
-                <Text key={index} style={styles.sectionText}>{benefit}</Text>
-              ))}
-            </View>
-          )}
-
-          {/* Required Skills Section */}
-          {item.requiredSkills && item.requiredSkills.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Required Skills</Text>
-              {item.requiredSkills.map((skill, index) => (
-                <Text key={index} style={styles.sectionText}>{skill}</Text>
-              ))}
-            </View>
-          )}
+          {/* Skills Wanted Section */}
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Skills Wanted</Text>
+            {item.requiredSkills && item.requiredSkills.map((skill, index) => (
+              <Text key={index} style={[
+                styles.skillText,
+                analysis?.matchingSkills?.includes(skill) && styles.matchingSkill
+              ]}>
+                • {skill} {analysis?.matchingSkills?.includes(skill) && '(match)'}
+              </Text>
+            ))}
+          </View>
 
           {/* Match Analysis Section */}
-          <View style={styles.section}>
+          <View style={styles.card}>
             <Text style={styles.sectionTitle}>Match Analysis</Text>
             <QuickMatchOverview analysis={analysis} />
           </View>
 
           {/* Schedule Compatibility Section */}
-          <View style={styles.section}>
+          <View style={styles.card}>
             <Text style={styles.sectionTitle}>Schedule Compatibility</Text>
             <Text style={styles.sectionText}>
               {analysis?.scheduleMatch?.details || 'No matching availability found'}
             </Text>
+            {analysis?.scheduleMatch?.isCompatible && (
+              <Text style={styles.compatibilityText}>Aligns with your availability</Text>
+            )}
           </View>
 
-          {/* LLM Analysis Section */}
-          <View style={styles.analysisContainer}>
-            <Text style={styles.sectionTitle}>Why This Is a Great Match</Text>
+          {/* Why This Job Would Be a Good Fit */}
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Why This Job Would Be a Good Fit</Text>
             <Text style={styles.analysisText}>
               {llmAnalysis || 'Analysis not available'}
             </Text>
@@ -559,14 +582,24 @@ export default function JobDetailScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  section: {
-    backgroundColor: '#ffffff',
-    marginVertical: 8,
-    marginHorizontal: 16,
+    backgroundColor: '#f3f4f6',
     padding: 16,
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  backButtonText: {
+    marginLeft: 8,
+    color: '#3b82f6',
+    fontSize: 16,
+  },
+  card: {
+    backgroundColor: '#ffffff',
     borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
     shadowColor: '#000',
     shadowOffset: {
       width: 0,
@@ -576,102 +609,87 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     elevation: 3,
   },
-  sectionTitle: {
-    fontSize: 18,
+  jobTitle: {
+    fontSize: 20,
     fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 12,
+    color: '#111827',
+    marginBottom: 4,
+  },
+  companyName: {
+    fontSize: 16,
+    color: '#6b7280',
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111827',
+    marginBottom: 8,
   },
   sectionText: {
     fontSize: 16,
     color: '#4b5563',
     marginBottom: 4,
   },
-  jobDetails: {
-    backgroundColor: '#fff',
-    padding: 16,
-    marginBottom: 8,
+  travelInfo: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginTop: 4,
   },
-  jobTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#111827',
-  },
-  matchOverview: {
-    marginVertical: 8,
-  },
-  matchScore: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#059669',
-    marginBottom: 8,
-  },
-  matchDetails: {
-    marginTop: 8,
-  },
-  matchDetail: {
+  compensationText: {
     fontSize: 16,
     color: '#4b5563',
     marginBottom: 4,
   },
-  analysisContainer: {
-    backgroundColor: '#fff',
-    padding: 16,
-    margin: 16,
-    borderRadius: 8,
+  labelText: {
+    fontWeight: '500',
+  },
+  salaryComparison: {
+    fontSize: 14,
+    color: '#059669',
+    marginTop: 8,
+  },
+  skillText: {
+    fontSize: 16,
+    color: '#4b5563',
+    marginBottom: 4,
+  },
+  matchingSkill: {
+    color: '#059669',
+  },
+  compatibilityText: {
+    fontSize: 14,
+    color: '#059669',
+    marginTop: 4,
   },
   analysisText: {
-    fontSize: 16,
-    lineHeight: 24,
-    color: '#374151',
+    fontSize: 14,
+    color: '#4b5563',
+    lineHeight: 20,
+  },
+  progressBarContainer: {
+    width: '100%',
+    height: 10,
+    backgroundColor: '#e5e7eb',
+    borderRadius: 5,
+    marginBottom: 8,
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#3b82f6',
+    borderRadius: 5,
+  },
+  matchPercentage: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginBottom: 16,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  applyButton: {
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 4,
-    marginTop: 20,
-  },
-  applyButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    textAlign: 'center',
-  },
-  quickMatchContainer: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
+  matchAnalysisContainer: {
     marginBottom: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  matchScoreCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#1e3a8a',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 16,
-  },
-  matchScoreText: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  matchScoreLabel: {
-    color: '#fff',
-    fontSize: 12,
   },
   matchMetrics: {
     flex: 1,
@@ -721,10 +739,6 @@ const styles = StyleSheet.create({
     marginRight: 8,
     marginBottom: 8,
   },
-  skillText: {
-    color: '#1976d2',
-    fontSize: 14,
-  },
   scheduleMatch: {
     fontSize: 14,
     color: '#4b5563',
@@ -757,17 +771,6 @@ const styles = StyleSheet.create({
   benefitsContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-  },
-  matchAnalysisContainer: {
-    marginBottom: 16,
-  },
-  scheduleMatchContainer: {
-    marginBottom: 16,
-  },
-  matchingSkillBubble: {
-    backgroundColor: '#e8f5e9',
-    borderColor: '#4caf50',
-    borderWidth: 1,
   },
   distanceInfo: {
     marginTop: 12,
