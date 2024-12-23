@@ -8,6 +8,8 @@ import {
 } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { Ionicons } from '@expo/vector-icons';
 
 // Import Auth Screens
 import LoginScreen from './src/screens/LoginScreen';
@@ -29,8 +31,18 @@ import AttributeSelectionScreen from './src/screens/AttributeSelectionScreen';
 
 // Import Firebase Auth and Firestore from firebase.js
 import { auth, db } from './src/firebase';
+import { SetupProvider } from './src/contexts/SetupContext';
+
+// Import Setup Screens
+import BasicInfoScreen from './src/screens/setup/BasicInfoScreen';
+import LocationPreferencesScreen from './src/screens/setup/LocationPreferencesScreen';
+import JobPreferencesScreen from './src/screens/setup/JobPreferencesScreen';
+import UserOverviewScreen from './src/screens/setup/UserOverviewScreen';
+
+import AppNavigator from './src/navigation/AppNavigator';
 
 const Stack = createStackNavigator();
+const Tab = createBottomTabNavigator();
 
 // Auth Stack: Login and SignUp
 const AuthStack = () => (
@@ -48,71 +60,64 @@ const AuthStack = () => (
   </Stack.Navigator>
 );
 
-// App Stack: All other screens
-const AppStack = () => (
-  <Stack.Navigator 
-    initialRouteName="Home"
-    screenOptions={{
-      headerStyle: {
-        backgroundColor: '#4f46e5',
+// Create MainTabs component for bottom tab navigation
+const MainTabs = () => (
+  <Tab.Navigator
+    screenOptions={({ route }) => ({
+      tabBarIcon: ({ focused, color, size }) => {
+        let iconName;
+        if (route.name === 'HomeTab') {
+          iconName = focused ? 'home' : 'home-outline';
+        } else if (route.name === 'Profile') {
+          iconName = focused ? 'person' : 'person-outline';
+        } else if (route.name === 'Matches') {
+          iconName = focused ? 'heart' : 'heart-outline';
+        } else if (route.name === 'Settings') {
+          iconName = focused ? 'settings' : 'settings-outline';
+        }
+        return <Ionicons name={iconName} size={size} color={color} />;
       },
-      headerTintColor: '#fff',
-      headerTitleStyle: {
-        fontWeight: 'bold',
-      },
-    }}
+      tabBarActiveTintColor: '#4f46e5',
+      tabBarInactiveTintColor: 'gray',
+    })}
   >
-    <Stack.Screen 
-      name="Home" 
+    <Tab.Screen 
+      name="HomeTab" 
       component={HomeScreen} 
-      options={{ headerShown: false }}
+      options={{ headerShown: false, title: 'Home' }}
     />
-    <Stack.Screen 
-      name="Profile" 
-      component={ProfileScreen}
-      options={{ title: 'Profile' }}
-    />
-    <Stack.Screen 
-      name="Settings" 
-      component={SettingsScreen}
-      options={{ title: 'Settings' }}
-    />
-    <Stack.Screen 
-      name="Matches" 
-      component={MatchesScreen}
-      options={{ title: 'Matches' }}
-    />
-    <Stack.Screen 
-      name="JobDetail" 
-      component={JobDetailScreen}
-      options={{ title: 'Job Details' }}
-    />
-    <Stack.Screen 
-      name="Chat" 
-      component={ChatScreen}
-      options={{ title: 'Chat' }}
-    />
-  </Stack.Navigator>
+    <Tab.Screen name="Profile" component={ProfileScreen} />
+    <Tab.Screen name="Matches" component={MatchesScreen} />
+    <Tab.Screen name="Settings" component={SettingsScreen} />
+  </Tab.Navigator>
 );
 
-// Add Home screen to the initial setup stack
-const InitialSetupStack = () => (
-  <Stack.Navigator initialRouteName="AttributeSelection">
+// Setup Stack
+const SetupStack = () => (
+  <Stack.Navigator initialRouteName="BasicInfo">
     <Stack.Screen 
-      name="AttributeSelection" 
-      component={AttributeSelectionScreen} 
+      name="BasicInfo" 
+      component={BasicInfoScreen} 
       options={{ headerShown: false }} 
-      initialParams={{ isNewUser: true }}
     />
     <Stack.Screen 
-      name="Availability" 
-      component={AvailabilityScreen} 
+      name="LocationPreferences" 
+      component={LocationPreferencesScreen} 
       options={{ headerShown: false }}
-      initialParams={{ isInitialSetup: true }}
     />
     <Stack.Screen 
-      name="Home" 
-      component={HomeScreen} 
+      name="JobPreferences" 
+      component={JobPreferencesScreen} 
+      options={{ headerShown: false }}
+    />
+    <Stack.Screen 
+      name="UserOverview" 
+      component={UserOverviewScreen} 
+      options={{ headerShown: false }}
+    />
+    <Stack.Screen 
+      name="Main" 
+      component={MainTabs} 
       options={{ headerShown: false }}
     />
   </Stack.Navigator>
@@ -125,60 +130,45 @@ export default function App() {
 
   const [initializing, setInitializing] = useState(true);
   const [user, setUser] = useState(null);
-  const [isAttributeSet, setIsAttributeSet] = useState(false);
-  const [isNewUser, setIsNewUser] = useState(true);
+  const [isSetupComplete, setIsSetupComplete] = useState(false);
 
   // Handle user state changes
-  function onAuthStateChanged(user) {
-    setUser(user);
-    if (initializing) setInitializing(false);
+  async function onAuthStateChanged(user) {
+    try {
+      if (user) {
+        setUser(user);
+        console.log('Checking setup status for user:', user.uid);
+        
+        // Check both user document and user_attributes
+        const [userDoc, userAttrsDoc] = await Promise.all([
+          db.collection('users').doc(user.uid).get(),
+          db.collection('user_attributes').doc(user.uid).get()
+        ]);
+
+        const isComplete = userDoc.exists && 
+                          userAttrsDoc.exists && 
+                          userDoc.data()?.setupComplete === true;
+
+        console.log('Setup complete status:', isComplete);
+        setIsSetupComplete(isComplete);
+      } else {
+        setUser(null);
+        setIsSetupComplete(false);
+      }
+    } catch (error) {
+      console.error('Error checking setup status:', error);
+      setIsSetupComplete(false);
+    } finally {
+      if (initializing) {
+        setInitializing(false);
+      }
+    }
   }
 
   useEffect(() => {
     const subscriber = auth.onAuthStateChanged(onAuthStateChanged);
-    return subscriber; // unsubscribe on unmount
+    return subscriber;
   }, []);
-
-  useEffect(() => {
-    if (user) {
-      const unsubscribe = db.collection('user_attributes').doc(user.uid)
-        .onSnapshot((doc) => {
-          if (doc.exists) {
-            const data = doc.data();
-            // Check if required attributes are set
-            const isComplete = data.industryPrefs && 
-                               data.industryPrefs.length > 0 && 
-                               data.jobTypePrefs && 
-                               data.skills && 
-                               data.skills.length > 0;
-            setIsAttributeSet(isComplete);
-          } else {
-            setIsAttributeSet(false);
-          }
-        }, (error) => {
-          console.error('Error fetching user attributes:', error);
-          setIsAttributeSet(false);
-        });
-      return () => unsubscribe();
-    } else {
-      setIsAttributeSet(false);
-    }
-  }, [user]);
-
-  useEffect(() => {
-    if (user) {
-      const unsubscribe = db.collection('users').doc(user.uid)
-        .onSnapshot((doc) => {
-          if (doc.exists) {
-            const userData = doc.data();
-            setIsNewUser(userData.isNewUser);
-          }
-        }, (error) => {
-          console.error('Error fetching user data:', error);
-        });
-      return () => unsubscribe();
-    }
-  }, [user]);
 
   if (initializing) {
     return (
@@ -189,17 +179,17 @@ export default function App() {
   }
 
   return (
-    <NavigationContainer>
-      {user ? (
-        isNewUser ? (
-          <InitialSetupStack />
+    <SetupProvider>
+      <NavigationContainer>
+        {!user ? (
+          <AuthStack />
+        ) : !isSetupComplete ? (
+          <SetupStack />
         ) : (
-          <AppStack />
-        )
-      ) : (
-        <AuthStack />
-      )}
-    </NavigationContainer>
+          <MainTabs />
+        )}
+      </NavigationContainer>
+    </SetupProvider>
   );
 }
 

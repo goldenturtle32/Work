@@ -165,11 +165,6 @@ export default function WebMap({ location, radius, cityName, stateCode }) {
 
   if (!location || !mapLoaded) return (
     <View style={styles.mapContainer}>
-      <View style={styles.locationTextContainer}>
-        <Text style={styles.locationText}>
-          Current Location: {cityName}{stateCode ? `, ${stateCode}` : ''}
-        </Text>
-      </View>
       <View style={styles.loadingContainer}>
         <Text>Loading map...</Text>
       </View>
@@ -178,11 +173,6 @@ export default function WebMap({ location, radius, cityName, stateCode }) {
 
   return (
     <View style={styles.mapContainer}>
-      <View style={styles.locationTextContainer}>
-        <Text style={styles.locationText}>
-          Current Location: {cityName}{stateCode ? `, ${stateCode}` : ''}
-        </Text>
-      </View>
       <div style={{ height: '280px', width: '100%' }}>
         <GoogleMapReact
           bootstrapURLKeys={{ 
@@ -211,20 +201,9 @@ export default function WebMap({ location, radius, cityName, stateCode }) {
 const styles = StyleSheet.create({
   mapContainer: {
     height: 300,
-    marginVertical: 20,
     borderRadius: 8,
     overflow: 'hidden',
     backgroundColor: '#f5f5f5',
-  },
-  locationTextContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 10,
-  },
-  locationText: {
-    fontSize: 16,
-    color: '#007BFF',
-    textAlign: 'center',
   },
   loadingContainer: {
     flex: 1,

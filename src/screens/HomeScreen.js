@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Dimensions, TouchableOpacity, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import Swiper from 'react-native-deck-swiper';
-import { db, auth, firebase } from '../firebase';  // Make sure firebase is imported here
+import { db, auth, firebase } from '../firebase';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Job from '../models/Job';
@@ -18,6 +18,7 @@ import {
 import NewMatchModal from '../components/NewMatchModal';
 import styled from 'styled-components/native';
 import DotLoader from '../components/Loader';
+import { getFirestore, collection, query, where, getDocs } from 'firebase/firestore';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -224,73 +225,111 @@ export default function HomeScreen({ navigation }) {
   });
 
   useEffect(() => {
-    const fetchUserAndItems = async () => {
-      try {
-        const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
-        const userData = userDoc.data();
-        
-        // Get user's location from user_attributes
-        const userAttributesDoc = await db.collection('user_attributes').doc(auth.currentUser.uid).get();
-        const userLocation = userAttributesDoc.data()?.location;
-        
-        setCurrentUser(new User({ 
-          uid: userDoc.id, 
-          ...userData,
-          location: userLocation 
-        }));
+    // Log current user info
+    const currentUser = auth.currentUser;
+    console.log('Current User:', currentUser ? {
+      uid: currentUser.uid,
+      email: currentUser.email,
+      emailVerified: currentUser.emailVerified,
+      displayName: currentUser.displayName,
+      metadata: currentUser.metadata
+    } : 'No user signed in');
 
-        if (userData.role === 'worker') {
-          const jobAttributesSnapshot = await db.collection('job_attributes').get();
-          const jobsData = jobAttributesSnapshot.docs.map(doc => {
-            const jobData = doc.data();
-            const distance = jobData.location && userLocation ? 
-              calculateDistance(
-                userLocation.latitude,
-                userLocation.longitude,
-                jobData.location.latitude,
-                jobData.location.longitude
-              ) : null;
-            return new Job({ 
-              id: doc.id, 
-              ...jobData,
-              distance 
+    // Add listener for auth state changes
+    const unsubscribe = auth.onAuthStateChanged((user) => {
+      console.log('Auth State Changed:', user ? {
+        uid: user.uid,
+        email: user.email,
+        emailVerified: user.emailVerified
+      } : 'User signed out');
+    });
+
+    // Log Firestore connection status
+    const db = getFirestore();
+    console.log('Firestore Instance:', db ? 'Connected' : 'Not connected');
+
+    // Clean up subscription
+    return () => unsubscribe();
+  }, []);
+
+  // Add logging to fetchItems
+  const fetchItems = async () => {
+    try {
+      console.log('Fetching items for user:', auth.currentUser?.uid);
+      // ... existing fetchItems code ...
+    } catch (error) {
+      console.error('Error fetching items:', error);
+    }
+  };
+
+  useEffect(() => {
+    const fetchUserData = async () => {
+      try {
+        console.log('Current User:', auth.currentUser);
+        if (!auth.currentUser) return;
+
+        const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          setCurrentUser(new User({ 
+            uid: userDoc.id, 
+            ...userData,
+            location: userData.location 
+          }));
+
+          if (userData.role === 'worker') {
+            const jobAttributesSnapshot = await db.collection('job_attributes').get();
+            const jobsData = jobAttributesSnapshot.docs.map(doc => {
+              const jobData = doc.data();
+              const distance = jobData.location && userData.location ? 
+                calculateDistance(
+                  userData.location.latitude,
+                  userData.location.longitude,
+                  jobData.location.latitude,
+                  jobData.location.longitude
+                ) : null;
+              return new Job({ 
+                id: doc.id, 
+                ...jobData,
+                distance 
+              });
             });
-          });
-          console.log("Formatted items:", jobsData);
-          setItems(jobsData);
-        } else if (userData.role === 'employer') {
-          const userAttributesSnapshot = await db.collection('user_attributes')
-            .where('role', '==', 'worker').get();
-          const candidatesData = userAttributesSnapshot.docs.map(doc => {
-            const candidateData = doc.data();
-            console.log('Raw candidate data from Firebase:', JSON.stringify({
-              id: doc.id,
-              candidateData,
-              overview: candidateData.user_overview,
-              keys: Object.keys(candidateData)
-            }, null, 2));
-            const distance = candidateData.location && userLocation ? 
-              calculateDistance(
-                userLocation.latitude,
-                userLocation.longitude,
-                candidateData.location.latitude,
-                candidateData.location.longitude
-              ) : null;
-            
-            console.log('Creating worker candidate:', {
-              docId: doc.id,
-              candidateData: candidateData
+            console.log("Formatted items:", jobsData);
+            setItems(jobsData);
+          } else if (userData.role === 'employer') {
+            const userAttributesSnapshot = await db.collection('user_attributes')
+              .where('role', '==', 'worker').get();
+            const candidatesData = userAttributesSnapshot.docs.map(doc => {
+              const candidateData = doc.data();
+              console.log('Raw candidate data from Firebase:', JSON.stringify({
+                id: doc.id,
+                candidateData,
+                overview: candidateData.user_overview,
+                keys: Object.keys(candidateData)
+              }, null, 2));
+              const distance = candidateData.location && userData.location ? 
+                calculateDistance(
+                  userData.location.latitude,
+                  userData.location.longitude,
+                  candidateData.location.latitude,
+                  candidateData.location.longitude
+                ) : null;
+              
+              console.log('Creating worker candidate:', {
+                docId: doc.id,
+                candidateData: candidateData
+              });
+              
+              return new User({ 
+                id: doc.id,
+                uid: doc.id,
+                ...candidateData,
+                distance 
+              });
             });
-            
-            return new User({ 
-              id: doc.id,
-              uid: doc.id,
-              ...candidateData,
-              distance 
-            });
-          });
-          console.log("Formatted items:", candidatesData);
-          setItems(candidatesData);
+            console.log("Formatted items:", candidatesData);
+            setItems(candidatesData);
+          }
         }
       } catch (error) {
         console.error("Error fetching data:", error);
@@ -300,7 +339,7 @@ export default function HomeScreen({ navigation }) {
       }
     };
 
-    fetchUserAndItems();
+    fetchUserData();
   }, []);
 
   useEffect(() => {
@@ -396,14 +435,12 @@ export default function HomeScreen({ navigation }) {
     Alert.alert('End of List', 'You have swiped through all available items.');
   };
 
-  const handleCardPress = (item) => {
-    navigation.navigate('JobDetail', { 
-      item: item,
-      analysis: {
-        overallMatch: 80, // You can calculate this based on your matching logic
-        matchDetails: ['Skills match', 'Schedule compatibility', 'Location match']
-      }
-    });
+  const handleJobPress = (item) => {
+    navigation.navigate('JobDetail', { item });
+  };
+
+  const handleSettingsPress = () => {
+    navigation.navigate('Main', { screen: 'Settings' });
   };
 
   const renderCard = (item) => {
@@ -414,7 +451,7 @@ export default function HomeScreen({ navigation }) {
     return (
       <TouchableOpacity 
         style={styles.card}
-        onPress={() => handleCardPress(item)}
+        onPress={() => handleJobPress(item)}
       >
         <LinearGradient
           colors={['#1e3a8a', '#1e40af']}
@@ -554,7 +591,7 @@ export default function HomeScreen({ navigation }) {
         <TouchableOpacity style={styles.retryButton} onPress={() => {
           setIsLoading(true);
           setError(null);
-          fetchUserAndItems();
+          fetchUserData();
         }}>
           <Text style={styles.retryButtonText}>Retry</Text>
         </TouchableOpacity>
@@ -632,25 +669,6 @@ export default function HomeScreen({ navigation }) {
               }}
             />
           )}
-
-          <View style={styles.navigation}>
-            <TouchableOpacity style={styles.navButton} onPress={() => {
-              if (swiperRef.current && swiperRef.current.jumpToCardIndex) {
-                swiperRef.current.jumpToCardIndex(0);
-              }
-            }}>
-              <Ionicons name="home" size={24} color="#ffffff" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Matches')}>
-              <Ionicons name="heart" size={24} color="#ffffff" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Profile')}>
-              <Ionicons name="person" size={24} color="#ffffff" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Settings')}>
-              <Ionicons name="settings" size={24} color="#ffffff" />
-            </TouchableOpacity>
-          </View>
 
           <NewMatchModal 
             visible={showMatchModal}
@@ -776,20 +794,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#1f2937',
-  },
-  navigation: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    backgroundColor: '#1e3a8a',
-    paddingVertical: 10,
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-  },
-  navButton: {
-    padding: 10,
   },
   loadingContainer: {
     flex: 1,

@@ -1175,5 +1175,73 @@ SKILL_KEYWORDS = [
     # Add more skills as needed
 ]
 
+# Add this new route after your other routes
+@app.route('/suggest-industries', methods=['GET', 'POST'])
+def suggest_industries():
+    try:
+        # Handle both GET and POST requests
+        if request.method == 'GET':
+            search_term = request.args.get('searchTerm', '').lower()
+        else:
+            search_term = request.json.get('searchText', '').lower()
+        
+        # Filter industries based on search term
+        filtered_industries = [
+            industry for industry in INDUSTRY_KEYWORDS
+            if not search_term or search_term in industry.lower()
+        ]
+        
+        # Add trending industries from Google Jobs API if available
+        try:
+            location = request.args.get('location', 'United States')
+            trending_industries = get_trending_industries_serp(search_term, location)
+            # Combine and remove duplicates
+            all_industries = list(set(filtered_industries + trending_industries))
+        except:
+            all_industries = filtered_industries
+        
+        return jsonify({
+            "success": True,
+            "industries": all_industries[:15]  # Limit to 15 suggestions
+        })
+    except Exception as e:
+        print(f"Error in suggest-industries: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+# Add this new route for job type suggestions
+@app.route('/suggest-jobs', methods=['GET', 'POST'])
+def suggest_jobs():
+    try:
+        if request.method == 'GET':
+            industry = request.args.get('industry', '').lower()
+            search_term = request.args.get('searchTerm', '').lower()
+        else:
+            data = request.json
+            industry = data.get('industry', '').lower()
+            search_term = data.get('searchText', '').lower()
+
+        # Get default jobs for the industry
+        default_jobs = get_default_jobs(industry)
+        
+        # Filter jobs based on search term
+        filtered_jobs = [
+            job for job in default_jobs
+            if not search_term or search_term in job.lower()
+        ]
+        
+        return jsonify({
+            "success": True,
+            "jobs": filtered_jobs[:15]  # Limit to 15 suggestions
+        })
+    except Exception as e:
+        print(f"Error in suggest-jobs: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 if __name__ == '__main__':
     app.run(debug=True) 

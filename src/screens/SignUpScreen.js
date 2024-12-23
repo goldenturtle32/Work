@@ -102,15 +102,11 @@ export default function SignUpScreen({ navigation }) {
 
       await db.collection('users').doc(user.uid).set(userDoc, { merge: true });
       
-      // Create user_attributes document
+      // Create user_attributes document with minimal initial data
       const attributesDoc = {
         uid: user.uid,
         email: user.email,
         role: role,
-        skills: [],
-        availability: {},
-        location: null,
-        searchRadius: 0,
       };
 
       await db.collection('user_attributes').doc(user.uid).set(attributesDoc, { merge: true });
@@ -146,8 +142,8 @@ export default function SignUpScreen({ navigation }) {
       // Update user document
       await updateUserDocument(userCredential.user, 'email');
 
-      // Navigate to attribute selection
-      navigation.navigate('AttributeSelection', { 
+      // Navigate to the first setup screen instead of AttributeSelection
+      navigation.navigate('BasicInfo', { 
         userId: userCredential.user.uid,
         role: role 
       });
