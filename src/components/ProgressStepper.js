@@ -4,10 +4,11 @@ import { Ionicons } from '@expo/vector-icons';
 
 const ProgressStepper = ({ currentStep }) => {
   const steps = [
-    { id: 1, title: 'Name', icon: 'person' },
-    { id: 2, title: 'Job Preferences', icon: 'briefcase' },
-    { id: 3, title: 'Location Preference', icon: 'location' },
+    { id: 1, title: 'User Info', icon: 'person' },
+    { id: 2, title: 'Location Preference', icon: 'location' },
+    { id: 3, title: 'Job Preferences', icon: 'briefcase' },
     { id: 4, title: 'User Overview', icon: 'document-text' },
+    { id: 5, title: 'Availability', icon: 'calendar' },
   ];
 
   return (

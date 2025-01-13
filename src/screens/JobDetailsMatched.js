@@ -27,7 +27,7 @@ const JobDetailsMatched = ({ route, navigation }) => {
     const fetchMatchDetails = async () => {
       try {
         const matchDoc = await db.collection('matches').doc(matchId).get();
-        if (matchDoc.exists && matchDoc.data().accepted === 1) {
+        if (matchDoc.exists && matchDoc.data().status === 'hired') {
           const matchData = matchDoc.data();
           setJobDetails({
             ...matchData.jobDetails,
@@ -56,7 +56,7 @@ const JobDetailsMatched = ({ route, navigation }) => {
             }
           }
         } else {
-          console.log('Match not found or not accepted');
+          console.log('Match not found or not hired');
           navigation.goBack();
         }
       } catch (error) {

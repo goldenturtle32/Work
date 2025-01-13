@@ -24,7 +24,9 @@ import {
   serverTimestamp,
   doc, 
   onSnapshot, 
-  updateDoc
+  updateDoc,
+  getDoc,
+  writeBatch
 } from 'firebase/firestore';
 import { formatPhoneNumber } from '../utils/phoneFormatter';
 
@@ -1107,24 +1109,102 @@ export default function ChatScreen({ route, navigation }) {
 
   const handleOfferResponse = async (accept) => {
     try {
-      const offerRef = doc(db, 'job_offers', matchId);
-      await updateDoc(offerRef, {
-        status: accept ? 'accepted' : 'rejected',
-        respondedAt: new Date().toISOString()
-      });
-
-      if (accept) {
-        const matchRef = doc(db, 'matches', matchId);
-        await updateDoc(matchRef, {
-          status: 'hired'
+      if (!accept) {
+        // Handle rejection
+        await updateDoc(doc(db, 'job_offers', matchId), {
+          status: 'rejected',
+          respondedAt: new Date().toISOString()
         });
+        return;
       }
 
-      Alert.alert('Success', `Offer ${accept ? 'accepted' : 'rejected'} successfully`);
+      // Get the job offer details
+      const offerDoc = await getDoc(doc(db, 'job_offers', matchId));
+      const offerData = offerDoc.data();
+      
+      // Get worker and employer IDs
+      const [workerId, employerId] = matchId.split('_');
+      
+      // Calculate total hours per week
+      const totalHoursPerWeek = Object.values(offerData.schedule).reduce((total, times) => {
+        const start = new Date(`2000-01-01T${times.startTime}`);
+        const end = new Date(`2000-01-01T${times.endTime}`);
+        const hours = (end - start) / (1000 * 60 * 60);
+        return total + hours;
+      }, 0);
+
+      // Calculate total earnings per week
+      const weeklyEarnings = totalHoursPerWeek * offerData.hourlyWage;
+      
+      // Get worker's current stats
+      const workerRef = doc(db, 'users', workerId);
+      const workerDoc = await getDoc(workerRef);
+      const currentStats = workerDoc.data()?.user_attributes || {};
+      
+      // Update worker stats
+      const updatedStats = {
+        activeJobs: (currentStats.activeJobs || 0) + 1,
+        activeHours: (currentStats.activeHours || 0) + totalHoursPerWeek,
+        activeEarnings: (currentStats.activeEarnings || 0) + weeklyEarnings
+      };
+      
+      // Batch write all updates
+      const batch = writeBatch(db);
+      
+      // Update worker's stats
+      batch.update(workerRef, {
+        'user_attributes.activeJobs': updatedStats.activeJobs,
+        'user_attributes.activeHours': updatedStats.activeHours,
+        'user_attributes.activeEarnings': updatedStats.activeEarnings
+      });
+      
+      // Update job offer status
+      batch.update(doc(db, 'job_offers', matchId), {
+        status: 'accepted',
+        respondedAt: new Date().toISOString()
+      });
+      
+      // Update match status
+      batch.update(doc(db, 'matches', matchId), {
+        status: 'hired'
+      });
+      
+      await batch.commit();
+      Alert.alert('Success', 'Offer accepted successfully');
+      
     } catch (error) {
       console.error('Error responding to offer:', error);
       Alert.alert('Error', 'Failed to respond to offer. Please try again.');
     }
+  };
+
+  // Helper function to update time slots
+  const updateTimeSlots = (slots, jobStart, jobEnd) => {
+    return slots.reduce((newSlots, slot) => {
+      const slotStart = slot.startTime;
+      const slotEnd = slot.endTime;
+      
+      // If slot is completely outside job hours, keep it unchanged
+      if (slotEnd <= jobStart || slotStart >= jobEnd) {
+        newSlots.push(slot);
+      }
+      // If slot partially overlaps, split it
+      else {
+        if (slotStart < jobStart) {
+          newSlots.push({
+            startTime: slotStart,
+            endTime: jobStart
+          });
+        }
+        if (slotEnd > jobEnd) {
+          newSlots.push({
+            startTime: jobEnd,
+            endTime: slotEnd
+          });
+        }
+      }
+      return newSlots;
+    }, []);
   };
 
   const handleTimePickerChange = (event, selectedTime) => {

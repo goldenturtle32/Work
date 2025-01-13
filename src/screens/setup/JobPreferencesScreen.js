@@ -94,7 +94,7 @@ const availableSkills = [
 
 export default function JobPreferencesScreen({ navigation }) {
   const { setupData, updateSetupData } = useSetup();
-  const userRole = setupData.role;
+  const [userRole, setUserRole] = useState(null);
   const [attributes, setAttributes] = useState({
     industryPrefs: [],
     jobTypePrefs: '',
@@ -120,6 +120,7 @@ export default function JobPreferencesScreen({ navigation }) {
   const [cityName, setCityName] = useState('');
   const [stateCode, setStateCode] = useState('');
   const [selectedJobs, setSelectedJobs] = useState(setupData.selectedJobs || []);
+  const [jobTypeSearchText, setJobTypeSearchText] = useState('');
   console.log('Initial selectedJobs state:', selectedJobs);
 
   useEffect(() => {
@@ -142,6 +143,86 @@ export default function JobPreferencesScreen({ navigation }) {
   useEffect(() => {
     console.log('Current setupData:', setupData);
   }, [setupData]);
+
+  useEffect(() => {
+    const fetchUserRole = async () => {
+      try {
+        if (!auth.currentUser) {
+          console.error('No authenticated user');
+          return;
+        }
+
+        // First try to get role from setupData
+        if (setupData?.userRole) {
+          console.log('Using role from setupData:', setupData.userRole);
+          setUserRole(setupData.userRole);
+          return;
+        }
+
+        // If not in setupData, try to get from users collection
+        const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
+        
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          if (userData?.role) {
+            console.log('Found role in user document:', userData.role);
+            setUserRole(userData.role);
+            // Update setupData with the role
+            updateSetupData({
+              ...setupData,
+              userRole: userData.role
+            });
+          } else {
+            console.log('No role found in user document, setting default');
+            const defaultRole = 'employer'; // Set default role
+            await db.collection('users').doc(auth.currentUser.uid).update({
+              role: defaultRole,
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            setUserRole(defaultRole);
+            updateSetupData({
+              ...setupData,
+              userRole: defaultRole
+            });
+          }
+        } else {
+          console.log('Creating new user document with default role');
+          const defaultRole = 'employer';
+          await db.collection('users').doc(auth.currentUser.uid).set({
+            role: defaultRole,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          setUserRole(defaultRole);
+          updateSetupData({
+            ...setupData,
+            userRole: defaultRole
+          });
+        }
+      } catch (error) {
+        console.error('Error in fetchUserRole:', error);
+      }
+    };
+
+    fetchUserRole();
+  }, []);
+
+  useEffect(() => {
+    const fetchUserLocation = async () => {
+      if (auth.currentUser) {
+        const collectionName = userRole === 'employer' ? 'job_attributes' : 'user_attributes';
+        const userDoc = await db.collection(collectionName).doc(auth.currentUser.uid).get();
+        const userData = userDoc.data();
+        
+        if (userData) {
+          setCityName(userData.cityName || '');
+          setStateCode(userData.stateCode || '');
+        }
+      }
+    };
+    
+    fetchUserLocation();
+  }, [userRole]);
 
   const updateIndustrySuggestions = useCallback(
     debounce(async (searchTerm) => {
@@ -371,7 +452,7 @@ export default function JobPreferencesScreen({ navigation }) {
     });
   };
 
-  const handleAddJob = () => {
+  const handleAddJob = async () => {
     console.log('Attempting to add job...', {
       industry: attributes.industryPrefs[0],
       jobType: attributes.jobTypePrefs,
@@ -392,25 +473,37 @@ export default function JobPreferencesScreen({ navigation }) {
       skills: attributes.skills
     };
 
-    // Update jobs list
-    console.log('Adding new job:', newJob);
+    // Update jobs list locally
     const updatedJobs = [...selectedJobs, newJob];
     setSelectedJobs(updatedJobs);
-    updateSetupData({
-      ...setupData,
-      selectedJobs: updatedJobs
-    });
+    
+    try {
+      // Update Firestore
+      await db.collection('user_attributes').doc(auth.currentUser.uid).update({
+        selectedJobs: firebase.firestore.FieldValue.arrayUnion(newJob),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
 
-    // Reset form state
-    setAttributes({
-      industryPrefs: [],
-      jobTypePrefs: '',
-      skills: []
-    });
-    setSelectedIndustry('');
-    setSelectedJobType('');
-    setShowIndustryDropdown(false);
-    setShowJobTypeDropdown(false);
+      // Update setup context
+      updateSetupData({
+        ...setupData,
+        selectedJobs: updatedJobs
+      });
+
+      // Reset form state
+      setAttributes({
+        industryPrefs: [],
+        jobTypePrefs: '',
+        skills: []
+      });
+      setSelectedIndustry('');
+      setSelectedJobType('');
+      setShowIndustryDropdown(false);
+      setShowJobTypeDropdown(false);
+    } catch (error) {
+      console.error('Error updating Firestore:', error);
+      Alert.alert('Error', 'Failed to save job. Please try again.');
+    }
   };
 
   const handleRemoveJob = (index) => {
@@ -422,39 +515,116 @@ export default function JobPreferencesScreen({ navigation }) {
     });
   };
 
-  const handleNext = () => {
-    if (setupData.selectedJobs.length === 0) {
-      Alert.alert('No Jobs Selected', 'Please add at least one job before continuing.');
-      return;
+  const handleNext = async () => {
+    console.log('handleNext called with current state:', {
+      userRole,
+      setupData,
+      attributes
+    });
+
+    try {
+      // Ensure we have a valid role
+      const currentRole = userRole || setupData?.userRole || 'employer';
+      console.log('Using role for navigation:', currentRole);
+
+      if (currentRole === 'employer') {
+        // Validate employer data
+        if (!attributes.industryPrefs?.[0] || !attributes.jobTypePrefs || !attributes.skills?.length) {
+          Alert.alert('Missing Information', 'Please select industry, job title, and required skills.');
+          return;
+        }
+
+        // Update all necessary collections
+        await Promise.all([
+          // Update job attributes
+          db.collection('job_attributes').doc(auth.currentUser.uid).set({
+            industry: attributes.industryPrefs[0],
+            jobTitle: attributes.jobTypePrefs,
+            requiredSkills: attributes.skills,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          }, { merge: true }),
+
+          // Update user document
+          db.collection('users').doc(auth.currentUser.uid).set({
+            role: currentRole,
+            setupComplete: true,
+            setupStep: 'completed',
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          }, { merge: true })
+        ]);
+
+        // Update setup context
+        updateSetupData({
+          ...setupData,
+          userRole: currentRole,
+          jobPreferencesCompleted: true,
+          setupComplete: true
+        });
+
+        console.log('Successfully updated all documents, navigating to UserOverview');
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'UserOverview' }],
+        });
+      } else {
+        // Existing worker logic remains unchanged
+        if (!setupData.selectedJobs?.length) {
+          Alert.alert('No Jobs Selected', 'Please add at least one job before continuing.');
+          return;
+        }
+
+        await db.collection('user_attributes').doc(auth.currentUser.uid).set({
+          selectedJobs: setupData.selectedJobs,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+
+        navigation.navigate('UserOverview');
+      }
+    } catch (error) {
+      console.error('Error in handleNext:', error);
+      Alert.alert('Error', `Failed to save job information: ${error.message}`);
     }
-    navigation.navigate('UserOverview');
   };
 
   const handleIndustrySelect = (industry) => {
     console.log('handleIndustrySelect called with:', industry);
-    console.log('Current setupData:', setupData);
     
     setAttributes(prev => ({
       ...prev,
       industryPrefs: [industry]
     }));
+    setSelectedIndustry(industry);
     
-    // Update setupData if needed
-    const updatedSetupData = {
-      ...setupData,
-      industryPrefs: [industry]
-    };
-    console.log('Updated setupData:', updatedSetupData);
-    updateSetupData(updatedSetupData);
-  };
-
-  const removeJob = (index) => {
-    const updatedJobs = [...setupData.selectedJobs];
-    updatedJobs.splice(index, 1);
+    // Update setupData
     updateSetupData({
       ...setupData,
-      selectedJobs: updatedJobs
+      industryPrefs: [industry]
     });
+
+    // Fetch job suggestions when industry is selected
+    fetchJobSuggestions(industry);
+  };
+
+  const removeJob = async (index) => {
+    try {
+      const updatedJobs = [...setupData.selectedJobs];
+      const removedJob = updatedJobs.splice(index, 1)[0];
+
+      // Update local state and context
+      updateSetupData({
+        ...setupData,
+        selectedJobs: updatedJobs
+      });
+
+      // Update Firestore
+      await db.collection('user_attributes').doc(auth.currentUser.uid).update({
+        selectedJobs: updatedJobs,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    } catch (error) {
+      console.error('Error removing job from Firestore:', error);
+      Alert.alert('Error', 'Failed to remove job. Please try again.');
+    }
   };
 
   const handleSkillSelect = (skill) => {
@@ -472,12 +642,136 @@ export default function JobPreferencesScreen({ navigation }) {
     }));
   };
 
+  const fetchJobSuggestions = async (industry) => {
+    try {
+      if (!industry) {
+        console.log('No industry provided');
+        return;
+      }
+      
+      const locationString = cityName && stateCode ? `${cityName}, ${stateCode}` : '';
+      const url = `${BACKEND_URL}/suggest-jobs?` + 
+        `industry=${encodeURIComponent(industry)}` +
+        `&searchTerm=${encodeURIComponent(jobTypeSearchText)}` +
+        `&location=${encodeURIComponent(locationString)}`;
+      
+      console.log('Fetching job suggestions from:', url);
+      
+      const response = await fetch(url);
+      if (!response.ok) { 
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      
+      if (data.success) {
+        console.log('Received job suggestions:', data.jobs);
+        setSuggestions(prev => ({
+          ...prev,
+          jobTypes: data.jobs
+        }));
+      } else {
+        console.error('Error in job suggestions response:', data.error);
+      }
+    } catch (error) {
+      console.error('Error fetching job suggestions:', error);
+      setSuggestions(prev => ({
+        ...prev,
+        jobTypes: []
+      }));
+    }
+  };
+
   const renderSkills = () => {
     if (!attributes.jobTypePrefs) return null;
 
+    const handleRefreshSkills = async () => {
+      try {
+        // Keep selected skills
+        const selectedSkillNames = attributes.skills.map(s => s.name);
+        
+        // Show loading state
+        setSuggestions(prev => ({
+          ...prev,
+          isLoading: true
+        }));
+        
+        // Fetch new skills
+        const locationString = cityName && stateCode ? `${cityName}, ${stateCode}` : '';
+        const response = await fetch(
+          `${BACKEND_URL}/trending-skills?` + 
+          `jobTitle=${encodeURIComponent(attributes.jobTypePrefs)}` +
+          `&industry=${encodeURIComponent(attributes.industryPrefs[0])}` +
+          `&location=${encodeURIComponent(locationString)}`
+        );
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        
+        if (data.success && Array.isArray(data.skills)) {
+          // Combine selected skills with new suggestions
+          const newSkills = [
+            ...selectedSkillNames,
+            ...data.skills.filter(skill => !selectedSkillNames.includes(skill))
+          ];
+
+          console.log('Updating skills with:', newSkills);
+          
+          // Force a re-render by creating a new array
+          setSuggestions(prev => ({
+            ...prev,
+            skills: [...new Set(newSkills)],
+            isLoading: false
+          }));
+        } else {
+          console.error('Invalid response format:', data);
+          Alert.alert('Error', 'Failed to refresh skills. Please try again.');
+        }
+      } catch (error) {
+        console.error('Error refreshing skills:', error);
+        Alert.alert('Error', 'Failed to refresh skills. Please try again.');
+      } finally {
+        setSuggestions(prev => ({
+          ...prev,
+          isLoading: false
+        }));
+      }
+    };
+
     return (
       <View style={styles.inputContainer}>
-        <Text style={styles.label}>Select Skills (up to 5):</Text>
+        <View style={styles.skillsHeader}>
+          <Text style={styles.label}>Select Skills (up to 5):</Text>
+          <TouchableOpacity 
+            style={styles.refreshButton}
+            onPress={handleRefreshSkills}
+          >
+            <Ionicons name="refresh" size={20} color="#2563eb" />
+          </TouchableOpacity>
+        </View>
+        
+        {/* Custom Skill Input */}
+        <View style={styles.customSkillContainer}>
+          <TextInput
+            style={styles.customSkillInput}
+            placeholder="Type a custom skill"
+            onSubmitEditing={(event) => {
+              const newSkill = event.nativeEvent.text.trim();
+              if (newSkill && !suggestions.skills.includes(newSkill)) {
+                setSuggestions(prev => ({
+                  ...prev,
+                  skills: [newSkill, ...prev.skills]
+                }));
+                event.target.clear();
+              }
+            }}
+            returnKeyType="done"
+          />
+        </View>
+
+        {/* Skills List */}
         <View style={styles.skillsContainer}>
           {suggestions.skills.map((skill) => (
             <View key={skill} style={styles.skillItemContainer}>
@@ -513,7 +807,6 @@ export default function JobPreferencesScreen({ navigation }) {
                       }));
                     }}
                     onBlur={() => {
-                      // Ensure the value is a valid number
                       const currentSkill = attributes.skills.find(s => s.name === skill);
                       if (currentSkill && (isNaN(currentSkill.yearsOfExperience) || currentSkill.yearsOfExperience < 0)) {
                         setAttributes(prev => ({
@@ -542,22 +835,21 @@ export default function JobPreferencesScreen({ navigation }) {
     </View>
   );
 
-  const DebugPanel = () => (
-    <View style={{ padding: 10, backgroundColor: '#f0f0f0', margin: 10 }}>
-      <Text>Local selectedJobs: {JSON.stringify(selectedJobs, null, 2)}</Text>
-      <Text>Context selectedJobs: {JSON.stringify(setupData.selectedJobs, null, 2)}</Text>
-    </View>
-  );
-
   return (
     <View style={styles.container}>
       <ProgressStepper currentStep={3} />
       
       <ScrollView style={styles.content}>
         <View style={styles.header}>
-          <Text style={styles.title}>Select your job preferences</Text>
+          <Text style={styles.title}>
+            {userRole === 'employer' 
+              ? "Tell us about the position"
+              : "Select your job preferences"}
+          </Text>
           <Text style={styles.subtitle}>
-            Choose industries and roles you're interested in or have experience with
+            {userRole === 'employer'
+              ? "Define the role you're hiring for"
+              : "Choose industries and roles you're interested in"}
           </Text>
         </View>
 
@@ -597,47 +889,78 @@ export default function JobPreferencesScreen({ navigation }) {
             )}
           </View>
 
-          {setupData.industryPrefs?.length > 0 && (
-            <View style={styles.selectedItems}>
-              {setupData.industryPrefs.map((industry, index) => (
-                <View key={industry} style={styles.selectedItem}>
-                  <Text>{industry}</Text>
-                  <TouchableOpacity onPress={() => removeIndustry(industry)}>
-                    <Text style={styles.removeButton}>×</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </View>
-          )}
-
-          {setupData.industryPrefs?.length > 0 && (
+          {attributes.industryPrefs?.[0] && (
             <>
               <View style={styles.inputContainer}>
                 <Text style={styles.label}>Job Type</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="Select Job Type"
-                  value={selectedJobType || attributes?.jobTypePrefs || ''}
-                  onFocus={() => setShowJobTypeDropdown(true)}
+                  placeholder="Select or Type Job Title"
+                  value={selectedJobType || jobTypeSearchText}
+                  editable={true}
+                  onChangeText={(text) => {
+                    setJobTypeSearchText(text);
+                    setSelectedJobType(''); // Clear selected job when typing
+                    if (attributes.industryPrefs?.[0]) {
+                      fetchJobSuggestions(attributes.industryPrefs[0]);
+                    }
+                  }}
+                  onFocus={() => {
+                    console.log('Job Type input focused');
+                    setShowJobTypeDropdown(true);
+                    if (attributes.industryPrefs?.[0]) {
+                      fetchJobSuggestions(attributes.industryPrefs[0]);
+                    }
+                  }}
                   onBlur={() => {
+                    console.log('Job Type input blurred');
+                    // If there's text but no selection was made, use the typed text
+                    if (jobTypeSearchText && !selectedJobType) {
+                      setSelectedJobType(jobTypeSearchText);
+                      handleJobTypeSelect(jobTypeSearchText);
+                    }
                     setTimeout(() => setShowJobTypeDropdown(false), 200);
                   }}
                 />
                 {showJobTypeDropdown && (
                   <View style={styles.dropdown}>
-                    {jobTypes.map((jobType) => (
+                    {/* Show typed text as first option if it doesn't match any suggestions */}
+                    {jobTypeSearchText && 
+                     !suggestions.jobTypes.some(job => 
+                       job.toLowerCase() === jobTypeSearchText.toLowerCase()
+                     ) && (
                       <TouchableOpacity
-                        key={jobType}
-                        style={styles.dropdownItem}
+                        style={[styles.dropdownItem, styles.customDropdownItem]}
                         onPress={() => {
-                          setSelectedJobType(jobType);
-                          handleJobTypeSelect(jobType);
+                          setSelectedJobType(jobTypeSearchText);
+                          handleJobTypeSelect(jobTypeSearchText);
                           setShowJobTypeDropdown(false);
                         }}
                       >
-                        <Text>{jobType}</Text>
+                        <Text>Use: "{jobTypeSearchText}"</Text>
                       </TouchableOpacity>
-                    ))}
+                    )}
+                    
+                    {/* Show filtered suggestions */}
+                    {suggestions.jobTypes
+                      .filter(jobType => 
+                        !jobTypeSearchText || 
+                        jobType.toLowerCase().includes(jobTypeSearchText.toLowerCase())
+                      )
+                      .map((jobType) => (
+                        <TouchableOpacity
+                          key={jobType}
+                          style={styles.dropdownItem}
+                          onPress={() => {
+                            setSelectedJobType(jobType);
+                            setJobTypeSearchText('');
+                            handleJobTypeSelect(jobType);
+                            setShowJobTypeDropdown(false);
+                          }}
+                        >
+                          <Text>{jobType}</Text>
+                        </TouchableOpacity>
+                      ))}
                   </View>
                 )}
               </View>
@@ -657,68 +980,19 @@ export default function JobPreferencesScreen({ navigation }) {
           <Text style={styles.backButtonText}>Back</Text>
         </TouchableOpacity>
         <TouchableOpacity 
+          style={[
+            styles.nextButton,
+            ((userRole === 'employer' && (!attributes.industryPrefs?.[0] || !attributes.jobTypePrefs || !attributes.skills?.length)) ||
+             (userRole === 'worker' && !setupData.selectedJobs?.length)) && 
+            styles.nextButtonDisabled
+          ]}
           onPress={handleNext}
-          style={styles.nextButton}
         >
           <Text style={styles.nextButtonText}>Next</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Selected Jobs */}
-      {setupData.selectedJobs?.length > 0 && (
-        <View style={styles.selectedJobsContainer}>
-          <Text style={styles.selectedJobsTitle}>Selected Jobs ({setupData.selectedJobs.length})</Text>
-          {selectedJobs.length > 0 && (
-            <View>
-              {selectedJobs.map((job, index) => (
-                <View key={index} style={styles.selectedJobItem}>
-                  <View style={styles.selectedJobInfo}>
-                    <Text style={styles.jobTitle}>{job.title}</Text>
-                    <Text style={styles.jobIndustry}>{job.industry}</Text>
-                    <Text style={styles.jobSkills}>
-                      Skills: {job.skills.map(skill => skill.name).join(', ')}
-                    </Text>
-                  </View>
-                  <TouchableOpacity 
-                    onPress={() => {
-                      const updatedJobs = selectedJobs.filter((_, i) => i !== index);
-                      setSelectedJobs(updatedJobs);
-                      updateSetupData({
-                        ...setupData,
-                        selectedJobs: updatedJobs
-                      });
-                    }}
-                    style={styles.removeButton}
-                  >
-                    <Text style={styles.removeButtonText}>✕</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </View>
-          )}
-        </View>
-      )}
-
-      {/* Add Job button */}
-      {attributes.jobTypePrefs && (
-        <TouchableOpacity 
-          style={[
-            styles.addJobButton, 
-            (!attributes?.industryPrefs?.[0] || !attributes?.jobTypePrefs || !attributes?.skills?.length) && 
-            styles.addJobButtonDisabled
-          ]} 
-          onPress={handleAddJob}
-          disabled={!attributes?.industryPrefs?.[0] || !attributes?.jobTypePrefs || !attributes?.skills?.length}
-        >
-          <Text style={styles.addJobButtonText}>
-            Add Job
-            {(!attributes?.industryPrefs?.[0] || !attributes?.jobTypePrefs || !attributes?.skills?.length) && 
-              ' (Select required fields)'}
-          </Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Add Job Button - only show for workers */}
+      {/* Selected Jobs - Single Section */}
       {userRole === 'worker' && (
         <>
           <TouchableOpacity 
@@ -731,8 +1005,6 @@ export default function JobPreferencesScreen({ navigation }) {
           >
             <Text style={styles.addJobButtonText}>Add Job</Text>
           </TouchableOpacity>
-
-          {__DEV__ && <DebugPanel />}
 
           {selectedJobs.length > 0 && (
             <View style={styles.selectedJobsContainer}>
@@ -1074,5 +1346,36 @@ const styles = StyleSheet.create({
     margin: 10,
     backgroundColor: '#f0f0f0',
     borderRadius: 5,
+  },
+  customDropdownItem: {
+    backgroundColor: '#f0f9ff', // Light blue background
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  customSkillContainer: {
+    marginBottom: 12,
+    marginTop: 8,
+  },
+  customSkillInput: {
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 14,
+    backgroundColor: '#ffffff',
+  },
+  skillsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  refreshButton: {
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: '#f0f9ff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
 }); 

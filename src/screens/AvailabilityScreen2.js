@@ -4,7 +4,8 @@ import { Calendar } from 'react-native-calendars';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { db, auth } from '../firebase';
 import { Ionicons } from '@expo/vector-icons';
-
+import firebase from 'firebase/compat/app';
+import ProgressStepper from '../components/ProgressStepper';
 // Replace the existing WebTimePicker component with this enhanced version
 const WebTimePicker = ({ value, onChange }) => {
   if (Platform.OS !== 'web') return null;
@@ -63,6 +64,7 @@ export default function AvailabilityScreen({ navigation, route }) {
   const [tempTime, setTempTime] = useState(new Date());
   const [markedDates, setMarkedDates] = useState({});
   const [hasAnyAvailability, setHasAnyAvailability] = useState(false);
+  const [showCompleteButton, setShowCompleteButton] = useState(false);
 
   // Move checkAvailability definition before useEffect
   const checkAvailability = useCallback(() => {
@@ -149,15 +151,12 @@ export default function AvailabilityScreen({ navigation, route }) {
       console.log('Current user:', userId);
       console.log('Time slots to save:', timeSlots);
 
-      // Reference to the user_attributes document instead of users
       const userDocRef = db.collection('user_attributes').doc(userId);
 
-      // Get current data
       const doc = await userDocRef.get();
       const currentData = doc.exists ? doc.data() : {};
       const currentAvailability = currentData.availability || {};
 
-      // Create the updated availability object
       const updatedAvailability = {
         ...currentAvailability,
         [selectedDay]: {
@@ -166,27 +165,24 @@ export default function AvailabilityScreen({ navigation, route }) {
         }
       };
 
-      // Update the document
       await userDocRef.update({
         availability: updatedAvailability
       });
 
       console.log('Save successful');
 
-      // Update UI
       setMarkedDates(prev => ({
         ...prev,
         [selectedDay]: { marked: true, dotColor: '#50cebb' }
       }));
 
-      if (repeatType !== 'custom') {
-        await applyRepeatingSchedule(updatedAvailability);
-      }
+      setHasAnyAvailability(true);
+      setShowCompleteButton(true);
+      Alert.alert('Success', 'Availability saved successfully');
 
-      Alert.alert('Success', 'Availability saved successfully!');
     } catch (error) {
       console.error('Error saving availability:', error);
-      Alert.alert('Error', 'Failed to save availability: ' + error.message);
+      Alert.alert('Error', 'Failed to save availability');
     }
   };
 
@@ -341,26 +337,52 @@ export default function AvailabilityScreen({ navigation, route }) {
   // Update the button's disabled state
   const isNextDisabled = !selectedDay || timeSlots.length === 0 || !areTimeSlotsValid();
 
-  const handleCompleteSetup = async () => {
+  const handleComplete = async () => {
     try {
-      // Save current availability if there are time slots
-      if (selectedDay && timeSlots.length > 0) {
-        await handleSaveDay();
+      const userId = auth.currentUser.uid;
+      
+      // First, ensure we have at least one availability slot saved
+      if (!hasAnyAvailability) {
+        Alert.alert('Missing Availability', 'Please set and save at least one availability slot before completing setup.');
+        return;
       }
 
-      // Update user's isNewUser status
-      await db.collection('users').doc(user.uid).update({
-        isNewUser: false
-      });
+      // Update both users and user_attributes collections
+      await Promise.all([
+        // Update user document with setup completion status
+        db.collection('users').doc(userId).update({
+          setupComplete: true,
+          isNewUser: false,
+          lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+        }),
 
-      // Navigate to Home screen
+        // Update user_attributes with final availability data
+        db.collection('user_attributes').doc(userId).update({
+          availabilityLastUpdated: firebase.firestore.FieldValue.serverTimestamp(),
+          hasSetInitialAvailability: true
+        })
+      ]);
+
+      console.log('Setup completed successfully');
+
+      // Navigate to Home screen and reset navigation stack
       navigation.reset({
         index: 0,
-        routes: [{ name: 'Home' }],
+        routes: [{ 
+          name: 'Main',
+          params: { 
+            userRole: route.params?.userRole,
+            setupComplete: true
+          }
+        }]
       });
+
     } catch (error) {
       console.error('Error completing setup:', error);
-      Alert.alert('Error', 'Failed to complete setup. Please try again.');
+      Alert.alert(
+        'Error',
+        'Failed to complete setup. Please try again or contact support if the problem persists.'
+      );
     }
   };
 
@@ -393,152 +415,199 @@ export default function AvailabilityScreen({ navigation, route }) {
     }
   }, [selectedDay]);
 
+  const handleCompleteSetup = async () => {
+    try {
+      const userId = auth.currentUser?.uid;
+      if (!userId) throw new Error('No authenticated user found');
+
+      await db.collection('user_attributes').doc(userId).update({
+        setup_complete: true
+      });
+
+      navigation.navigate('Home');
+    } catch (error) {
+      console.error('Error completing setup:', error);
+      Alert.alert('Error', 'Failed to complete setup');
+    }
+  };
+
   return (
     <View style={styles.container}>
-      <Calendar
-        onDayPress={handleDayPress}
-        markedDates={{
-          ...markedDates,
-          [selectedDay]: { ...markedDates[selectedDay], selected: true, selectedColor: '#50cebb' }
-        }}
-      />
+      <ProgressStepper currentStep={5} />
+      
+      <ScrollView style={styles.content}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Set Your Availability</Text>
+          <Text style={styles.subtitle}>
+            We just need to know your schedule now. That way we can find jobs that fit your schedule best! Select dates and add time slots for when you're available to work.
+          </Text>
+        </View>
 
-      {selectedDay && (
-        <View style={styles.dayContainer}>
-          <Text style={styles.dayTitle}>Availability for {selectedDay}</Text>
-          {timeSlots.map((slot, index) => (
-            <View key={index} style={styles.slotContainer}>
-              <Text style={styles.slotTitle}>Time Slot {index + 1}</Text>
-              <View style={styles.timeContainer}>
-                {Platform.OS === 'web' ? (
-                  <>
-                    <View style={styles.webTimePickerContainer}>
-                      <Text style={styles.timeLabel}>Start:</Text>
-                      <WebTimePicker
-                        value={slot.startTime}
-                        onChange={(event, selectedTime) => handleTimeChange(index, 'startTime', selectedTime)}
-                      />
-                    </View>
-                    <Text style={styles.toText}>to</Text>
-                    <View style={styles.webTimePickerContainer}>
-                      <Text style={styles.timeLabel}>End:</Text>
-                      <WebTimePicker
-                        value={slot.endTime}
-                        onChange={(event, selectedTime) => handleTimeChange(index, 'endTime', selectedTime)}
-                      />
-                    </View>
-                  </>
-                ) : (
-                  <>
-                    <TouchableOpacity
-                      style={styles.timeButton}
-                      onPress={() => openTimePickerModal(index, 'startTime')}
-                    >
-                      <Text>{slot.startTime || 'Start Time'}</Text>
+        <View style={styles.form}>
+          <Calendar
+            style={styles.calendar}
+            onDayPress={handleDayPress}
+            markedDates={{
+              ...markedDates,
+              [selectedDay]: { ...markedDates[selectedDay], selected: true, selectedColor: '#2563eb' }
+            }}
+          />
+
+          {selectedDay && (
+            <View style={styles.dayContainer}>
+              <Text style={styles.dayTitle}>Availability for {selectedDay}</Text>
+              {timeSlots.map((slot, index) => (
+                <View key={index} style={styles.slotContainer}>
+                  <Text style={styles.slotTitle}>Time Slot {index + 1}</Text>
+                  <View style={styles.timeContainer}>
+                    {Platform.OS === 'web' ? (
+                      <>
+                        <View style={styles.webTimePickerContainer}>
+                          <Text style={styles.timeLabel}>Start:</Text>
+                          <WebTimePicker
+                            value={slot.startTime}
+                            onChange={(event, selectedTime) => handleTimeChange(index, 'startTime', selectedTime)}
+                          />
+                        </View>
+                        <Text style={styles.toText}>to</Text>
+                        <View style={styles.webTimePickerContainer}>
+                          <Text style={styles.timeLabel}>End:</Text>
+                          <WebTimePicker
+                            value={slot.endTime}
+                            onChange={(event, selectedTime) => handleTimeChange(index, 'endTime', selectedTime)}
+                          />
+                        </View>
+                      </>
+                    ) : (
+                      <>
+                        <TouchableOpacity
+                          style={styles.timeButton}
+                          onPress={() => openTimePickerModal(index, 'startTime')}
+                        >
+                          <Text>{slot.startTime || 'Start Time'}</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.toText}>to</Text>
+                        <TouchableOpacity
+                          style={styles.timeButton}
+                          onPress={() => openTimePickerModal(index, 'endTime')}
+                        >
+                          <Text>{slot.endTime || 'End Time'}</Text>
+                        </TouchableOpacity>
+                      </>
+                    )}
+                    <TouchableOpacity onPress={() => removeTimeSlot(index)} style={styles.removeButton}>
+                      <Ionicons name="close-circle" size={24} color="red" />
                     </TouchableOpacity>
-                    <Text style={styles.toText}>to</Text>
-                    <TouchableOpacity
-                      style={styles.timeButton}
-                      onPress={() => openTimePickerModal(index, 'endTime')}
-                    >
-                      <Text>{slot.endTime || 'End Time'}</Text>
-                    </TouchableOpacity>
-                  </>
-                )}
-                <TouchableOpacity onPress={() => removeTimeSlot(index)} style={styles.removeButton}>
-                  <Ionicons name="close-circle" size={24} color="red" />
-                </TouchableOpacity>
-              </View>
+                  </View>
+                </View>
+              ))}
+              <TouchableOpacity style={styles.addButton} onPress={addTimeSlot}>
+                <Ionicons name="add-circle" size={24} color="#50cebb" />
+                <Text style={styles.addButtonText}>Add Time Slot</Text>
+              </TouchableOpacity>
             </View>
-          ))}
-          <TouchableOpacity style={styles.addButton} onPress={addTimeSlot}>
-            <Ionicons name="add-circle" size={24} color="#50cebb" />
-            <Text style={styles.addButtonText}>Add Time Slot</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+          )}
 
-      <View style={styles.repeatContainer}>
-        <Text style={styles.repeatTitle}>Repeat Schedule:</Text>
-        <View style={styles.repeatButtonContainer}>
-          <TouchableOpacity
-            style={[styles.repeatButton, repeatType === 'weekly' && styles.activeRepeatButton]}
-            onPress={() => setRepeatType('weekly')}
-          >
-            <Text style={[styles.repeatButtonText, repeatType === 'weekly' && styles.activeRepeatButtonText]}>Weekly</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.repeatButton, repeatType === 'bi-weekly' && styles.activeRepeatButton]}
-            onPress={() => setRepeatType('bi-weekly')}
-          >
-            <Text style={[styles.repeatButtonText, repeatType === 'bi-weekly' && styles.activeRepeatButtonText]}>Bi-weekly</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.repeatButton, repeatType === 'custom' && styles.activeRepeatButton]}
-            onPress={() => setRepeatType('custom')}
-          >
-            <Text style={[styles.repeatButtonText, repeatType === 'custom' && styles.activeRepeatButtonText]}>Custom</Text>
-          </TouchableOpacity>
+          <View style={styles.repeatContainer}>
+            <Text style={styles.repeatTitle}>Repeat Schedule:</Text>
+            <View style={styles.repeatButtonContainer}>
+              <TouchableOpacity
+                style={[styles.repeatButton, repeatType === 'weekly' && styles.activeRepeatButton]}
+                onPress={() => setRepeatType('weekly')}
+              >
+                <Text style={[styles.repeatButtonText, repeatType === 'weekly' && styles.activeRepeatButtonText]}>Weekly</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.repeatButton, repeatType === 'bi-weekly' && styles.activeRepeatButton]}
+                onPress={() => setRepeatType('bi-weekly')}
+              >
+                <Text style={[styles.repeatButtonText, repeatType === 'bi-weekly' && styles.activeRepeatButtonText]}>Bi-weekly</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.repeatButton, repeatType === 'custom' && styles.activeRepeatButton]}
+                onPress={() => setRepeatType('custom')}
+              >
+                <Text style={[styles.repeatButtonText, repeatType === 'custom' && styles.activeRepeatButtonText]}>Custom</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity
+              style={[
+                styles.saveDayButton,
+                (!selectedDay || timeSlots.length === 0) && styles.buttonDisabled
+              ]}
+              onPress={handleSaveDay}
+              disabled={!selectedDay || timeSlots.length === 0}
+            >
+              <Text style={styles.saveDayButtonText}>Save Day</Text>
+            </TouchableOpacity>
+
+            {hasAnyAvailability && (
+              <TouchableOpacity
+                style={[styles.completeButton, !hasAnyAvailability && styles.buttonDisabled]}
+                onPress={handleComplete}
+                disabled={!hasAnyAvailability}
+              >
+                <Text style={styles.completeButtonText}>
+                  Complete Setup
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {showPickerModal.show && (
+            <Modal transparent={true} animationType="slide">
+              <View style={styles.modalContainer}>
+                <View style={styles.modalContent}>
+                  <Text style={styles.modalTitle}>Select Time</Text>
+                  <DateTimePicker
+                    value={tempTime}
+                    mode="time"
+                    is24Hour={true}
+                    display="spinner"
+                    onChange={handleTimeChange}
+                  />
+                  <View style={styles.modalButtonContainer}>
+                    <TouchableOpacity
+                      style={[styles.modalButton, styles.cancelButton]}
+                      onPress={() => setShowPickerModal({ show: false, index: null, field: '' })}
+                    >
+                      <Text style={styles.modalButtonText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.modalButton, styles.confirmButton]}
+                      onPress={confirmTimeSelection}
+                    >
+                      <Text style={styles.modalButtonText}>Confirm</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            </Modal>
+          )}
         </View>
-      </View>
+      </ScrollView>
 
       <View style={styles.buttonContainer}>
         <TouchableOpacity
-          style={[styles.saveDayButton]}
-          onPress={handleSaveDay}
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
         >
-          <Text style={styles.saveDayButtonText}>
-            Save This Day
-          </Text>
+          <Text style={styles.backButtonText}>Back</Text>
         </TouchableOpacity>
-
+        
         <TouchableOpacity
-          style={[
-            styles.completeButton,
-            !hasAnyAvailability && styles.buttonDisabled
-          ]}
-          onPress={handleCompleteSetup}
+          style={[styles.nextButton, !hasAnyAvailability && styles.nextButtonDisabled]}
+          onPress={handleComplete}
           disabled={!hasAnyAvailability}
         >
-          <Text style={[
-            styles.completeButtonText,
-            !hasAnyAvailability && styles.buttonTextDisabled
-          ]}>
-            Complete Setup
+          <Text style={styles.nextButtonText}>
+            {isInitialSetup ? 'Complete Setup' : 'Save'}
           </Text>
         </TouchableOpacity>
       </View>
-
-      {showPickerModal.show && (
-        <Modal transparent={true} animationType="slide">
-          <View style={styles.modalContainer}>
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>Select Time</Text>
-              <DateTimePicker
-                value={tempTime}
-                mode="time"
-                is24Hour={true}
-                display="spinner"
-                onChange={handleTimeChange}
-              />
-              <View style={styles.modalButtonContainer}>
-                <TouchableOpacity
-                  style={[styles.modalButton, styles.cancelButton]}
-                  onPress={() => setShowPickerModal({ show: false, index: null, field: '' })}
-                >
-                  <Text style={styles.modalButtonText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modalButton, styles.confirmButton]}
-                  onPress={confirmTimeSelection}
-                >
-                  <Text style={styles.modalButtonText}>Confirm</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
-      )}
     </View>
   );
 }
@@ -546,7 +615,76 @@ export default function AvailabilityScreen({ navigation, route }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f1f5f9',
+  },
+  content: {
+    flex: 1,
+    padding: 24,
+  },
+  header: {
+    marginBottom: 32,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: '300',
+    color: '#1e3a8a',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#1e40af',
+    textAlign: 'center',
+    paddingHorizontal: 20,
+    lineHeight: 20,
+  },
+  form: {
+    maxWidth: 440,
+    width: '100%',
+    alignSelf: 'center',
+  },
+  calendar: {
+    marginBottom: 20,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  buttonContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    padding: 24,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    backgroundColor: '#ffffff',
+  },
+  backButton: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  backButtonText: {
+    color: '#1e3a8a',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  nextButton: {
+    flex: 1,
+    backgroundColor: '#2563eb',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  nextButtonDisabled: {
+    backgroundColor: '#94a3b8',
+  },
+  nextButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '500',
   },
   dayContainer: {
     backgroundColor: '#ffffff',
@@ -690,24 +828,26 @@ const styles = StyleSheet.create({
     color: '#4b5563',
     minWidth: 45,
   },
-  buttonContainer: {
-    position: 'absolute',
-    bottom: 20,
-    left: 20,
-    right: 20,
-    gap: 10,
+  buttonDisabled: {
+    backgroundColor: '#94a3b8',
+    opacity: 0.5,
+  },
+  buttonTextDisabled: {
+    color: '#e2e8f0',
+  },
+  completeButton: {
+    backgroundColor: '#4CAF50',
+    padding: 15,
+    borderRadius: 8,
+    marginTop: 20,
+    marginBottom: 20,
+    width: '90%',
+    alignSelf: 'center',
   },
   saveDayButton: {
     backgroundColor: '#4f46e5',
     padding: 12,
     borderRadius: 8,
-    alignItems: 'center',
-    width: '100%',
-  },
-  completeButton: {
-    backgroundColor: '#50cebb',
-    padding: 15,
-    borderRadius: 10,
     alignItems: 'center',
     width: '100%',
   },
@@ -717,15 +857,9 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   completeButtonText: {
-    color: '#ffffff',
+    color: 'white',
+    textAlign: 'center',
     fontSize: 16,
     fontWeight: 'bold',
-  },
-  buttonDisabled: {
-    backgroundColor: '#94a3b8',
-    opacity: 0.5,
-  },
-  buttonTextDisabled: {
-    color: '#e2e8f0',
   },
 });

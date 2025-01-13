@@ -15,10 +15,18 @@ import { db, auth } from '../../firebase';
 export default function BasicInfoScreen({ navigation, route }) {
   const { setupData, updateSetupData } = useSetup();
   const [errors, setErrors] = useState({});
+  const [userRole, setUserRole] = useState(null);
 
   useEffect(() => {
-    console.log('Current auth user:', auth.currentUser);
-    console.log('Initial setupData:', setupData);
+    const fetchUserRole = async () => {
+      if (auth.currentUser) {
+        const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
+        const role = userDoc.data()?.role;
+        setUserRole(role);
+        console.log('User role:', role);
+      }
+    };
+    fetchUserRole();
   }, []);
 
   const formatDateString = (input) => {
@@ -68,47 +76,180 @@ export default function BasicInfoScreen({ navigation, route }) {
     console.log('Validating user data...');
     const newErrors = {};
     
-    if (!setupData.name?.trim()) {
-      newErrors.name = 'Name is required';
-    }
-    
-    if (!setupData.dateOfBirth) {
-      newErrors.dateOfBirth = 'Date of birth is required';
-    } else if (!validateAge(setupData.dateOfBirth)) {
-      newErrors.dateOfBirth = 'You must be 18 or older';
+    if (userRole === 'worker') {
+      if (!setupData.name?.trim()) {
+        newErrors.name = 'Name is required';
+      }
+      
+      if (!setupData.dateOfBirth) {
+        newErrors.dateOfBirth = 'Date of birth is required';
+      } else if (!validateAge(setupData.dateOfBirth)) {
+        newErrors.dateOfBirth = 'You must be 18 or older';
+      }
+    } else if (userRole === 'employer') {
+      if (!setupData.jobTitle?.trim()) {
+        newErrors.jobTitle = 'Job title is required';
+      }
+      if (!setupData.companyName?.trim()) {
+        newErrors.companyName = 'Company name is required';
+      }
+      if (!setupData.estPayRangeMin) {
+        newErrors.estPayRangeMin = 'Minimum pay is required';
+      }
+      if (!setupData.estPayRangeMax) {
+        newErrors.estPayRangeMax = 'Maximum pay is required';
+      }
+      if (setupData.estPayRangeMin && setupData.estPayRangeMax && 
+          Number(setupData.estPayRangeMin) >= Number(setupData.estPayRangeMax)) {
+        newErrors.estPayRangeMax = 'Maximum pay must be greater than minimum pay';
+      }
     }
 
     if (Object.keys(newErrors).length > 0) {
-      console.log('Validation errors:', newErrors);
       setErrors(newErrors);
       return;
     }
 
     try {
       const userId = auth.currentUser.uid;
-      console.log('Current user ID:', userId);
+      const collectionName = userRole === 'worker' ? 'user_attributes' : 'job_attributes';
+      const data = userRole === 'worker' 
+        ? {
+            name: setupData.name,
+            dateOfBirth: setupData.dateOfBirth,
+            email: setupData.email,
+            updatedAt: new Date()
+          }
+        : {
+            jobTitle: setupData.jobTitle,
+            companyName: setupData.companyName,
+            email: setupData.email,
+            estPayRangeMin: Number(setupData.estPayRangeMin),
+            estPayRangeMax: Number(setupData.estPayRangeMax),
+            updatedAt: new Date()
+          };
 
-      // Create or update user_attributes document
-      console.log('Creating/updating user_attributes document with:', {
-        name: setupData.name,
-        dateOfBirth: setupData.dateOfBirth,
-        email: setupData.email
-      });
-
-      await db.collection('user_attributes').doc(userId).set({
-        name: setupData.name,
-        dateOfBirth: setupData.dateOfBirth,
-        email: setupData.email,
-        updatedAt: new Date()
-      }, { merge: true }); // Use merge to preserve any existing data
-
-      console.log('Successfully updated user_attributes in Firestore');
+      await db.collection(collectionName).doc(userId).set(data, { merge: true });
       navigation.navigate('LocationPreferences');
     } catch (error) {
-      console.error('Error updating user attributes:', error);
+      console.error('Error updating attributes:', error);
       Alert.alert('Error', 'Failed to save your information. Please try again.');
     }
   };
+
+  const renderWorkerForm = () => (
+    <View style={styles.form}>
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Name</Text>
+        <TextInput
+          style={[styles.input, errors.name && styles.inputError]}
+          value={setupData.name}
+          onChangeText={(text) => {
+            updateSetupData({ name: text });
+            setErrors(prev => ({ ...prev, name: null }));
+          }}
+          placeholder="Enter your name"
+          placeholderTextColor="#64748b"
+        />
+        {errors.name && <Text style={styles.errorText}>{errors.name}</Text>}
+      </View>
+
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Date of Birth</Text>
+        <TextInput
+          style={[styles.input, errors.dateOfBirth && styles.inputError]}
+          value={setupData.dateOfBirth}
+          onChangeText={handleDateChange}
+          placeholder="MM-DD-YYYY"
+          placeholderTextColor="#64748b"
+          keyboardType="numeric"
+          maxLength={10}
+        />
+        {errors.dateOfBirth && (
+          <Text style={styles.errorText}>{errors.dateOfBirth}</Text>
+        )}
+      </View>
+    </View>
+  );
+
+  const renderEmployerForm = () => (
+    <View style={styles.form}>
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Job Title</Text>
+        <TextInput
+          style={[styles.input, errors.jobTitle && styles.inputError]}
+          value={setupData.jobTitle}
+          onChangeText={(text) => {
+            updateSetupData({ jobTitle: text });
+            setErrors(prev => ({ ...prev, jobTitle: null }));
+          }}
+          placeholder="Enter job title"
+          placeholderTextColor="#64748b"
+        />
+        {errors.jobTitle && <Text style={styles.errorText}>{errors.jobTitle}</Text>}
+      </View>
+
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Company Name</Text>
+        <TextInput
+          style={[styles.input, errors.companyName && styles.inputError]}
+          value={setupData.companyName}
+          onChangeText={(text) => {
+            updateSetupData({ companyName: text });
+            setErrors(prev => ({ ...prev, companyName: null }));
+          }}
+          placeholder="Enter company name"
+          placeholderTextColor="#64748b"
+        />
+        {errors.companyName && <Text style={styles.errorText}>{errors.companyName}</Text>}
+      </View>
+
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Pay Range Estimate ($/hr)</Text>
+        <View style={styles.payRangeContainer}>
+          <View style={styles.payRangeInput}>
+            <TextInput
+              style={[
+                styles.input,
+                styles.payInput,
+                errors.estPayRangeMin && styles.inputError
+              ]}
+              value={setupData.estPayRangeMin}
+              onChangeText={(text) => {
+                updateSetupData({ estPayRangeMin: text });
+                setErrors(prev => ({ ...prev, estPayRangeMin: null }));
+              }}
+              placeholder="Min"
+              placeholderTextColor="#64748b"
+              keyboardType="numeric"
+            />
+            {errors.estPayRangeMin && <Text style={styles.errorText}>{errors.estPayRangeMin}</Text>}
+          </View>
+          
+          <Text style={styles.payRangeSeparator}>to</Text>
+          
+          <View style={styles.payRangeInput}>
+            <TextInput
+              style={[
+                styles.input,
+                styles.payInput,
+                errors.estPayRangeMax && styles.inputError
+              ]}
+              value={setupData.estPayRangeMax}
+              onChangeText={(text) => {
+                updateSetupData({ estPayRangeMax: text });
+                setErrors(prev => ({ ...prev, estPayRangeMax: null }));
+              }}
+              placeholder="Max"
+              placeholderTextColor="#64748b"
+              keyboardType="numeric"
+            />
+            {errors.estPayRangeMax && <Text style={styles.errorText}>{errors.estPayRangeMax}</Text>}
+          </View>
+        </View>
+      </View>
+    </View>
+  );
 
   return (
     <View style={styles.container}>
@@ -116,54 +257,29 @@ export default function BasicInfoScreen({ navigation, route }) {
       
       <View style={styles.content}>
         <View style={styles.header}>
-          <Text style={styles.title}>Let's get your profile set up</Text>
+          <Text style={styles.title}>
+            {userRole === 'worker' 
+              ? "Let's get your profile set up"
+              : "Let's post your job"}
+          </Text>
           <Text style={styles.subtitle}>
-            We're excited to help you find your next job!
+            {userRole === 'worker'
+              ? "We're excited to help you find your next job!"
+              : "We're excited to help you find your candidate for this role!"}
           </Text>
         </View>
 
-        <View style={styles.form}>
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Name</Text>
-            <TextInput
-              style={[styles.input, errors.name && styles.inputError]}
-              value={setupData.name}
-              onChangeText={(text) => {
-                updateSetupData({ name: text });
-                setErrors(prev => ({ ...prev, name: null }));
-              }}
-              placeholder="Enter your name"
-              placeholderTextColor="#64748b"
-            />
-            {errors.name && <Text style={styles.errorText}>{errors.name}</Text>}
-          </View>
+        {userRole === 'worker' ? renderWorkerForm() : renderEmployerForm()}
 
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Date of Birth</Text>
-            <TextInput
-              style={[styles.input, errors.dateOfBirth && styles.inputError]}
-              value={setupData.dateOfBirth}
-              onChangeText={handleDateChange}
-              placeholder="MM-DD-YYYY"
-              placeholderTextColor="#64748b"
-              keyboardType="numeric"
-              maxLength={10} // MM-DD-YYYY = 10 characters
-            />
-            {errors.dateOfBirth && (
-              <Text style={styles.errorText}>{errors.dateOfBirth}</Text>
-            )}
-          </View>
-
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Email address</Text>
-            <TextInput
-              style={[styles.input, styles.inputDisabled]}
-              value={setupData.email}
-              editable={false}
-              placeholder="example@email.com"
-              placeholderTextColor="#94a3b8"
-            />
-          </View>
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>Email address</Text>
+          <TextInput
+            style={[styles.input, styles.inputDisabled]}
+            value={setupData.email}
+            editable={false}
+            placeholder="example@email.com"
+            placeholderTextColor="#94a3b8"
+          />
         </View>
 
         <View style={styles.buttonContainer}>
@@ -178,6 +294,25 @@ export default function BasicInfoScreen({ navigation, route }) {
     </View>
   );
 }
+
+const additionalStyles = {
+  payRangeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  payRangeInput: {
+    flex: 1,
+  },
+  payInput: {
+    textAlign: 'center',
+  },
+  payRangeSeparator: {
+    marginHorizontal: 10,
+    color: '#64748b',
+    fontWeight: '500',
+  },
+};
 
 const styles = StyleSheet.create({
   container: {
@@ -253,4 +388,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
   },
+  ...additionalStyles,
 }); 

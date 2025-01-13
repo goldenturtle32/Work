@@ -40,6 +40,7 @@ import JobPreferencesScreen from './src/screens/setup/JobPreferencesScreen';
 import UserOverviewScreen from './src/screens/setup/UserOverviewScreen';
 
 import AppNavigator from './src/navigation/AppNavigator';
+import JobHomeScreen from './src/screens/JobHomeScreen';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -61,36 +62,60 @@ const AuthStack = () => (
 );
 
 // Create MainTabs component for bottom tab navigation
-const MainTabs = () => (
-  <Tab.Navigator
-    screenOptions={({ route }) => ({
-      tabBarIcon: ({ focused, color, size }) => {
-        let iconName;
-        if (route.name === 'HomeTab') {
-          iconName = focused ? 'home' : 'home-outline';
-        } else if (route.name === 'Profile') {
-          iconName = focused ? 'person' : 'person-outline';
-        } else if (route.name === 'Matches') {
-          iconName = focused ? 'heart' : 'heart-outline';
-        } else if (route.name === 'Settings') {
-          iconName = focused ? 'settings' : 'settings-outline';
+const MainTabs = () => {
+  const [userRole, setUserRole] = useState(null);
+
+  useEffect(() => {
+    const fetchUserRole = async () => {
+      if (auth.currentUser) {
+        const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
+        if (userDoc.exists) {
+          setUserRole(userDoc.data().role);
         }
-        return <Ionicons name={iconName} size={size} color={color} />;
-      },
-      tabBarActiveTintColor: '#4f46e5',
-      tabBarInactiveTintColor: 'gray',
-    })}
-  >
-    <Tab.Screen 
-      name="HomeTab" 
-      component={HomeScreen} 
-      options={{ headerShown: false, title: 'Home' }}
-    />
-    <Tab.Screen name="Profile" component={ProfileScreen} />
-    <Tab.Screen name="Matches" component={MatchesScreen} />
-    <Tab.Screen name="Settings" component={SettingsScreen} />
-  </Tab.Navigator>
-);
+      }
+    };
+    fetchUserRole();
+  }, []);
+
+  return (
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        tabBarIcon: ({ focused, color, size }) => {
+          let iconName;
+          if (route.name === 'HomeTab') {
+            iconName = focused ? 'home' : 'home-outline';
+          } else if (route.name === 'Profile') {
+            iconName = focused ? 'person' : 'person-outline';
+          } else if (route.name === 'Matches') {
+            iconName = focused ? 'heart' : 'heart-outline';
+          } else if (route.name === 'Settings') {
+            iconName = focused ? 'settings' : 'settings-outline';
+          }
+          return <Ionicons name={iconName} size={size} color={color} />;
+        },
+        tabBarActiveTintColor: '#4f46e5',
+        tabBarInactiveTintColor: 'gray',
+      })}
+    >
+      <Tab.Screen 
+        name="HomeTab" 
+        component={userRole === 'employer' ? JobHomeScreen : HomeScreen}
+        options={{ headerShown: false, title: 'Home' }}
+      />
+      <Tab.Screen name="Profile" component={ProfileScreen} />
+      <Tab.Screen name="Matches" component={MatchesScreen} />
+      <Tab.Screen name="Settings" component={SettingsScreen} />
+      <Tab.Screen 
+        name="JobDetail" 
+        component={JobDetailScreen}
+        options={{ 
+          headerShown: false,
+          tabBarButton: () => null // This hides the tab bar button
+        }}
+      />
+    </Tab.Navigator>
+  );
+};
 
 // Setup Stack
 const SetupStack = () => (
@@ -113,6 +138,11 @@ const SetupStack = () => (
     <Stack.Screen 
       name="UserOverview" 
       component={UserOverviewScreen} 
+      options={{ headerShown: false }}
+    />
+    <Stack.Screen 
+      name="Availability" 
+      component={AvailabilityScreen} 
       options={{ headerShown: false }}
     />
     <Stack.Screen 
@@ -139,17 +169,33 @@ export default function App() {
         setUser(user);
         console.log('Checking setup status for user:', user.uid);
         
-        // Check both user document and user_attributes
-        const [userDoc, userAttrsDoc] = await Promise.all([
-          db.collection('users').doc(user.uid).get(),
-          db.collection('user_attributes').doc(user.uid).get()
-        ]);
+        // First get the user document to determine role
+        const userDoc = await db.collection('users').doc(user.uid).get();
+        
+        if (!userDoc.exists) {
+          console.log('User document does not exist');
+          setIsSetupComplete(false);
+          return;
+        }
+
+        const userData = userDoc.data();
+        console.log('User role:', userData.role);
+        
+        // Determine which attributes collection to check based on role
+        const attributesCollection = userData.role === 'employer' ? 'job_attributes' : 'user_attributes';
+        const attributesDoc = await db.collection(attributesCollection).doc(user.uid).get();
 
         const isComplete = userDoc.exists && 
-                          userAttrsDoc.exists && 
-                          userDoc.data()?.setupComplete === true;
+                          attributesDoc.exists && 
+                          userData.setupComplete === true;
 
-        console.log('Setup complete status:', isComplete);
+        console.log('Setup complete check:', {
+          userDocExists: userDoc.exists,
+          attributesDocExists: attributesDoc.exists,
+          setupCompleteFlag: userData.setupComplete,
+          finalStatus: isComplete
+        });
+
         setIsSetupComplete(isComplete);
       } else {
         setUser(null);
@@ -157,6 +203,7 @@ export default function App() {
       }
     } catch (error) {
       console.error('Error checking setup status:', error);
+      console.error('Error details:', error.message);
       setIsSetupComplete(false);
     } finally {
       if (initializing) {
@@ -186,13 +233,12 @@ export default function App() {
         ) : !isSetupComplete ? (
           <SetupStack />
         ) : (
-          <MainTabs />
+          <AppNavigator /> // Changed from <MainTabs /> to <AppNavigator />
         )}
       </NavigationContainer>
     </SetupProvider>
   );
 }
-
 const styles = StyleSheet.create({
   loadingContainer: {
     flex: 1,

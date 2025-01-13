@@ -308,30 +308,11 @@ def generate_overview_questions():
     try:
         data = request.json
         role = data.get('role')
-        selected_jobs = data.get('selectedJobs', [])
-        industry_prefs = data.get('industryPrefs', [])
-        job_title = data.get('jobTitle', '')
+        print(f"DEBUG - Overview Questions - Role received: {role}")  # Debug log
         
-        if role == 'worker':
-            job_titles = [job.get('title', '') for job in selected_jobs]
-            
-            # Generate questions based on selected jobs
+        if role == 'employer':
             questions = [
-                f"What specific qualifications or certifications do you have related to {', '.join(job_titles)}?",
-                "How many years of experience do you have in these or related roles?",
-                "What technical skills and tools are you proficient in?",
-                "What are your most notable achievements or successful projects in similar positions?",
-                "What relevant education or training do you have for these roles?"
-            ]
-            
-            return jsonify({
-                "success": True,
-                "questions": questions
-            })
-        else:  # employer questions
-            # Generate questions based on industry and job title
-            questions = [
-                f"What are the primary responsibilities for this {job_title} position?",
+                f"What are the primary responsibilities for this {data.get('jobTitle', '')} position?",
                 "What qualifications or experience are required for this role?",
                 "What makes your company culture unique?",
                 "What growth or advancement opportunities are available?",
@@ -349,20 +330,31 @@ def generate_overview_questions():
                     "What patient populations will this role work with?",
                     "What medical technologies or systems do you use?",
                     "What are your quality of care standards?"
-                ],
-                # Add more industry-specific questions as needed
+                ]
             }
             
-            # Add relevant industry questions
+            industry_prefs = data.get('industryPrefs', [])
             for industry in industry_prefs:
                 if industry in industry_questions:
-                    questions.extend(industry_questions[industry][:2])  # Add up to 2 industry-specific questions
+                    questions.extend(industry_questions[industry][:2])
             
             return jsonify({
                 "success": True,
                 "questions": questions[:7]  # Limit to 7 questions total
             })
-            
+        else:
+            # Handle worker role
+            return jsonify({
+                "success": True,
+                "questions": [
+                    "What are your key skills and experience?",
+                    "What interests you about this role?",
+                    "What are your career goals?",
+                    "What is your preferred work environment?",
+                    "What are your salary expectations?"
+                ]
+            })
+
     except Exception as e:
         print(f"Error generating questions: {str(e)}")
         return jsonify({
@@ -376,58 +368,56 @@ def generate_overview():
         data = request.json
         role = data.get('role')
         responses = data.get('responses', {})
-        selected_jobs = data.get('selectedJobs', [])
-        industry_prefs = data.get('industryPrefs', [])
-        job_title = data.get('jobTitle', '')
+        
+        print(f"DEBUG - Received role: {role}")  # Debug log
+        print(f"DEBUG - Full request data: {data}")  # Debug log
 
-        if role == 'worker':
-            # Create a prompt that focuses on professional experience
-            job_titles = [job.get('title', '') for job in selected_jobs]
-            prompt = f"""Create a professional overview based on these responses:
-            Selected jobs: {job_titles}
-            Industries: {industry_prefs}
-            Responses: {responses}
+        if role == 'employer':
+            prompt = f"""Write a compelling job posting (maximum 200 characters) based on these responses:
+            {responses}
             
-            Focus on highlighting qualifications, experience, and skills relevant to {', '.join(job_titles)}.
-            Keep it concise, professional, and focused on career achievements."""
+            REQUIREMENTS:
+            1. Start with "We are seeking..." or "We are looking for..."
+            2. Write from the employer's perspective (using "we" and "our")
+            3. Never use first person ("I" or "my")
+            4. Format as a professional job posting
+            5. Must be 200 characters or less
+            
+            Include key points about:
+            - Role description and impact
+            - Key responsibilities
+            - Required qualifications
+            - What we offer"""
+        else:
+            prompt = f"""Write a professional summary (maximum 200 characters) based on these responses:
+            {responses}
+            
+            REQUIREMENTS:
+            1. Write from the job seeker's perspective
+            2. Use first person ("I" and "my")
+            3. Format as a professional summary
+            4. Highlight qualifications and experience
+            5. Must be 200 characters or less
+            
+            Include key points about:
+            - Professional background
+            - Key skills and expertise
+            - Career objectives"""
 
-            messages = [
-                {"role": "system", "content": "You are an expert at crafting professional profiles focused on qualifications and experience."},
-                {"role": "user", "content": prompt}
-            ]
-            
-            response = make_openai_request(messages)
-            
-            return jsonify({
-                "success": True,
-                "overview": response
-            })
-        else:  # employer overview
-            # Create a prompt for generating employer job overview
-            prompt = f"""Create a professional job overview based on these responses:
-            Job Title: {job_title}
-            Industry: {industry_prefs[0] if industry_prefs else 'General'}
-            Responses: {responses}
-            
-            Focus on creating an engaging, informative job description that:
-            - Clearly outlines the role and responsibilities
-            - Highlights key qualifications and requirements
-            - Describes growth opportunities and benefits
-            - Showcases the company culture
-            Keep it professional, concise, and appealing to potential candidates."""
+        messages = [
+            {"role": "system", "content": "You are writing a concise professional overview."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        response = make_openai_request(messages)
+        # Truncate to 200 characters if needed
+        response = response[:200]
+        
+        return jsonify({
+            "success": True,
+            "overview": response
+        })
 
-            messages = [
-                {"role": "system", "content": "You are an expert at writing compelling job descriptions that attract qualified candidates."},
-                {"role": "user", "content": prompt}
-            ]
-            
-            response = make_openai_request(messages)
-            
-            return jsonify({
-                "success": True,
-                "overview": response
-            })
-            
     except Exception as e:
         print(f"Error generating overview: {str(e)}")
         return jsonify({
@@ -527,22 +517,15 @@ def format_location(location, try_city=False):
     if not location:
         return 'United States'
         
-    # If location contains a comma (city, state format)
+    # If location contains a comma (city, state/region format)
     if ',' in location:
-        city, state_code = location.split(',')
-        state_code = state_code.strip()
-        # Map of state codes to full names
-        state_names = {
-            'CA': 'California',
-            'NY': 'New York',
-            'TX': 'Texas',
-            # Add more as needed
-        }
-        if try_city:
-            return f"{city.strip()}, {state_names.get(state_code, state_code)}"
-        return state_names.get(state_code, state_code)
-    
-    return location
+        city, region = location.split(',')
+        # For non-US locations, just use the country name
+        if region.strip() not in ['US', 'USA', 'United States']:
+            return location.split(',')[0].strip()  # Return just the city name
+            
+    # If it's a single word, assume it's a country name
+    return location.strip()
 
 @app.route('/trending-industries', methods=['GET'])
 def get_trending_industries():
@@ -638,14 +621,28 @@ def get_trending_skills():
     try:
         job_title = request.args.get('jobTitle', '')
         industry = request.args.get('industry', '')
-        user_location = request.args.get('location', 'United States')  # Get location from request
-        print(f"Fetching skills for job: {job_title} in industry: {industry} in {user_location}")
+        user_location = request.args.get('location', 'United States')
+        
+        print(f"\n=== Getting Trending Skills ===")
+        print(f"Job Title: {job_title}")
+        print(f"Industry: {industry}")
+        print(f"Location: {user_location}")
+        
         skills = get_trending_skills_serp(job_title, industry, user_location)
+        
+        # Ensure we're returning a valid response
+        if not skills:
+            skills = get_default_skills(job_title, industry)
+        
+        print(f"Returning skills: {skills}")
+        
         return jsonify({
             "success": True,
             "skills": skills
         })
+        
     except Exception as e:
+        print(f"Error in get_trending_skills: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e)
@@ -677,26 +674,36 @@ def get_industry_based_skills(industry):
         "Organization", "Attention to Detail"
     ])
 
-def clean_skill_name(text):
-    """Clean and standardize skill names"""
-    # Remove common phrases that aren't skills
-    remove_phrases = [
-        'ability to', 'experience in', 'experience with',
-        'knowledge of', 'proficiency in', 'skilled in',
-        'years of', 'or more', 'required', 'preferred'
-    ]
+def clean_skill_name(skill):
+    """Clean and validate a skill name"""
+    if not skill or len(skill) < 3:
+        return None
+        
+    # Remove common prefixes/suffixes
+    skill = re.sub(r'^(strong|proven|demonstrated|excellent|advanced|basic|proficient|experience with|experience in|ability to|knowledge of)\s+', '', skill.strip(), flags=re.IGNORECASE)
     
-    text = text.lower()
-    for phrase in remove_phrases:
-        text = text.replace(phrase, '')
+    # Remove common suffixes
+    skill = re.sub(r'\s+(skills|experience|knowledge|proficiency|expertise)$', '', skill, flags=re.IGNORECASE)
     
-    # Clean up the text
-    text = text.strip()
-    if len(text) < 3 or text.isdigit():
+    # Remove any remaining parentheses and their contents
+    skill = re.sub(r'\(.*?\)', '', skill)
+    
+    # Clean up whitespace and punctuation
+    skill = re.sub(r'[^\w\s-]', '', skill)
+    skill = ' '.join(skill.split())
+    
+    # Title case the skill
+    skill = skill.title()
+    
+    # Validate the cleaned skill
+    if len(skill) < 3 or len(skill) > 50:
         return None
     
-    # Capitalize each word
-    return text.title()
+    # Skip if it's just a number or common words
+    if skill.isdigit() or skill.lower() in {'the', 'and', 'or', 'in', 'at', 'to', 'for', 'of', 'with'}:
+        return None
+        
+    return skill
 
 @app.route('/suggest-skills', methods=['POST'])
 def suggest_skills():
@@ -1009,112 +1016,102 @@ def get_trending_skills_serp(job_title, industry, location='United States'):
         print(f"\n=== Getting Trending Skills ===")
         print(f"Job Title: {job_title}")
         print(f"Industry: {industry}")
-        print(f"Original location: {location}")
-        
-        # Try city-level search first
-        city_location = format_location(location, try_city=True)
-        print(f"Trying city-level location: {city_location}")
-        
-        # Modify search query to better extract skills
-        search_query = f"{job_title} {industry} required skills qualifications requirements"
-        
+        print(f"Location: {location}")
+
+        # First try to get skills from SERP API
         params = {
             "api_key": SERP_API_KEY,
             "engine": "google_jobs",
-            "q": search_query,
-            "location": city_location,
+            "q": f"{job_title} skills requirements",  # Simplified search query
+            "location": format_location(location),
             "hl": "en",
-            "gl": "us",
-            "chips": "date_posted:today"
+            "gl": "us"
         }
-        
+
+        print("Querying SERP API with params:", params)
         search = GoogleSearch(params)
         results = search.get_dict()
         
-        if 'error' in results:
-            print(f"SERP API error: {results.get('error')}")
-            return get_default_skills(job_title, industry)
-            
-        # Extract skills from job descriptions
-        skills_count = Counter()
-        job_results = results.get('jobs_results', [])
-        print(f"Found {len(job_results)} job postings")
+        skills_set = set()
         
-        # Industry-specific skill keywords
+        if 'error' not in results and 'jobs_results' in results:
+            jobs = results.get('jobs_results', [])
+            print(f"Found {len(jobs)} job results")
+            
+            for job in jobs:
+                description = job.get('description', '').lower()
+                
+                # Extract skills from requirements/qualifications sections
+                skill_patterns = [
+                    r'(?:requirements|qualifications|skills required|what you\'ll need)[:]\s*(.*?)(?=\n\n|\Z)',
+                    r'(?:•|\*)\s*([\w\s]+)',  # Bullet points
+                    r'(?:proficiency|experience) (?:in|with)\s+([\w\s,]+)',
+                    r'knowledge of\s+([\w\s,]+)',
+                    r'(\w+) skills'
+                ]
+                
+                for pattern in skill_patterns:
+                    matches = re.finditer(pattern, description, re.IGNORECASE | re.DOTALL)
+                    for match in matches:
+                        skill_text = match.group(1)
+                        # Split by common delimiters
+                        for skill in re.split(r'[,;.]', skill_text):
+                            cleaned_skill = clean_skill_name(skill)
+                            if cleaned_skill:
+                                skills_set.add(cleaned_skill)
+                                print(f"Found skill: {cleaned_skill}")
+
+        # If we found skills from SERP API, use them
+        if len(skills_set) >= 5:
+            print(f"Using {len(skills_set)} skills found from SERP API")
+            final_skills = list(skills_set)
+            random.shuffle(final_skills)
+            return final_skills[:15]
+
+        print("Not enough skills found from SERP API, using industry-specific fallback")
+        
+        # Industry-specific skills as fallback
         industry_skills = {
-            'Automotive': [
-                'diagnostics', 'repair', 'maintenance', 'mechanical',
-                'electrical systems', 'brake systems', 'engine repair',
-                'transmission', 'certification', 'ASE', 'troubleshooting',
-                'preventive maintenance', 'tools', 'equipment operation',
-                'vehicle inspection', 'automotive technology'
+            'Education': [
+                'Curriculum Development', 'Instructional Design', 'Student Assessment',
+                'Educational Technology', 'Classroom Management', 'Lesson Planning',
+                'Learning Management Systems', 'Student Engagement', 'Educational Leadership',
+                'Special Education', 'Teaching Methods', 'Academic Advising',
+                'Educational Psychology', 'Distance Learning', 'Student Support'
             ],
             'Technology': [
-                'programming', 'software development', 'coding', 'agile',
-                'cloud', 'AWS', 'Azure', 'databases', 'SQL', 'Python',
-                'Java', 'JavaScript', 'DevOps', 'cybersecurity'
+                'Programming', 'Software Development', 'Cloud Computing',
+                'Database Management', 'System Architecture', 'Agile Methodology',
+                'DevOps', 'Cybersecurity', 'Network Administration',
+                'API Development', 'Version Control', 'Web Development'
             ],
-            # Add more industry-specific skills as needed
+            'Finance': [
+                'Financial Analysis', 'Financial Modeling', 'Budgeting',
+                'Forecasting', 'Risk Management', 'Investment Analysis',
+                'Financial Reporting', 'Accounting', 'Business Analysis',
+                'Financial Planning', 'Cost Analysis', 'Banking'
+            ]
         }
-        
+
         # Common professional skills
         common_skills = [
-            'communication', 'leadership', 'problem solving',
-            'teamwork', 'project management', 'time management',
-            'customer service', 'analytical skills', 'attention to detail',
-            'organization', 'multitasking', 'critical thinking'
+            'Project Management', 'Leadership', 'Communication',
+            'Problem Solving', 'Team Collaboration', 'Time Management',
+            'Strategic Planning', 'Critical Thinking', 'Organization',
+            'Presentation Skills', 'Research', 'Data Analysis'
         ]
+
+        # Combine industry-specific and common skills
+        all_skills = industry_skills.get(industry, []) + common_skills
+        random.shuffle(all_skills)
         
-        for job in job_results:
-            description = job.get('description', '').lower()
-            print(f"Processing job: {job.get('title', 'Unknown Title')}")
-            
-            # Check for industry-specific skills
-            if industry in industry_skills:
-                for skill in industry_skills[industry]:
-                    if skill.lower() in description:
-                        skills_count[skill.title()] += 1
-                        print(f"Found industry skill: {skill}")
-            
-            # Check for common professional skills
-            for skill in common_skills:
-                if skill.lower() in description:
-                    skills_count[skill.title()] += 1
-                    print(f"Found common skill: {skill}")
-            
-            # Look for skill sections in description
-            skill_sections = [
-                section for section in description.split('\n')
-                if any(keyword in section.lower() for keyword in 
-                    ['requirements', 'qualifications', 'skills', 'competencies'])
-            ]
-            
-            # Process each skill section
-            for section in skill_sections:
-                # Split by common delimiters
-                items = re.split(r'[•\-,;.]', section)
-                for item in items:
-                    item = item.strip()
-                    if len(item) > 3:  # Ignore very short items
-                        # Add any clearly identified skills
-                        if 'skill' in item.lower() or 'ability to' in item.lower():
-                            cleaned_skill = clean_skill_name(item)
-                            if cleaned_skill:
-                                skills_count[cleaned_skill] += 1
-                                print(f"Found listed skill: {cleaned_skill}")
-        
-        # Get top skills, ensuring a mix of industry-specific and common skills
-        top_skills = [skill for skill, count in skills_count.most_common(10)]
-        
-        if not top_skills:
-            print("No skills found in job descriptions, using defaults")
-            return get_default_skills(job_title, industry)
-        
-        print(f"Final skills list from API: {top_skills}")
-        return top_skills
+        final_skills = list(dict.fromkeys(all_skills))[:15]
+        print(f"Returning fallback skills: {final_skills}")
+        return final_skills
 
     except Exception as e:
         print(f"Error in get_trending_skills_serp: {str(e)}")
+        traceback.print_exc()
         return get_default_skills(job_title, industry)
 
 # Helper functions for default values
@@ -1216,28 +1213,112 @@ def suggest_industries():
 def suggest_jobs():
     try:
         if request.method == 'GET':
-            industry = request.args.get('industry', '').lower()
-            search_term = request.args.get('searchTerm', '').lower()
+            industry = request.args.get('industry', '').strip()
+            search_term = request.args.get('searchTerm', '').strip()
+            location = request.args.get('location', 'United States')
         else:
             data = request.json
-            industry = data.get('industry', '').lower()
-            search_term = data.get('searchText', '').lower()
+            industry = data.get('industry', '').strip()
+            search_term = data.get('searchText', '').strip()
+            location = data.get('location', 'United States')
 
-        # Get default jobs for the industry
-        default_jobs = get_default_jobs(industry)
+        print(f"\n=== Getting Jobs for industry: '{industry}', search: '{search_term}' ===")
+
+        # Use SERP API to get job suggestions
+        params = {
+            "api_key": SERP_API_KEY,
+            "engine": "google_jobs",
+            "q": f"{search_term} {industry} jobs" if search_term else f"{industry} jobs",
+            "location": format_location(location),
+            "hl": "en",
+            "gl": "us",
+            "chips": "date_posted:today"
+        }
+
+        search = GoogleSearch(params)
+        results = search.get_dict()
+
+        if 'error' in results:
+            print(f"SERP API error: {results.get('error')}")
+            return jsonify({
+                "success": True,
+                "jobs": get_default_jobs(industry)
+            })
+
+        # Extract and clean job titles
+        job_titles = []
+        seen_titles = set()
         
-        # Filter jobs based on search term
-        filtered_jobs = [
-            job for job in default_jobs
-            if not search_term or search_term in job.lower()
-        ]
+        for job in results.get('jobs_results', []):
+            title = clean_job_title(job.get('title', ''))
+            if title and title not in seen_titles:
+                seen_titles.add(title)
+                job_titles.append(title)
+
+        # If no results, use default jobs
+        if not job_titles:
+            job_titles = get_default_jobs(industry)
+
+        # Limit to 15 suggestions
+        job_titles = job_titles[:15]
         
+        print(f"Returning job titles: {job_titles}")
+
         return jsonify({
             "success": True,
-            "jobs": filtered_jobs[:15]  # Limit to 15 suggestions
+            "jobs": job_titles
         })
     except Exception as e:
         print(f"Error in suggest-jobs: {str(e)}")
+        traceback.print_exc()  # Print full traceback
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/reverse-geocode', methods=['GET'])
+def reverse_geocode():
+    try:
+        lat = request.args.get('lat')
+        lng = request.args.get('lng')
+        
+        if not lat or not lng:
+            return jsonify({
+                "success": False,
+                "error": "Missing latitude or longitude"
+            }), 400
+
+        search = GoogleSearch({
+            "engine": "google_maps_reverse_geocoding",
+            "lat": lat,
+            "lng": lng,
+            "type": "address",
+            "api_key": os.getenv('SERP_API_KEY')
+        })
+        
+        result = search.get_dict()
+        
+        if 'place_results' in result:
+            address_components = result['place_results'].get('address_components', [])
+            
+            city = next((comp['long_name'] for comp in address_components 
+                        if 'locality' in comp['types']), None)
+            state = next((comp['short_name'] for comp in address_components 
+                         if 'administrative_area_level_1' in comp['types']), None)
+
+            return jsonify({
+                "success": True,
+                "city": city,
+                "state": state
+            })
+        
+        return jsonify({
+            "success": False,
+            "error": "No results found"
+        }), 404
+
+    except Exception as e:
+        print(f"Error in reverse-geocode: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e)

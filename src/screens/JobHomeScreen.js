@@ -1,0 +1,806 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { View, Text, StyleSheet, Dimensions, TouchableOpacity, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import Swiper from 'react-native-deck-swiper';
+import { db, auth, firebase } from '../firebase';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import Job from '../models/Job';
+import User from '../models/User';
+import UserJobPreference from '../models/UserJobPreference';
+import { 
+  useFonts,
+  LibreBodoni_400Regular,
+  LibreBodoni_700Bold,
+} from '@expo-google-fonts/libre-bodoni';
+import { 
+  DMSerifText_400Regular 
+} from '@expo-google-fonts/dm-serif-text';
+import NewMatchModal from '../components/NewMatchModal';
+import styled from 'styled-components/native';
+import DotLoader from '../components/Loader';
+import { getFirestore, collection, query, where, getDocs, deleteDoc } from 'firebase/firestore';
+import { useAuth } from '../contexts/AuthContext';
+
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const SCREEN_HEIGHT = Dimensions.get('window').height;
+
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
+  const R = 3959; // Radius of the Earth in miles
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const distance = R * c; // Distance in miles
+  return Math.round(distance);
+};
+
+const checkTimeOverlap = (slot1, slot2) => {
+  const [start1H, start1M] = slot1.startTime.split(':').map(Number);
+  const [end1H, end1M] = slot1.endTime.split(':').map(Number);
+  const [start2H, start2M] = slot2.startTime.split(':').map(Number);
+  const [end2H, end2M] = slot2.endTime.split(':').map(Number);
+
+  const start1 = start1H * 60 + start1M;
+  const end1 = end1H * 60 + end1M;
+  const start2 = start2H * 60 + start2M;
+  const end2 = end2H * 60 + end2M;
+
+  return (start1 < end2 && end1 > start2);
+};
+
+const checkDayAvailabilityMatch = (userAvailability, itemAvailability, date) => {
+  const dayOfWeek = new Date(date).toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+  
+  // Find matching day in user's availability
+  const userDaySlots = Object.entries(userAvailability || {}).find(([userDate]) => {
+    const userDayOfWeek = new Date(userDate).toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+    return userDayOfWeek === dayOfWeek;
+  });
+
+  if (!userDaySlots) return false;
+
+  // Check if any time slots overlap
+  const [_, userData] = userDaySlots;
+  return itemAvailability.slots.some(itemSlot => 
+    userData.slots.some(userSlot => checkTimeOverlap(itemSlot, userSlot))
+  );
+};
+
+// Create a separate component for rendering skills
+const SkillsList = ({ skills, userSkills }) => {
+  const [relevanceMap, setRelevanceMap] = useState(new Map());
+  const [sortedSkills, setSortedSkills] = useState([]);
+
+  useEffect(() => {
+    const checkRelevance = async () => {
+      if (!skills || !userSkills) return;
+      
+      const newRelevanceMap = new Map();
+      const relevantSkills = [];
+      const otherSkills = [];
+      
+      for (const jobSkill of skills) {
+        if (!jobSkill || typeof jobSkill !== 'string') continue;
+        
+        // Check for exact matches first
+        const isRelevant = userSkills.some(userSkill => 
+          userSkill && typeof userSkill === 'string' && 
+          userSkill.toLowerCase() === jobSkill.toLowerCase()
+        );
+        
+        if (isRelevant) {
+          newRelevanceMap.set(jobSkill, true);
+          relevantSkills.push(jobSkill);
+        } else {
+          otherSkills.push(jobSkill);
+        }
+      }
+      
+      setSortedSkills([
+        ...relevantSkills.slice(0, 5),
+        ...otherSkills
+      ]);
+      setRelevanceMap(newRelevanceMap);
+    };
+
+    checkRelevance();
+  }, [skills, userSkills]);
+
+  if (!skills || !Array.isArray(skills) || skills.length === 0) {
+    return (
+      <View style={styles.skillsContainer}>
+        <Text style={styles.value}>No Skills Set</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.skillsContainer}>
+      {sortedSkills.map((skill, index) => {
+        if (!skill || typeof skill !== 'string') return null;
+        
+        return (
+          <View 
+            key={`${skill}-${index}`}
+            style={[
+              styles.skillBubble,
+              relevanceMap.get(skill) && styles.matchingSkillBubble
+            ]}
+          >
+            <Text style={[
+              styles.skillText,
+              relevanceMap.get(skill) && styles.matchingSkillText
+            ]}>
+              {skill}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+};
+
+const Dot = styled.View`
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  margin: 0 4px;
+  background-color: ${props => props.active ? '#007AFF' : '#C4C4C4'};
+  transition: background-color 0.3s ease;
+`;
+
+const DotsContainer = styled.View`
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+`;
+
+const StyledWrapper = styled.View`
+  flex: 1;
+  justify-content: center;
+  align-items: center;
+`;
+
+const Loader = () => {
+  const [activeDot, setActiveDot] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setActiveDot((prev) => (prev + 1) % 3);
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <StyledWrapper>
+      <DotsContainer>
+        <Dot active={activeDot === 0} />
+        <Dot active={activeDot === 1} />
+        <Dot active={activeDot === 2} />
+      </DotsContainer>
+    </StyledWrapper>
+  );
+};
+
+const calculateWeeklyHours = (availability) => {
+  if (!availability) return 0;
+  
+  let totalHours = 0;
+  
+  Object.values(availability).forEach(dayData => {
+    // Handle both array format and object format with slots
+    const slots = Array.isArray(dayData) ? dayData : (dayData.slots || []);
+    
+    slots.forEach(slot => {
+      if (!slot.startTime || !slot.endTime) return;
+      
+      const [startH, startM] = slot.startTime.split(':').map(Number);
+      const [endH, endM] = slot.endTime.split(':').map(Number);
+      
+      const startMinutes = startH * 60 + startM;
+      const endMinutes = endH * 60 + endM;
+      
+      // Convert minutes to hours
+      const hoursWorked = (endMinutes - startMinutes) / 60;
+      totalHours += hoursWorked;
+    });
+  });
+  
+  return Math.round(totalHours);
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#f0f0f0',
+  },
+  card: {
+    width: SCREEN_WIDTH * 0.9,
+    height: SCREEN_HEIGHT * 0.7,
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  cardGradient: {
+    flex: 1,
+    padding: 20,
+  },
+  contentCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    padding: 20,
+    flex: 1,
+  },
+  titleContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  jobTitle: {
+    fontSize: 24,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  section: {
+    marginBottom: 20,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#4b5563',
+    marginBottom: 8,
+  },
+  overviewText: {
+    color: '#1f2937',
+    fontSize: 16,
+  },
+  skillsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  availabilityContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  distanceText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f0f0f0',
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 18,
+    color: '#1e3a8a',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f0f0f0',
+  },
+  errorText: {
+    color: '#FF4136',
+    fontSize: 18,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  retryButton: {
+    backgroundColor: '#1e3a8a',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 5,
+  },
+  retryButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  skillBubble: {
+    backgroundColor: '#f3f4f6',
+    borderRadius: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    margin: 4,
+  },
+  skillText: {
+    color: '#1f2937',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  noSkillsText: {
+    color: '#6b7280',
+    fontSize: 14,
+    fontStyle: 'italic',
+  },
+  availabilityBubble: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    margin: 4,
+  },
+  availabilityBubbleMatch: {
+    backgroundColor: 'rgba(46, 204, 64, 0.2)',
+  },
+  scheduleTextMatch: {
+    color: '#4ade80',
+  },
+  matchingSkillBubble: {
+    backgroundColor: '#3b82f6',
+    borderColor: '#60a5fa',
+    borderWidth: 1,
+  },
+  matchingSkillText: {
+    color: '#ffffff',
+    fontWeight: 'bold',
+  },
+  loaderContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    height: SCREEN_HEIGHT * 0.7,
+    marginBottom: 20,
+  },
+  noItemsText: {
+    marginTop: 20,
+    fontSize: 16,
+    color: '#666',
+  },
+  scheduleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+    width: '100%',
+  },
+  dayLabel: {
+    width: 100,
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#64748b',
+  },
+  slotsContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  scheduleText: {
+    color: '#1f2937',
+    fontSize: 14,
+  },
+  dayContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+    width: '100%',
+  },
+  timeSlotsContainer: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  timeSlot: {
+    fontSize: 14,
+    color: '#64748b',
+    marginBottom: 4,
+  },
+  dayChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    minWidth: 56,
+    alignItems: 'center',
+  },
+  dayChipAvailable: {
+    backgroundColor: '#dcfce7',
+  },
+  dayChipUnavailable: {
+    backgroundColor: '#fee2e2',
+  },
+  dayText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  dayTextAvailable: {
+    color: '#166534',
+  },
+  dayTextUnavailable: {
+    color: '#991b1b',
+  },
+  jobContainer: {
+    marginBottom: 16,
+    backgroundColor: '#f9fafb',
+    padding: 12,
+    borderRadius: 12,
+  },
+  jobHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  industryText: {
+    fontSize: 12,
+    color: '#6b7280',
+  },
+});
+
+export default function JobHomeScreen({ navigation }) {
+  const [items, setItems] = useState([]);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const swiperRef = useRef(null);
+  const [userSkills, setUserSkills] = useState([]);
+  const [showMatchModal, setShowMatchModal] = useState(false);
+  const [matchedJob, setMatchedJob] = useState(null);
+  const [matchData, setMatchData] = useState(null);
+
+  let [fontsLoaded] = useFonts({
+    LibreBodoni_400Regular,
+    LibreBodoni_700Bold,
+    DMSerifText_400Regular,
+  });
+
+  useEffect(() => {
+    if (items.length > 0) {
+      setIsLoading(false);
+    }
+  }, [items]);
+
+  const handleJobPress = (item) => {
+    // navigation.navigate('UserDetail', {
+    //   itemId: item.id,
+    //   itemType: 'worker',
+    //   currentUserData: currentUser,
+    //   item: item
+    // });
+  };
+
+  const renderCard = (item) => {
+    if (!item) return null;
+    
+    // Define the order of days
+    const dayOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    
+    // Sort the availability entries based on the day order
+    const sortedAvailability = Object.entries(item.availability || {})
+      .sort(([dayA], [dayB]) => {
+        return dayOrder.indexOf(dayA) - dayOrder.indexOf(dayB);
+      });
+    
+    return (
+      <TouchableOpacity 
+        style={styles.card}
+        // onPress={() => handleJobPress(item)}
+        activeOpacity={0.8}
+      >
+        <LinearGradient
+          colors={['#1e3a8a', '#1e40af']}
+          style={styles.cardGradient}
+        >
+          <View style={styles.contentCard}>
+            {/* Title Section */}
+            <View style={styles.titleContainer}>
+              <Text style={styles.jobTitle}>{item.name || 'No Name'}</Text>
+            </View>
+
+            {/* Overview */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Overview</Text>
+              <Text style={styles.overviewText}>
+                {item.user_overview || 'No overview available'}
+              </Text>
+            </View>
+
+            {/* Experience */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Experience</Text>
+              {item.selectedJobs?.map((job, jobIndex) => (
+                <View key={jobIndex} style={styles.jobContainer}>
+                  <View style={styles.jobHeader}>
+                    <Text style={styles.jobTitle}>{job.title}</Text>
+                    <Text style={styles.industryText}>{job.industry}</Text>
+                  </View>
+                  <View style={styles.skillsContainer}>
+                    {job.skills?.map((skill, skillIndex) => (
+                      <View key={skillIndex} style={styles.skillBubble}>
+                        <Text style={styles.skillText}>
+                          {skill.name} • {skill.yearsOfExperience}yr
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              ))}
+            </View>
+
+            {/* Availability */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Availability</Text>
+              <View style={styles.availabilityContainer}>
+                {sortedAvailability.map(([day, dayData]) => {
+                  if (!dayData.slots || dayData.slots.length === 0) return null;
+                  
+                  return (
+                    <View key={day} style={styles.dayContainer}>
+                      <View style={[styles.dayChip, styles.dayChipAvailable]}>
+                        <Text style={[styles.dayText, styles.dayTextAvailable]}>
+                          {day}
+                        </Text>
+                      </View>
+                      <View style={styles.timeSlotsContainer}>
+                        {dayData.slots.map((slot, slotIndex) => (
+                          <Text key={slotIndex} style={styles.timeSlot}>
+                            {slot.startTime} - {slot.endTime}
+                          </Text>
+                        ))}
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+
+            {/* Distance */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Distance</Text>
+              <Text style={styles.distanceText}>
+                {item.distance != null ? `${item.distance} miles away` : 'Distance unavailable'}
+              </Text>
+            </View>
+          </View>
+        </LinearGradient>
+      </TouchableOpacity>
+    );
+  };
+
+  useEffect(() => {
+    const fetchUserData = async () => {
+      try {
+        if (!auth.currentUser) return;
+
+        const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          setCurrentUser(new User({ 
+            uid: userDoc.id, 
+            ...userData,
+            location: userData.location 
+          }));
+
+          const userAttributesRef = db.collection('user_attributes');
+          const allUsersSnapshot = await userAttributesRef.get();
+          
+          const candidatesData = allUsersSnapshot.docs
+            .map(doc => {
+              const candidateData = doc.data();
+              console.log('Raw candidate data:', JSON.stringify(candidateData, null, 2));
+              
+              const distance = (candidateData.location && userData.location) 
+                ? calculateDistance(
+                    userData.location.latitude,
+                    userData.location.longitude,
+                    candidateData.location.latitude,
+                    candidateData.location.longitude
+                  )
+                : null;
+
+              // Create user object with explicit availability mapping
+              const userObj = new User({ 
+                id: doc.id,
+                uid: doc.id,
+                name: candidateData.name,
+                user_overview: candidateData.user_overview,
+                selectedJobs: candidateData.selectedJobs || [],
+                // Ensure availability is passed as is
+                availability: {...candidateData.availability},
+                distance,
+                location: candidateData.location
+              });
+
+              console.log('User availability before setting:', candidateData.availability);
+              console.log('User availability after setting:', userObj.availability);
+              return userObj;
+            })
+            .filter(candidate => candidate.name);
+
+          console.log('Final candidates data:', JSON.stringify(candidatesData[0]?.availability, null, 2));
+          setItems(candidatesData);
+        }
+      } catch (error) {
+        console.error("Error fetching data:", error);
+        setError(`Failed to fetch data: ${error.message}`);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchUserData();
+  }, []);
+
+  const handleSwipe = async (cardIndex, interested) => {
+    const item = items[cardIndex];
+    const currentUserUid = auth.currentUser.uid;
+    const itemId = item.uid;
+
+    try {
+      const userJobPrefData = new UserJobPreference({
+        userId: currentUserUid,
+        role: 'employer',
+        swipedUserId: itemId,
+        interested: interested,
+      });
+
+      await db.collection('user_job_preferences').add(userJobPrefData.toObject());
+
+      if (interested) {
+        const otherUserPrefs = await db.collection('user_job_preferences')
+          .where('userId', '==', itemId)
+          .where('swipedUserId', '==', currentUserUid)
+          .where('interested', '==', true)
+          .get();
+
+        if (!otherUserPrefs.empty) {
+          console.log("It's a match!");
+          const matchId = `${itemId}_${currentUserUid}`;
+
+          const matchData = {
+            id: matchId,
+            workerId: itemId,
+            employerId: currentUserUid,
+            timestamp: firebase.firestore.FieldValue.serverTimestamp()
+          };
+
+          await db.collection('matches').doc(matchId).set(matchData);
+
+          setMatchedJob(item);
+          setMatchData(matchData);
+          setShowMatchModal(true);
+        }
+      }
+    } catch (error) {
+      console.error("Error saving preference:", error);
+      Alert.alert('Error', 'Failed to save preference. Please try again.');
+    }
+  };
+
+  const onSwipedRight = (cardIndex) => handleSwipe(cardIndex, true);
+  const onSwipedLeft = (cardIndex) => handleSwipe(cardIndex, false);
+
+  const onSwipedAll = () => {
+    setItems([]); 
+    Alert.alert('End of List', 'You have swiped through all available items.');
+  };
+
+  if (!fontsLoaded) {
+    return <ActivityIndicator />;
+  }
+
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#0000ff" />
+        <Text style={styles.loadingText}>Loading...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.errorContainer}>
+        <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={() => {
+          setIsLoading(true);
+          setError(null);
+          fetchUserData();
+        }}>
+          <Text style={styles.retryButtonText}>Retry</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  if (!items.length) {
+    return (
+      <View style={styles.loaderContainer}>
+        <DotLoader />
+      </View>
+    );
+  }
+
+  return (
+    <KeyboardAvoidingView 
+      style={styles.container}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
+      {isLoading ? (
+        <ActivityIndicator size="large" color="#0000ff" />
+      ) : (
+        <View style={styles.container}>
+          {items.length === 0 ? (
+            <View style={styles.loaderContainer}>
+              <DotLoader />
+            </View>
+          ) : (
+            <Swiper
+              ref={swiperRef}
+              cards={items}
+              renderCard={renderCard}
+              onSwipedRight={onSwipedRight}
+              onSwipedLeft={onSwipedLeft}
+              onSwipedAll={onSwipedAll}
+              cardIndex={0}
+              backgroundColor={'#f0f0f0'}
+              stackSize={3}
+              stackSeparation={15}
+              animateCardOpacity
+              verticalSwipe={false}
+              overlayLabels={{
+                left: {
+                  title: 'NOPE',
+                  style: {
+                    label: {
+                      backgroundColor: '#FF4136',
+                      color: 'white',
+                      fontSize: 24,
+                      borderRadius: 10,
+                      padding: 10,
+                    },
+                    wrapper: {
+                      flexDirection: 'column',
+                      alignItems: 'flex-end',
+                      justifyContent: 'flex-start',
+                      marginTop: 20,
+                      marginLeft: -20,
+                    },
+                  },
+                },
+                right: {
+                  title: 'LIKE',
+                  style: {
+                    label: {
+                      backgroundColor: '#2ECC40',
+                      color: 'white',
+                      fontSize: 24,
+                      borderRadius: 10,
+                      padding: 10,
+                    },
+                    wrapper: {
+                      flexDirection: 'column',
+                      alignItems: 'flex-start',
+                      justifyContent: 'flex-start',
+                      marginTop: 20,
+                      marginLeft: 20,
+                    },
+                  },
+                },
+              }}
+              currentUser={currentUser}
+            />
+          )}
+
+          <NewMatchModal 
+            visible={showMatchModal}
+            onClose={() => {
+              setShowMatchModal(false);
+              setMatchData(null);
+            }}
+            jobData={matchedJob}
+            matchData={matchData}
+          />
+        </View>
+      )}
+    </KeyboardAvoidingView>
+  );
+} 

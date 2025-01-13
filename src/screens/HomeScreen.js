@@ -190,18 +190,24 @@ const calculateWeeklyHours = (availability) => {
   if (!availability) return 0;
   
   let totalHours = 0;
+  
   Object.values(availability).forEach(dayData => {
-    if (dayData.slots) {
-      dayData.slots.forEach(slot => {
-        const [startH, startM] = slot.startTime.split(':').map(Number);
-        const [endH, endM] = slot.endTime.split(':').map(Number);
-        
-        const startMinutes = startH * 60 + startM;
-        const endMinutes = endH * 60 + endM;
-        
-        totalHours += (endMinutes - startMinutes) / 60;
-      });
-    }
+    // Handle both array format and object format with slots
+    const slots = Array.isArray(dayData) ? dayData : (dayData.slots || []);
+    
+    slots.forEach(slot => {
+      if (!slot.startTime || !slot.endTime) return;
+      
+      const [startH, startM] = slot.startTime.split(':').map(Number);
+      const [endH, endM] = slot.endTime.split(':').map(Number);
+      
+      const startMinutes = startH * 60 + startM;
+      const endMinutes = endH * 60 + endM;
+      
+      // Convert minutes to hours
+      const hoursWorked = (endMinutes - startMinutes) / 60;
+      totalHours += hoursWorked;
+    });
   });
   
   return Math.round(totalHours);
@@ -281,17 +287,24 @@ export default function HomeScreen({ navigation }) {
             const jobAttributesSnapshot = await db.collection('job_attributes').get();
             const jobsData = jobAttributesSnapshot.docs.map(doc => {
               const jobData = doc.data();
-              const distance = jobData.location && userData.location ? 
-                calculateDistance(
+              console.log('Complete job data from Firebase:', JSON.stringify(jobData, null, 2));
+              
+              // Calculate distance if both locations are available
+              let distance = null;
+              if (jobData.location && userData.location) {
+                distance = calculateDistance(
                   userData.location.latitude,
                   userData.location.longitude,
                   jobData.location.latitude,
                   jobData.location.longitude
-                ) : null;
+                );
+              }
+              
+              // Create job object with correct field mapping
               return new Job({ 
-                id: doc.id, 
+                id: doc.id,
                 ...jobData,
-                distance 
+                distance // Pass the calculated distance
               });
             });
             console.log("Formatted items:", jobsData);
@@ -436,7 +449,28 @@ export default function HomeScreen({ navigation }) {
   };
 
   const handleJobPress = (item) => {
-    navigation.navigate('JobDetail', { item });
+    /*
+    const sanitizedItem = {
+      id: item.id,
+      jobTitle: item.jobTitle || '',
+      companyName: item.companyName || '',
+      salaryRange: {
+        min: item.salaryRange?.min || 0,
+        max: item.salaryRange?.max || 0
+      },
+      requiredSkills: Array.isArray(item.requiredSkills) ? item.requiredSkills : [],
+      weeklyHours: item.weeklyHours || 0,
+      location: item.location || null,
+      distance: item.distance || 0
+    };
+
+    navigation.navigate('JobDetail', {
+      itemId: item.id,
+      itemType: 'job',
+      currentUserData: currentUser,
+      item: sanitizedItem
+    });
+    */
   };
 
   const handleSettingsPress = () => {
@@ -444,14 +478,82 @@ export default function HomeScreen({ navigation }) {
   };
 
   const renderCard = (item) => {
+    // Add debugging logs
+    console.log('Rendering card for item:', {
+      id: item.id,
+      overview: item.job_overview,
+      availability: item.availability,
+      requiredSkills: item.requiredSkills
+    });
+
+    // Calculate weekly hours from job_attributes availability
+    const calculateTotalHours = (availability) => {
+      if (!availability) return 0;
+      
+      let totalHours = 0;
+      Object.values(availability).forEach(day => {
+        if (day.slots && Array.isArray(day.slots)) {
+          day.slots.forEach(slot => {
+            if (!slot.startTime || !slot.endTime) return;
+            
+            const [startH, startM] = slot.startTime.split(':').map(Number);
+            const [endH, endM] = slot.endTime.split(':').map(Number);
+            
+            const startMinutes = startH * 60 + startM;
+            const endMinutes = endH * 60 + endM;
+            
+            totalHours += (endMinutes - startMinutes) / 60;
+          });
+        }
+      });
+      
+      return totalHours;
+    };
+
     const weeklyHours = calculateWeeklyHours(item.availability);
-    const estimatedWeeklyPayMin = weeklyHours * (item.salaryRange?.min || 0);
-    const estimatedWeeklyPayMax = weeklyHours * (item.salaryRange?.max || 0);
+    console.log('Weekly hours calculated:', weeklyHours);
+    console.log('Item salary range:', item.salaryRange || item.estPayRange || {min: item.estPayRangeMin, max: item.estPayRangeMax});
+
+    const payRange = {
+      min: item.salaryRange?.min || item.estPayRangeMin || 0,
+      max: item.salaryRange?.max || item.estPayRangeMax || 0
+    };
+    console.log('Pay range:', payRange);
+
+    const estimatedWeeklyPayMin = Math.round(weeklyHours * payRange.min);
+    const estimatedWeeklyPayMax = Math.round(weeklyHours * payRange.max);
+
+    console.log('Estimated weekly pay:', {min: estimatedWeeklyPayMin, max: estimatedWeeklyPayMax});
+
+    const renderAvailabilitySlots = (dayData) => {
+      if (!dayData.slots || !Array.isArray(dayData.slots)) return null;
+      
+      return dayData.slots.map((slot, slotIndex) => (
+        <View 
+          key={`${slotIndex}`} 
+          style={[
+            styles.availabilityBubble,
+            hasMatch && styles.availabilityBubbleMatch
+          ]}
+        >
+          <Text style={[
+            styles.value, 
+            styles.scheduleText,
+            hasMatch && styles.scheduleTextMatch
+          ]}>
+            {slot.startTime} - {slot.endTime}
+          </Text>
+        </View>
+      ));
+    };
+
+    console.log('Availability data:', JSON.stringify(item.availability, null, 2));
 
     return (
       <TouchableOpacity 
         style={styles.card}
-        onPress={() => handleJobPress(item)}
+        // onPress={() => handleJobPress(item)}
+        activeOpacity={0.8}
       >
         <LinearGradient
           colors={['#1e3a8a', '#1e40af']}
@@ -469,7 +571,9 @@ export default function HomeScreen({ navigation }) {
             {/* Overview */}
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Overview</Text>
-              <Text style={styles.overviewText}>{item.user_overview || 'No overview available'}</Text>
+              <Text style={styles.overviewText}>
+                {item.job_overview || 'No overview available'}
+              </Text>
             </View>
 
             {/* Pay and Hours Grid */}
@@ -483,7 +587,7 @@ export default function HomeScreen({ navigation }) {
               <View style={styles.gridItem}>
                 <Text style={styles.gridLabel}>Est. Weekly Hours</Text>
                 <Text style={styles.gridValue}>
-                  {weeklyHours ? `${weeklyHours} hours` : 'N/A'}
+                  {calculateWeeklyHours(item.availability)} hours
                 </Text>
               </View>
             </View>
@@ -492,26 +596,54 @@ export default function HomeScreen({ navigation }) {
             <View style={styles.weeklyPayContainer}>
               <Text style={styles.weeklyPayLabel}>Est. Weekly Pay</Text>
               <Text style={styles.weeklyPayValue}>
-                ${estimatedWeeklyPayMin.toFixed(0)} - ${estimatedWeeklyPayMax.toFixed(0)}
+                ${estimatedWeeklyPayMin} - ${estimatedWeeklyPayMax}
               </Text>
             </View>
 
             {/* Skills */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Relevant Skills</Text>
+              <Text style={styles.sectionTitle}>Required Skills</Text>
               <View style={styles.skillsContainer}>
-                <SkillsList 
-                  skills={Array.isArray(item.requiredSkills) ? item.requiredSkills : []} 
-                  userSkills={Array.isArray(userSkills) ? userSkills : []} 
-                />
+                {item.requiredSkills && Array.isArray(item.requiredSkills) ? (
+                  item.requiredSkills.map((skill, index) => (
+                    <View key={index} style={styles.skillBubble}>
+                      <Text style={styles.skillText}>
+                        {skill.name} • {skill.yearsOfExperience}yr
+                      </Text>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.noSkillsText}>No required skills specified</Text>
+                )}
               </View>
             </View>
 
             {/* Availability */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Availability</Text>
+              <Text style={styles.sectionTitle}>Required Availability</Text>
               <View style={styles.availabilityContainer}>
-                {renderAvailabilitySection(item)}
+                {Object.entries(item.availability || {}).map(([day, dayData]) => {
+                  // Handle both array format and object format with slots
+                  const slots = Array.isArray(dayData) ? dayData : (dayData.slots || []);
+                  if (slots.length === 0) return null;
+                  
+                  return (
+                    <View key={day} style={styles.dayContainer}>
+                      <View style={[styles.dayChip, styles.dayChipAvailable]}>
+                        <Text style={[styles.dayText, styles.dayTextAvailable]}>
+                          {day}
+                        </Text>
+                      </View>
+                      <View style={styles.timeSlotsContainer}>
+                        {slots.map((slot, index) => (
+                          <Text key={index} style={styles.timeSlot}>
+                            {slot.startTime} - {slot.endTime}
+                          </Text>
+                        ))}
+                      </View>
+                    </View>
+                  );
+                })}
               </View>
             </View>
 
@@ -839,16 +971,21 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   skillBubble: {
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    backgroundColor: '#f3f4f6',
     borderRadius: 15,
     paddingHorizontal: 12,
     paddingVertical: 6,
     margin: 4,
   },
   skillText: {
-    fontFamily: 'DMSerifText_400Regular',
-    color: '#ffffff',
+    color: '#1f2937',
     fontSize: 14,
+    fontWeight: '500',
+  },
+  noSkillsText: {
+    color: '#6b7280',
+    fontSize: 14,
+    fontStyle: 'italic',
   },
   availabilityBubble: {
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
@@ -883,5 +1020,64 @@ const styles = StyleSheet.create({
     marginTop: 20,
     fontSize: 16,
     color: '#666',
+  },
+  scheduleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+    width: '100%',
+  },
+  dayLabel: {
+    width: 100,
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#64748b',
+  },
+  slotsContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  scheduleText: {
+    color: '#1f2937',
+    fontSize: 14,
+  },
+  dayContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+    width: '100%',
+  },
+  timeSlotsContainer: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  timeSlot: {
+    fontSize: 14,
+    color: '#64748b',
+    marginBottom: 4,
+  },
+  dayChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    minWidth: 56,
+    alignItems: 'center',
+  },
+  dayChipAvailable: {
+    backgroundColor: '#dcfce7',
+  },
+  dayChipUnavailable: {
+    backgroundColor: '#fee2e2',
+  },
+  dayText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  dayTextAvailable: {
+    color: '#166534',
+  },
+  dayTextUnavailable: {
+    color: '#991b1b',
   },
 });

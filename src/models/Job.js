@@ -2,7 +2,7 @@
 export default class Job {
   constructor(data) {
     this.id = data.id || '';
-    this.location = data.location || ''; 
+    this.location = data.location || '';
     this.requiredSkills = this.parseSkillsWithExperience(data.requiredSkills);
     this.requiredExperience = this.parseExperience(data.requiredExperience);
     this.requiredEducation = data.requiredEducation || '';
@@ -10,14 +10,19 @@ export default class Job {
     this.jobTitle = data.jobTitle || '';
     this.jobType = data.jobType || '';
     this.industry = data.industry || '';
-    this.salaryRange = this.parseSalaryRange(data.salaryRange);
+    this.salaryRange = {
+      min: this.parseNumber(data.estPayRangeMin),
+      max: this.parseNumber(data.estPayRangeMax)
+    };
     this.requiredAvailability = this.parseArray(data.requiredAvailability);
     this.estimatedHours = this.parseNumber(data.estimatedHours);
     this.availability = this.parseAvailability(data.availability);
     this.weeklyHours = this.calculateWeeklyHours(this.availability);
-    this.user_overview = data.user_overview || '';
-    this.name = data.name || '';
-    this.selectedJobs = this.parseArray(data.selectedJobs);
+    this.job_overview = data.job_overview || '';
+    this.companyName = data.companyName || '';
+    this.cityName = data.cityName || '';
+    this.stateCode = data.stateCode || '';
+    this.distance = data.distance !== undefined ? data.distance : null;
   }
 
   parseArray(value) {
@@ -45,13 +50,12 @@ export default class Job {
     if (!availability) return {};
     
     if (typeof availability === 'object' && availability !== null) {
-      return Object.entries(availability).reduce((acc, [date, dayData]) => {
-        // Handle the nested structure where dayData has repeatType and slots
-        if (dayData && dayData.slots) {
-          acc[date] = dayData.slots.map(slot => ({
+      return Object.entries(availability).reduce((acc, [day, dayData]) => {
+        if (dayData && Array.isArray(dayData.slots)) {
+          acc[day] = dayData.slots.map(slot => ({
             startTime: slot.startTime || '',
             endTime: slot.endTime || '',
-            repeatType: dayData.repeatType || 'custom'
+            repeatType: 'weekly'
           }));
         }
         return acc;

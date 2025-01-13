@@ -1,9 +1,12 @@
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
+import { auth, db } from '../firebase';
+import { useState, useEffect } from 'react';
 
 // Import your screens
 import HomeScreen from '../screens/HomeScreen';
+import JobHomeScreen from '../screens/JobHomeScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import MatchesScreen from '../screens/MatchesScreen';
 import SettingsScreen from '../screens/SettingsScreen';
@@ -12,7 +15,7 @@ import JobDetailsMatched from '../screens/JobDetailsMatched';
 import MatchAnalysisScreen from '../screens/MatchAnalysisScreen';
 import AvailabilityScreen from '../screens/AvailabilityScreen';
 import ChatScreen from '../screens/ChatScreen';
-
+import UserDetailScreen from '../screens/UserDetailScreen';
 // Import setup screens
 import LocationPreferencesScreen from '../screens/setup/LocationPreferencesScreen';
 import JobPreferencesScreen from '../screens/setup/JobPreferencesScreen';
@@ -23,6 +26,20 @@ const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
 function TabNavigator() {
+  const [userRole, setUserRole] = useState(null);
+
+  useEffect(() => {
+    const fetchUserRole = async () => {
+      if (auth.currentUser) {
+        const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
+        if (userDoc.exists) {
+          setUserRole(userDoc.data().role);
+        }
+      }
+    };
+    fetchUserRole();
+  }, []);
+
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -47,7 +64,7 @@ function TabNavigator() {
     >
       <Tab.Screen 
         name="Home" 
-        component={HomeScreen} 
+        component={userRole === 'employer' ? JobHomeScreen : HomeScreen}
         options={{ headerShown: false }}
       />
       <Tab.Screen name="Profile" component={ProfileScreen} />
@@ -57,7 +74,7 @@ function TabNavigator() {
   );
 }
 
-export default function AppNavigator({ initialRouteName = 'BasicInfo' }) {
+export default function AppNavigator({ initialRouteName = 'Main' }) {
   return (
     <Stack.Navigator
       initialRouteName={initialRouteName}
@@ -71,6 +88,13 @@ export default function AppNavigator({ initialRouteName = 'BasicInfo' }) {
         },
       }}
     >
+      {/* Main Tab Navigator */}
+      <Stack.Screen 
+        name="Main" 
+        component={TabNavigator}
+        options={{ headerShown: false }}
+      />
+
       {/* Setup Screens */}
       <Stack.Screen 
         name="BasicInfo" 
@@ -93,18 +117,16 @@ export default function AppNavigator({ initialRouteName = 'BasicInfo' }) {
         options={{ headerShown: false }}
       />
 
-      {/* Main Tab Navigator */}
-      <Stack.Screen 
-        name="Main" 
-        component={TabNavigator}
-        options={{ headerShown: false }}
-      />
-
       {/* Stack Screens */}
       <Stack.Screen 
         name="JobDetail" 
         component={JobDetailScreen}
         options={{ title: 'Job Details' }}
+      />
+      <Stack.Screen 
+        name="UserDetail" 
+        component={UserDetailScreen}
+        options={{ title: 'Worker Details' }}
       />
       <Stack.Screen 
         name="JobDetailsMatched" 

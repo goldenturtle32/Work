@@ -32,8 +32,18 @@ export default function LocationPreferencesScreen({ navigation }) {
   const [cityInput, setCityInput] = useState('');
   const [citySuggestions, setCitySuggestions] = useState([]);
   const [selectedSuggestion, setSelectedSuggestion] = useState(null);
+  const [userRole, setUserRole] = useState(null);
 
   useEffect(() => {
+    const fetchUserRole = async () => {
+      if (auth.currentUser) {
+        const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
+        const role = userDoc.data()?.role;
+        setUserRole(role);
+        console.log('User role:', role);
+      }
+    };
+    fetchUserRole();
     requestLocationPermission();
   }, []);
 
@@ -125,8 +135,9 @@ export default function LocationPreferencesScreen({ navigation }) {
 
     try {
       const userId = auth.currentUser.uid;
+      const collectionName = userRole === 'worker' ? 'user_attributes' : 'job_attributes';
       
-      await db.collection('user_attributes').doc(userId).update({
+      await db.collection(collectionName).doc(userId).update({
         location: setupData.location,
         cityName: setupData.cityName,
         stateCode: setupData.stateCode,
@@ -134,7 +145,7 @@ export default function LocationPreferencesScreen({ navigation }) {
         updatedAt: new Date()
       });
 
-      console.log('Successfully updated location in user_attributes');
+      console.log(`Successfully updated location in ${collectionName}`);
       navigation.navigate('JobPreferences');
     } catch (error) {
       console.error('Error updating location:', error);
@@ -201,7 +212,9 @@ export default function LocationPreferencesScreen({ navigation }) {
         <View style={styles.header}>
           <Text style={styles.title}>Now for your location...</Text>
           <Text style={styles.subtitle}>
-            Help us find jobs in your area
+            {userRole === 'worker' 
+              ? "Help us find jobs in your area"
+              : "Help us find candidates in your area"}
           </Text>
         </View>
 
@@ -271,7 +284,9 @@ export default function LocationPreferencesScreen({ navigation }) {
 
         <View style={styles.disclaimer}>
           <Text style={styles.disclaimerText}>
-            We suggest using the location feature for more accurate job matches in your area.
+            {userRole === 'worker'
+              ? "We suggest using the location feature for more accurate job matches in your area."
+              : "We suggest using the location feature to help find the best candidates in your area."}
           </Text>
         </View>
 

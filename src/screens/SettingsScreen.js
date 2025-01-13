@@ -109,21 +109,6 @@ export default function SettingsScreen({ navigation }) {
           onClose={() => setShowPrivacyModal(false)} 
         />
       </ScrollView>
-
-      <View style={styles.navigation}>
-        <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Home')}>
-          <Ionicons name="home-outline" size={24} color="#ffffff" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Matches')}>
-          <Ionicons name="heart-outline" size={24} color="#ffffff" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Profile')}>
-          <Ionicons name="person-outline" size={24} color="#ffffff" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navButton}>
-          <Ionicons name="settings" size={24} color="#ffffff" />
-        </TouchableOpacity>
-      </View>
     </View>
   );
 }
@@ -192,16 +177,6 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: 'bold',
-  },
-  navigation: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    backgroundColor: '#1e3a8a',
-    paddingVertical: 15,
-  },
-  navButton: {
-    padding: 10,
   },
   settingContent: {
     flex: 1,

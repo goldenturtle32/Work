@@ -19,16 +19,21 @@ const QuickMatchOverview = ({ analysis }) => {
   return (
     <View style={styles.matchAnalysisContainer}>
       <View style={styles.progressBarContainer}>
-        <View style={[styles.progressBar, { width: `${analysis.overallMatch}%` }]} />
+        <View style={[styles.progressBar, { width: `${analysis.overallMatch || 0}%` }]} />
       </View>
-      <Text style={styles.matchPercentage}>{analysis.overallMatch}% match based on your profile</Text>
+      <Text style={styles.matchPercentage}>
+        {analysis.overallMatch || 0}% match based on your profile
+      </Text>
       
       <View style={styles.matchMetrics}>
-        {analysis.matchDetails?.map((detail, index) => (
-          <View key={index} style={styles.matchMetric}>
-            <Text style={styles.matchMetricText}>{detail}</Text>
-          </View>
-        ))}
+        {analysis.matchDetails && Array.isArray(analysis.matchDetails) && 
+          analysis.matchDetails.map((detail, index) => (
+            <View key={index} style={styles.matchMetric}>
+              <Text style={styles.matchMetricText}>
+                {typeof detail === 'string' ? detail : JSON.stringify(detail)}
+              </Text>
+            </View>
+          ))}
       </View>
     </View>
   );
@@ -43,6 +48,7 @@ export default function JobDetailScreen({ route, navigation }) {
   const [analysis, setAnalysis] = useState(null);
   const [locationDisplay, setLocationDisplay] = useState('Loading location...');
   const [llmAnalysis, setLlmAnalysis] = useState('');
+  const [matchingSkills, setMatchingSkills] = useState([]);
 
   // Helper functions
   const getBenefits = () => {
@@ -281,6 +287,23 @@ export default function JobDetailScreen({ route, navigation }) {
     loadJobDetails();
   }, [item, currentUserData]);
 
+  useEffect(() => {
+    if (item && currentUserData) {
+      const matching = item.requiredSkills?.filter(skill => 
+        currentUserData.skills?.includes(skill)
+      ) || [];
+      setMatchingSkills(matching);
+    }
+  }, [item, currentUserData]);
+
+  // Helper function to safely render object values
+  const renderValue = (value) => {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'string' || typeof value === 'number') return value;
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+  };
+
   const renderWorkerView = () => {
     return (
       <ScrollView style={styles.container}>
@@ -325,6 +348,16 @@ export default function JobDetailScreen({ route, navigation }) {
               <Text key={index} style={styles.scheduleMatch}>{timeSlot}</Text>
             ))}
           </View>
+        </View>
+
+        {/* Experience Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Experience Required</Text>
+          <Text style={styles.experienceText}>
+            {item.requiredExperience ? 
+              `${item.requiredExperience.yearsOfExperience} years - ${item.requiredExperience.name}` 
+              : 'No experience requirement specified'}
+          </Text>
         </View>
       </ScrollView>
     );
@@ -501,18 +534,17 @@ export default function JobDetailScreen({ route, navigation }) {
         <>
           {/* Job Title Section */}
           <View style={styles.card}>
-            <Text style={styles.jobTitle}>{item.jobTitle}</Text>
-            <Text style={styles.companyName}>{item.companyName || 'Company Name'}</Text>
+            <Text style={styles.jobTitle}>{renderValue(item.jobTitle)}</Text>
+            <Text style={styles.companyName}>{renderValue(item.companyName)}</Text>
           </View>
 
           {/* Location Section */}
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Location</Text>
-            <Text style={styles.sectionText}>
-              {item.formattedLocation || 'Location unavailable'}
-            </Text>
-            <Text style={styles.travelInfo}>2.5 miles away</Text>
-            <Text style={styles.travelInfo}>Est. travel time: 15 mins</Text>
+            <Text style={styles.sectionText}>{locationDisplay}</Text>
+            {item.distance && (
+              <Text style={styles.travelInfo}>{item.distance.toFixed(1)} miles away</Text>
+            )}
           </View>
 
           {/* Compensation Section */}
@@ -520,31 +552,23 @@ export default function JobDetailScreen({ route, navigation }) {
             <Text style={styles.sectionTitle}>Compensation</Text>
             <Text style={styles.compensationText}>
               <Text style={styles.labelText}>Pay Range: </Text>
-              ${item.salaryRange?.min}/hr - ${item.salaryRange?.max}/hr
+              ${renderValue(item.salaryRange?.min)}/hr - ${renderValue(item.salaryRange?.max)}/hr
             </Text>
             <Text style={styles.compensationText}>
               <Text style={styles.labelText}>Weekly Hours: </Text>
-              {item.weeklyHours || 0} hours
-            </Text>
-            <Text style={styles.compensationText}>
-              <Text style={styles.labelText}>Estimated Weekly Pay: </Text>
-              ${(item.salaryRange?.min * (item.weeklyHours || 0)).toFixed(0)} - 
-              ${(item.salaryRange?.max * (item.weeklyHours || 0)).toFixed(0)}
-            </Text>
-            <Text style={styles.salaryComparison}>
-              10% above average for similar positions
+              {renderValue(item.weeklyHours)} hours
             </Text>
           </View>
 
-          {/* Skills Wanted Section */}
+          {/* Skills Section */}
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Skills Wanted</Text>
-            {item.requiredSkills && item.requiredSkills.map((skill, index) => (
+            {Array.isArray(item.requiredSkills) && item.requiredSkills.map((skill, index) => (
               <Text key={index} style={[
                 styles.skillText,
-                analysis?.matchingSkills?.includes(skill) && styles.matchingSkill
+                matchingSkills.includes(skill) && styles.matchingSkill
               ]}>
-                • {skill} {analysis?.matchingSkills?.includes(skill) && '(match)'}
+                • {renderValue(skill)} {matchingSkills.includes(skill) && '(match)'}
               </Text>
             ))}
           </View>
@@ -555,22 +579,21 @@ export default function JobDetailScreen({ route, navigation }) {
             <QuickMatchOverview analysis={analysis} />
           </View>
 
-          {/* Schedule Compatibility Section */}
+          {/* Schedule Section */}
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Schedule Compatibility</Text>
             <Text style={styles.sectionText}>
-              {analysis?.scheduleMatch?.details || 'No matching availability found'}
+              {analysis?.scheduleMatch?.details ? 
+                renderValue(analysis.scheduleMatch.details) : 
+                'No matching availability found'}
             </Text>
-            {analysis?.scheduleMatch?.isCompatible && (
-              <Text style={styles.compatibilityText}>Aligns with your availability</Text>
-            )}
           </View>
 
-          {/* Why This Job Would Be a Good Fit */}
+          {/* Analysis Section */}
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Why This Job Would Be a Good Fit</Text>
             <Text style={styles.analysisText}>
-              {llmAnalysis || 'Analysis not available'}
+              {renderValue(llmAnalysis) || 'Analysis not available'}
             </Text>
           </View>
         </>
@@ -830,6 +853,11 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   workerDetail: {
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 8,
+  },
+  experienceText: {
     fontSize: 16,
     color: '#333',
     marginBottom: 8,

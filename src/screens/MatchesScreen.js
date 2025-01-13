@@ -249,53 +249,39 @@ export default function MatchesScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-      <LinearGradient
-        colors={['#1e3a8a', '#3b82f6']}
-        style={styles.header}
-      >
+      <View style={styles.header}>
         <Text style={styles.headerTitle}>Your Matches</Text>
-      </LinearGradient>
-      <View style={styles.filterContainer}>
-        <TouchableOpacity
-          style={[styles.filterButton, filter === 'all' && styles.activeFilter]}
-          onPress={() => setFilter('all')}
-        >
-          <Text style={[styles.filterText, filter === 'all' && styles.activeFilterText]}>All</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.filterButton, filter === 'messaged' && styles.activeFilter]}
-          onPress={() => setFilter('messaged')}
-        >
-          <Text style={[styles.filterText, filter === 'messaged' && styles.activeFilterText]}>Messaged</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.filterButton, filter === 'accepted' && styles.activeFilter]}
-          onPress={() => setFilter('accepted')}
-        >
-          <Text style={[styles.filterText, filter === 'accepted' && styles.activeFilterText]}>Accepted</Text>
-        </TouchableOpacity>
       </View>
+
+      <View style={styles.stickyHeader}>
+        <View style={styles.filterContainer}>
+          <TouchableOpacity
+            style={[styles.filterButton, filter === 'all' && styles.activeFilter]}
+            onPress={() => setFilter('all')}
+          >
+            <Text style={[styles.filterText, filter === 'all' && styles.activeFilterText]}>All</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterButton, filter === 'messaged' && styles.activeFilter]}
+            onPress={() => setFilter('messaged')}
+          >
+            <Text style={[styles.filterText, filter === 'messaged' && styles.activeFilterText]}>Messaged</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterButton, filter === 'accepted' && styles.activeFilter]}
+            onPress={() => setFilter('accepted')}
+          >
+            <Text style={[styles.filterText, filter === 'accepted' && styles.activeFilterText]}>Accepted</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
       <FlatList
         data={filteredMatches}
         keyExtractor={(item) => item.id}
         renderItem={renderMatchItem}
-        style={styles.list}
         contentContainerStyle={styles.listContent}
       />
-      <View style={styles.navigation}>
-        <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Home')}>
-          <Ionicons name="home-outline" size={24} color="#ffffff" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navButton}>
-          <Ionicons name="heart" size={24} color="#ffffff" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Profile')}>
-          <Ionicons name="person-outline" size={24} color="#ffffff" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Settings')}>
-          <Ionicons name="settings-outline" size={24} color="#ffffff" />
-        </TouchableOpacity>
-      </View>
     </View>
   );
 }
@@ -303,12 +289,13 @@ export default function MatchesScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#f9fafb', // gray-50 equivalent
   },
   header: {
     padding: 20,
     paddingTop: 60,
     paddingBottom: 20,
+    backgroundColor: '#2563eb', // primary color
   },
   headerTitle: {
     fontSize: 24,
@@ -316,48 +303,59 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     textAlign: 'center',
   },
+  stickyHeader: {
+    backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 3,
+    zIndex: 10,
+  },
   filterContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingVertical: 10,
+    justifyContent: 'center',
+    gap: 8,
+    padding: 16,
     backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
   },
   filterButton: {
     paddingVertical: 8,
     paddingHorizontal: 16,
-    borderRadius: 20,
+    borderRadius: 9999, // rounded-full
+    borderWidth: 1,
+    borderColor: '#e5e7eb', // gray-200
+    backgroundColor: '#ffffff',
   },
   activeFilter: {
-    backgroundColor: '#3b82f6',
+    backgroundColor: '#2563eb', // primary
+    borderColor: '#2563eb',
   },
   filterText: {
     fontSize: 14,
-    color: '#4b5563',
+    color: '#6b7280', // gray-500
+    fontWeight: '500',
   },
   activeFilterText: {
     color: '#ffffff',
   },
-  list: {
-    flex: 1,
-  },
   listContent: {
-    padding: 20,
+    padding: 16,
+    paddingBottom: 80, // pb-20 equivalent
   },
   matchItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 15,
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    marginBottom: 10,
+    padding: 16,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    marginBottom: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.05,
     shadowRadius: 4,
-    elevation: 3,
+    elevation: 2,
   },
   matchInfo: {
     flex: 1,
@@ -365,57 +363,43 @@ const styles = StyleSheet.create({
   name: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#333',
+    color: '#1f2937', // gray-800
   },
   subtitle: {
     fontSize: 14,
-    color: '#666',
-    marginTop: 2,
+    color: '#4b5563', // gray-600
+    marginTop: 4,
   },
   details: {
     fontSize: 14,
-    color: '#888',
+    color: '#6b7280', // gray-500
     marginTop: 4,
-  },
-  profilePicture: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    marginRight: 15,
   },
   lastMessage: {
     fontSize: 14,
-    color: '#4b5563',
-  },
-  navigation: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    backgroundColor: '#1e3a8a',
-    paddingVertical: 15,
-  },
-  navButton: {
-    padding: 10,
+    color: '#4b5563', // gray-600
+    marginTop: 8,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#f9fafb',
   },
   acceptedMatch: {
     borderLeftWidth: 4,
-    borderLeftColor: '#4CAF50',
+    borderLeftColor: '#10b981', // green-500
   },
   acceptedBadge: {
-    backgroundColor: '#E8F5E9',
+    backgroundColor: '#d1fae5', // green-100
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
-    marginTop: 4,
+    marginTop: 8,
+    alignSelf: 'flex-start',
   },
   acceptedText: {
-    color: '#4CAF50',
+    color: '#059669', // green-600
     fontSize: 12,
     fontWeight: '600',
   },

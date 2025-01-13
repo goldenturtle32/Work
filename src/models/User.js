@@ -31,7 +31,7 @@ export default class User {
     this.role = data.role || '';
     this.location = this.parseLocation(data.location);
     this.skills = this.parseSkillsWithExperience(data.skills);
-    this.availability = Array.isArray(data.availability) ? data.availability : [];
+    this.availability = data.availability || {};
     this.category = data.category || '';
     this.reviewsAverage = data.reviewsAverage || 0;
     this.user_overview = data.user_overview || '';

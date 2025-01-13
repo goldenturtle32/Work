@@ -20,6 +20,7 @@ import { debounce } from 'lodash';
 import { Ionicons } from '@expo/vector-icons';
 import { fetchTrendingIndustries, fetchTrendingJobs, fetchTrendingSkills } from '../services/trendsService';
 import Slider from '@react-native-community/slider';
+import ProgressStepper from '../components/ProgressStepper';
 
 const isWeb = typeof document !== 'undefined';
 let WebMap;
@@ -144,6 +145,12 @@ export default function AttributeSelectionScreen({ route, navigation }) {
 
   const [locationPreference, setLocationPreference] = useState(5000); // 5km default
 
+  const [skillExperience, setSkillExperience] = useState({});
+
+  const [isJobTypeInputFocused, setIsJobTypeInputFocused] = useState(false);
+
+  const [currentStep, setCurrentStep] = useState(1);
+
   useEffect(() => {
     const fetchUserRole = async () => {
       try {
@@ -196,12 +203,13 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     if (userRole) {
       fetchOverviewQuestions();
     }
-  }, [userRole]);
+  }, [userRole, attributes.jobTitle, attributes.industryPrefs]);
 
   useEffect(() => {
     const fetchInitialTrends = async () => {
       try {
-        const industries = await fetchTrendingIndustries();
+        const locationString = cityName && stateCode ? `${cityName}, ${stateCode}` : '';
+        const industries = await fetchTrendingIndustries('', locationString);
         setTrendingData(prev => ({
           ...prev,
           industries: industries
@@ -216,7 +224,15 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     };
 
     fetchInitialTrends();
-  }, []);
+  }, [cityName, stateCode]);
+
+  useEffect(() => {
+    // Example logic to determine current step
+    if (attributes.name) setCurrentStep(2);
+    if (attributes.jobTypePrefs) setCurrentStep(3);
+    if (attributes.location) setCurrentStep(4);
+    if (generatedOverview) setCurrentStep(5);
+  }, [attributes, generatedOverview]);
 
   const fetchLocation = async () => {
     try {
@@ -249,24 +265,28 @@ export default function AttributeSelectionScreen({ route, navigation }) {
   };
 
   const handleInputChange = (field, value) => {
+    if (field === 'locationPreference') {
+      // Store locationPreference as a string value
+      setLocationPreference(value);
+    }
+    
     setAttributes(prev => ({
       ...prev,
-      [field]: value,
-      ...(field === 'locationPreference' && { locationPreference: parseInt(value, 10) })
+      [field]: value
     }));
 
     // If changing job type, update skills
     if (field === 'jobTypePrefs') {
-        console.log(`Updating skills for job type: ${value}`);
-        updateSkillSuggestions(value);
+      console.log(`Updating skills for job type: ${value}`);
+      updateSkillSuggestions(value);
     }
   };
 
   const updateIndustrySuggestions = useCallback(
     debounce(async (searchTerm) => {
         try {
-            // Get trending industries that match the search term
-            const trendingIndustries = await fetchTrendingIndustries(searchTerm);
+            const locationString = cityName && stateCode ? `${cityName}, ${stateCode}` : '';
+            const trendingIndustries = await fetchTrendingIndustries(searchTerm, locationString);
             
             // Get all industries that start with the search term
             const startsWith = data.industries.filter(industry => 
@@ -307,7 +327,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
             console.error('Error updating industry suggestions:', error);
         }
     }, 300),
-    [data.industries]
+    [data.industries, cityName, stateCode]
   );
 
   const updateJobTypeSuggestions = useCallback(
@@ -315,8 +335,9 @@ export default function AttributeSelectionScreen({ route, navigation }) {
       try {
         if (!industry) return;
         
-        console.log(`Fetching jobs for industry: ${industry}`);
-        const jobs = await fetchTrendingJobs(industry);
+        const locationString = cityName && stateCode ? `${cityName}, ${stateCode}` : '';
+        console.log(`Fetching jobs for industry: ${industry} in ${locationString}`);
+        const jobs = await fetchTrendingJobs(industry, locationString);
         
         setTrendingData(prev => ({
           ...prev,
@@ -338,7 +359,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
         }));
       }
     },
-    []  // Remove trendingData.jobs dependency to avoid stale data
+    [cityName, stateCode]
   );
 
   const updateSkillSuggestions = useCallback(
@@ -346,8 +367,9 @@ export default function AttributeSelectionScreen({ route, navigation }) {
         try {
             if (!jobType || !attributes.industryPrefs[0]) return;
             
-            console.log(`Fetching skills for ${jobType} in ${attributes.industryPrefs[0]}`);
-            const skills = await fetchTrendingSkills(jobType, attributes.industryPrefs[0]);
+            const locationString = cityName && stateCode ? `${cityName}, ${stateCode}` : '';
+            console.log(`Fetching skills for ${jobType} in ${attributes.industryPrefs[0]} in ${locationString}`);
+            const skills = await fetchTrendingSkills(jobType, attributes.industryPrefs[0], locationString);
             
             if (Array.isArray(skills) && skills.length > 0) {
                 console.log(`Received skills: ${skills}`);
@@ -389,19 +411,23 @@ export default function AttributeSelectionScreen({ route, navigation }) {
             }));
         }
     }, 300),
-    [attributes.industryPrefs]
+    [attributes.industryPrefs, cityName, stateCode]
 );
 
   const handleSkillSelection = (skill) => {
-    if (attributes.skills.includes(skill)) {
+    const existingSkillIndex = attributes.skills.findIndex(s => s.name === skill);
+    
+    if (existingSkillIndex !== -1) {
+      // Remove skill
       setAttributes(prev => ({
         ...prev,
-        skills: prev.skills.filter(s => s !== skill)
+        skills: prev.skills.filter(s => s.name !== skill)
       }));
     } else if (attributes.skills.length < 5) {
+      // Add skill with default 0 years experience
       setAttributes(prev => ({
         ...prev,
-        skills: [...prev.skills, skill]
+        skills: [...prev.skills, { name: skill, yearsOfExperience: 0 }]
       }));
     } else {
       Alert.alert('Maximum Skills', 'You can select up to 5 skills.');
@@ -417,6 +443,8 @@ export default function AttributeSelectionScreen({ route, navigation }) {
         skills: []
       }));
       setInputValues(prev => ({ ...prev, industryPrefs: '' }));
+      
+      // Immediately fetch job types for the new industry
       updateJobTypeSuggestions(industry);
     }
   };
@@ -429,33 +457,25 @@ export default function AttributeSelectionScreen({ route, navigation }) {
   };
 
   const handleAddJob = () => {
-    if (selectedJobs.length >= 3) {
-      Alert.alert('Maximum Jobs', 'You can only add up to 3 jobs.');
-      return;
-    }
-
-    if (!attributes.industryPrefs[0] || !attributes.jobTypePrefs || attributes.skills.length === 0) {
-      Alert.alert('Incomplete Job', 'Please select an industry, job type, and at least one skill.');
+    if (!attributes.industryPrefs[0] || !attributes.jobTypePrefs) {
+      Alert.alert('Missing Information', 'Please select both industry and job type.');
       return;
     }
 
     const newJob = {
       industry: attributes.industryPrefs[0],
-      jobType: attributes.jobTypePrefs,
-      skills: [...attributes.skills]
+      title: attributes.jobTypePrefs,
+      skills: [...attributes.skills] // Copy the current skills with their experience
     };
 
     setSelectedJobs(prev => [...prev, newJob]);
-
-    // Reset job-related fields
+    
+    // Reset job-specific fields but keep the skills
     setAttributes(prev => ({
       ...prev,
-      industryPrefs: [],
       jobTypePrefs: '',
-      skills: []
+      industryPrefs: []
     }));
-    setInputValues(prev => ({ ...prev, industryPrefs: '' }));
-    setSuggestions(prev => ({ ...prev, jobTypes: [], skills: [] }));
   };
 
   const handleRemoveJob = (index) => {
@@ -464,13 +484,58 @@ export default function AttributeSelectionScreen({ route, navigation }) {
 
   const handleSubmit = async () => {
     try {
+      console.log('Submit button pressed');
+      console.log('Current user:', currentUser);
+      
       if (!currentUser) {
         throw new Error('User not authenticated');
       }
 
-      if (userRole === 'worker' && selectedJobs.length === 0) {
-        Alert.alert('No Jobs Selected', 'Please add at least one job before submitting.');
-        return;
+      // Different validation for employers
+      if (userRole === 'employer') {
+        if (!attributes.jobTitle || !attributes.industryPrefs.length) {
+          Alert.alert('Missing Information', 'Please fill in job title and industry preferences.');
+          return;
+        }
+
+        // Generate overview before submitting if not already generated
+        if (!generatedOverview) {
+          try {
+            const response = await fetch(`${BACKEND_URL}/generate-overview`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                role: userRole,
+                responses: overviewResponses,
+                industryPrefs: attributes.industryPrefs,
+                jobTitle: attributes.jobTitle
+              }),
+            });
+
+            const data = await response.json();
+            if (data.success) {
+              setGeneratedOverview(data.overview);
+              setAttributes(prev => ({
+                ...prev,
+                user_overview: data.overview
+              }));
+            } else {
+              throw new Error(data.error || 'Failed to generate overview');
+            }
+          } catch (error) {
+            console.error('Error generating overview:', error);
+            Alert.alert('Error', 'Failed to generate job overview. Please try again.');
+            return;
+          }
+        }
+      } else {
+        // Existing worker validation
+        if (selectedJobs.length === 0) {
+          Alert.alert('No Jobs Selected', 'Please add at least one job before submitting.');
+          return;
+        }
       }
 
       const locationData = attributes.location
@@ -485,40 +550,29 @@ export default function AttributeSelectionScreen({ route, navigation }) {
         uid: currentUser.uid,
         email: currentUser.email,
         role: userRole,
+        user_overview: generatedOverview // Include the generated overview
       };
 
-      if (userRole === 'worker') {
-        await db.collection('user_attributes').doc(currentUser.uid).set(dataToSubmit);
-      } else if (userRole === 'employer') {
-        // Remove worker-specific fields
-        delete dataToSubmit.jobTypePrefs;
-        delete dataToSubmit.skills;
-        delete dataToSubmit.salaryPrefs;
-        delete dataToSubmit.education;
-        delete dataToSubmit.experience;
-        delete dataToSubmit.certifications;
-        delete dataToSubmit.availability;
+      console.log('Data to submit:', dataToSubmit);
 
-        await db.collection('job_attributes').doc(currentUser.uid).set(dataToSubmit);
-      }
+      // Save to Firestore
+      await db.collection('user_attributes').doc(currentUser.uid).set(dataToSubmit);
+      console.log('Data saved successfully');
 
-      await db.collection('users').doc(currentUser.uid).update({
-        isNewUser: false
+      // Navigate to next screen
+      navigation.reset({
+        index: 0,
+        routes: [
+          {
+            name: 'Availability',
+            params: { isInitialSetup: true, userRole: userRole }
+          }
+        ]
       });
 
-      Alert.alert('Success', 'Attributes saved successfully!');
-      
-      if (isNewUser) {
-        navigation.reset({
-          index: 0,
-          routes: [{ name: 'Home' }],
-        });
-      } else {
-        navigation.goBack();
-      }
     } catch (error) {
-      console.error('Error saving attributes:', error);
-      Alert.alert('Error', 'Failed to save attributes');
+      console.error('Error in handleSubmit:', error);
+      Alert.alert('Error', 'Failed to save attributes. Please try again.');
     }
   };
 
@@ -585,6 +639,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
           role: userRole,
           selectedJobs: attributes.selectedJobs || [],
           industryPrefs: attributes.industryPrefs || [],
+          jobTitle: attributes.jobTitle || '',
         }),
       });
 
@@ -606,33 +661,49 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     }));
   };
 
-  const generateOverview = async () => {
-    try {
-      const response = await fetch(`${BACKEND_URL}/generate-overview`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          role: userRole,
-          responses: overviewResponses,
-        }),
-      });
+  const canGenerateOverview = () => {
+  return Object.values(overviewResponses).some(response => response && response.trim() !== '');
+};
 
-      const data = await response.json();
-      if (data.success) {
-        setGeneratedOverview(data.overview);
-        setAttributes(prev => ({
-          ...prev,
-          user_overview: data.overview
-        }));
-      } else {
-        console.error('Error:', data.error);
-      }
-    } catch (error) {
-      console.error('Error generating overview:', error);
+  const generateOverview = async () => {
+  try {
+    const response = await fetch(`${BACKEND_URL}/generate-overview`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        role: userRole,
+        responses: overviewResponses,
+        selectedJobs: selectedJobs,
+        industryPrefs: attributes.industryPrefs
+      }),
+    });
+
+    const data = await response.json();
+    if (data.success) {
+      setGeneratedOverview(data.overview);
+      setAttributes(prev => ({
+        ...prev,
+        user_overview: data.overview
+      }));
+    } else {
+      console.error('Error:', data.error);
+      Alert.alert(
+        'Error',
+        'Failed to generate overview. Please try again.',
+        [{ text: 'OK' }]
+      );
     }
-  };
+  } catch (error) {
+    console.error('Error generating overview:', error);
+    Alert.alert(
+      'Error',
+      'Failed to connect to server. Please try again.',
+      [{ text: 'OK' }]
+    );
+  }
+};
 
   const handleIndustryInputFocus = useCallback(() => {
     setIsIndustryInputFocused(true);
@@ -641,18 +712,181 @@ export default function AttributeSelectionScreen({ route, navigation }) {
     }
   }, [trendingData.industries]);
 
-  const handleJobTypeSelection = (jobType) => {
-    console.log(`Selected job type: ${jobType}`);
+  const handleJobTypeSelect = (jobType) => {
     handleInputChange('jobTypePrefs', jobType);
-    // Clear existing skills when job type changes
+    setIsJobTypeInputFocused(false); // Hide dropdown after selection
+    updateSkillSuggestions(jobType);
+  };
+
+  // Add this function to check if form is valid
+  const isFormValid = () => {
+    console.log('Checking form validity:', {
+      userRole,
+      jobTitle: attributes.jobTitle,
+      industryPrefs: attributes.industryPrefs,
+      salaryRange: attributes.salaryRange,
+      generatedOverview
+    });
+    
+    if (userRole === 'employer') {
+      // For employers, check required fields
+      const hasJobDetails = attributes.jobTitle && 
+        attributes.salaryRange && 
+        attributes.salaryRange.min && 
+        attributes.salaryRange.max;
+      
+      const hasIndustry = attributes.industryPrefs.length > 0;
+      const hasOverview = !!generatedOverview;
+      
+      const isValid = hasJobDetails && hasIndustry && hasOverview;
+      console.log('Employer form validity:', {
+        hasJobDetails,
+        hasIndustry,
+        hasOverview,
+        isValid
+      });
+      return isValid;
+    } else {
+      // For workers, only require selected jobs
+      const isValid = selectedJobs.length > 0;
+      console.log('Worker form validity:', isValid);
+      return isValid;
+    }
+  };
+
+  const fetchSkillSuggestions = async (jobTitle) => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/suggest-skills`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ jobTitle }),
+      });
+      
+      const data = await response.json();
+      if (data.success) {
+        setSuggestions(prev => ({
+          ...prev,
+          skills: data.skills
+        }));
+      }
+    } catch (error) {
+      console.error('Error fetching skill suggestions:', error);
+    }
+  };
+
+  const updateSkillExperience = (skill, years) => {
+    setSkillExperience(prev => ({
+      ...prev,
+      [skill]: years
+    }));
+    
+    // Update the skill in attributes if it exists
     setAttributes(prev => ({
-        ...prev,
-        skills: []
+      ...prev,
+      skills: prev.skills.map(s => 
+        s.name === skill ? { ...s, yearsOfExperience: years } : s
+      )
     }));
+  };
+
+  const renderSelectedJob = (job) => {
+    const skillsDisplay = job.skills && job.skills.length > 0
+      ? job.skills.map(skill => 
+          `${skill.name} (${skill.yearsOfExperience} yr${skill.yearsOfExperience !== 1 ? 's' : ''})`
+        ).join(', ')
+      : 'No skills selected';
+
+    return (
+      <View style={styles.selectedJobItem}>
+        <View style={styles.selectedJobInfo}>
+          <Text style={styles.selectedJobText}>
+            {`${job.industry} - ${job.title}`}
+          </Text>
+          <Text style={styles.selectedJobSkills}>
+            Skills: {skillsDisplay}
+          </Text>
+        </View>
+        <TouchableOpacity onPress={() => handleRemoveJob(job)}>
+          <Ionicons name="close-circle" size={24} color="#dc3545" />
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  const renderSkillItem = (skill) => {
+    const isSelected = attributes.skills.some(s => s.name === skill);
+    
+    return (
+      <View style={styles.skillItemContainer}>
+        <TouchableOpacity
+          style={[
+            styles.skillItem,
+            isSelected && styles.selectedSkillItem
+          ]}
+          onPress={() => handleSkillSelection(skill)}
+        >
+          <Text style={[
+            styles.skillItemText,
+            isSelected && styles.selectedSkillItemText
+          ]}>
+            {skill}
+          </Text>
+        </TouchableOpacity>
+        
+        {isSelected && (
+          <View style={styles.experienceInput}>
+            <TextInput
+              style={styles.experienceTextInput}
+              keyboardType="numeric"
+              placeholder="Years"
+              value={attributes.skills.find(s => s.name === skill)?.yearsOfExperience?.toString() || ''}
+              onChangeText={(value) => updateSkillExperience(skill, parseInt(value) || 0)}
+            />
+            <Text style={styles.experienceLabel}>years</Text>
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  const handleIndustryInputChange = (text) => {
+    setInputValues(prev => ({ ...prev, industryPrefs: text }));
+    
+    // Filter existing suggestions
+    const filteredIndustries = trendingData.industries.filter(industry => 
+      industry.toLowerCase().includes(text.toLowerCase())
+    );
+    
+    // Update suggestions immediately with filtered results
     setSuggestions(prev => ({
-        ...prev,
-        skills: []
+      ...prev,
+      industries: filteredIndustries
     }));
+    
+    // Fetch new suggestions from API
+    updateIndustrySuggestions(text);
+  };
+
+  const handleJobTypeInputChange = (text) => {
+    setInputValues(prev => ({ ...prev, jobTypePrefs: text }));
+    
+    // If we have an industry selected, filter and fetch job types
+    if (attributes.industryPrefs[0]) {
+      // Filter existing job types
+      const filteredJobs = trendingData.jobs[attributes.industryPrefs[0]]?.filter(job => 
+        job.toLowerCase().includes(text.toLowerCase())
+      ) || [];
+      
+      setSuggestions(prev => ({
+        ...prev,
+        jobTypes: filteredJobs
+      }));
+      
+      // Fetch new job types from API
+      updateJobTypeSuggestions(attributes.industryPrefs[0], text);
+    }
   };
 
   return (
@@ -665,21 +899,24 @@ export default function AttributeSelectionScreen({ route, navigation }) {
           style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
         >
+          <ProgressStepper currentStep={currentStep} />
           <Text style={styles.title}>Fill in Your Attributes</Text>
 
           {error && <Text style={styles.error}>{error}</Text>}
 
           {/* Common fields for both roles */}
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Name:</Text>
-            <TextInput
-              style={[styles.input, styles.textInput]}
-              value={attributes.name}
-              onChangeText={(text) => handleInputChange('name', text)}
-              placeholder="Enter your name"
-              placeholderTextColor="#999"
-            />
-          </View>
+          {userRole === 'worker' && (
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Name:</Text>
+              <TextInput
+                style={[styles.input, styles.textInput]}
+                value={attributes.name}
+                onChangeText={(text) => handleInputChange('name', text)}
+                placeholder="Enter your name"
+                placeholderTextColor="#999"
+              />
+            </View>
+          )}
 
           <View style={styles.inputContainer}>
             <Text style={styles.label}>Industry Preferences:</Text>
@@ -687,11 +924,10 @@ export default function AttributeSelectionScreen({ route, navigation }) {
               <TextInput
                 style={styles.input}
                 value={inputValues.industryPrefs}
-                onChangeText={(text) => handleInputChange('industryPrefs', text)}
+                onChangeText={handleIndustryInputChange}
                 placeholder="Type to search industries"
                 onFocus={handleIndustryInputFocus}
                 onBlur={() => {
-                  // Delay hiding the suggestions to allow for selection
                   setTimeout(() => setIsIndustryInputFocused(false), 200);
                 }}
               />
@@ -743,30 +979,51 @@ export default function AttributeSelectionScreen({ route, navigation }) {
                   <Text style={styles.label}>Job Type Preferences:</Text>
                   <TextInput
                     style={styles.input}
-                    value={attributes.jobTypePrefs}
-                    onChangeText={(text) => {
-                      handleInputChange('jobTypePrefs', text);
-                      updateSkillSuggestions(text);
-                    }}
+                    value={inputValues.jobTypePrefs}
+                    onChangeText={handleJobTypeInputChange}
                     placeholder="Type to search job types"
+                    onFocus={() => setIsJobTypeInputFocused(true)}
+                    onBlur={() => setTimeout(() => setIsJobTypeInputFocused(false), 200)}
                   />
-                  {suggestions.jobTypes.length > 0 && (
-                    <FlatList
-                      data={suggestions.jobTypes}
-                      keyExtractor={(item, index) => `job-${index}`}
-                      renderItem={({ item }) => (
-                        <TouchableOpacity
-                          style={styles.suggestionItem}
+                  
+                  {/* Add bubble display for selected job type */}
+                  {attributes.jobTypePrefs && (
+                    <View style={styles.bubbleContainer}>
+                      <View style={styles.bubble}>
+                        <Text style={styles.bubbleText}>{attributes.jobTypePrefs}</Text>
+                        <TouchableOpacity 
                           onPress={() => {
-                            handleJobTypeSelection(typeof item === 'string' ? item : item.name);
-                            updateSkillSuggestions(typeof item === 'string' ? item : item.name);
+                            handleInputChange('jobTypePrefs', '');
+                            setAttributes(prev => ({
+                              ...prev,
+                              skills: []  // Clear skills when job type is removed
+                            }));
                           }}
                         >
-                          <Text>{typeof item === 'string' ? item : item.name}</Text>
+                          <Ionicons name="close-circle" size={20} color="#fff" />
                         </TouchableOpacity>
-                      )}
-                      style={styles.suggestionList}
-                    />
+                      </View>
+                    </View>
+                  )}
+                  
+                  {/* Job type suggestions dropdown */}
+                  {isJobTypeInputFocused && suggestions.jobTypes.length > 0 && (
+                    <View style={styles.suggestionsContainer}>
+                      <ScrollView>
+                        {suggestions.jobTypes.map((job, index) => (
+                          <TouchableOpacity
+                            key={index}
+                            onPress={() => {
+                              handleJobTypeSelect(job);
+                              setInputValues(prev => ({ ...prev, jobTypePrefs: '' }));  // Clear input after selection
+                            }}
+                            style={styles.suggestionItem}
+                          >
+                            <Text>{job}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </View>
                   )}
                 </View>
               )}
@@ -777,19 +1034,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
                   <FlatList
                     data={suggestions.skills}
                     keyExtractor={(item) => item}
-                    renderItem={({ item }) => (
-                      <TouchableOpacity
-                        style={[
-                          styles.skillItem,
-                          attributes.skills.includes(item) && styles.selectedSkill
-                        ]}
-                        onPress={() => handleSkillSelection(item)}
-                      >
-                        <Text style={attributes.skills.includes(item) ? styles.selectedSkillText : styles.skillText}>
-                          {item}
-                        </Text>
-                      </TouchableOpacity>
-                    )}
+                    renderItem={({ item }) => renderSkillItem(item)}
                     numColumns={2}
                     columnWrapperStyle={styles.skillList}
                   />
@@ -810,20 +1055,6 @@ export default function AttributeSelectionScreen({ route, navigation }) {
                   placeholder="Enter job title"
                 />
               </View>
-
-              <View style={styles.inputContainer}>
-                <Text style={styles.label}>Estimated Hours:</Text>
-                <TextInput
-                  style={styles.input}
-                  value={attributes.estimatedHours}
-                  onChangeText={(text) => handleInputChange('estimatedHours', text)}
-                  placeholder="Enter estimated hours"
-                  keyboardType="numeric"
-                />
-              </View>
-
-              {/* Add more employer-specific fields here */}
-              {/* ... */}
 
               <View style={styles.inputContainer}>
                 <Text style={styles.label}>Salary Range:</Text>
@@ -864,21 +1095,7 @@ export default function AttributeSelectionScreen({ route, navigation }) {
               {selectedJobs.length > 0 && (
                 <View style={styles.selectedJobsContainer}>
                   <Text style={styles.selectedJobsTitle}>Selected Jobs:</Text>
-                  {selectedJobs.map((job, index) => (
-                    <View key={index} style={styles.selectedJobItem}>
-                      <View style={styles.selectedJobInfo}>
-                        <Text style={styles.selectedJobText}>
-                          {job.industry} - {job.jobType}
-                        </Text>
-                        <Text style={styles.selectedJobSkills}>
-                          Skills: {job.skills.join(', ')}
-                        </Text>
-                      </View>
-                      <TouchableOpacity onPress={() => handleRemoveJob(index)}>
-                        <Ionicons name="close-circle" size={24} color="#FF4136" />
-                      </TouchableOpacity>
-                    </View>
-                  ))}
+                  {selectedJobs.map((job, index) => renderSelectedJob(job))}
                 </View>
               )}
             </>
@@ -915,11 +1132,21 @@ export default function AttributeSelectionScreen({ route, navigation }) {
                 ))}
                 
                 <TouchableOpacity 
-                  style={[styles.button, styles.generateButton]}
-                  onPress={generateOverview}
-                >
-                  <Text style={styles.buttonText}>Generate Overview</Text>
-                </TouchableOpacity>
+  style={[
+    styles.button, 
+    styles.generateButton,
+    !canGenerateOverview() && styles.buttonDisabled
+  ]}
+  onPress={generateOverview}
+  disabled={!canGenerateOverview()}
+>
+  <Text style={[
+    styles.buttonText,
+    !canGenerateOverview() && styles.buttonTextDisabled
+  ]}>
+    Generate Overview
+  </Text>
+</TouchableOpacity>
               </>
             ) : (
               <View style={styles.overviewContainer}>
@@ -953,13 +1180,15 @@ export default function AttributeSelectionScreen({ route, navigation }) {
             )}
           </View>
 
-          {/* Submit Button at the bottom */}
-          <TouchableOpacity 
-            style={styles.submitButton} 
-            onPress={handleSubmit}
-          >
-            <Text style={styles.submitButtonText}>Submit Attributes</Text>
-          </TouchableOpacity>
+          {/* Submit Button */}
+          {isFormValid() && (
+            <TouchableOpacity
+              style={styles.submitButton}
+              onPress={handleSubmit}
+            >
+              <Text style={styles.submitButtonText}>Submit Attributes</Text>
+            </TouchableOpacity>
+          )}
 
           {/* Add bottom padding for scrolling */}
           <View style={styles.bottomPadding} />
@@ -1051,17 +1280,25 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   submitButton: {
-    backgroundColor: '#007BFF',
+    backgroundColor: '#1e3a8a',
     padding: 15,
     borderRadius: 8,
     alignItems: 'center',
     marginTop: 20,
+    marginHorizontal: 20,
     marginBottom: 20,
   },
+  submitButtonDisabled: {
+    backgroundColor: '#94a3b8',
+    opacity: 0.5,
+  },
   submitButtonText: {
-    color: '#fff',
-    fontSize: 16,
+    color: '#ffffff',
+    fontSize: 18,
     fontWeight: 'bold',
+  },
+  submitButtonTextDisabled: {
+    color: '#e2e8f0',
   },
   inputWrapper: {
     flexDirection: 'row',
@@ -1239,5 +1476,58 @@ const styles = StyleSheet.create({
   },
   bottomPadding: {
     height: 50, // Extra space at bottom for web scrolling
+  },
+  skillItemContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  skillItem: {
+    backgroundColor: '#f8f9fa',
+    padding: 10,
+    borderRadius: 8,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+  },
+  selectedSkillItem: {
+    backgroundColor: '#007bff',
+    borderColor: '#0056b3',
+  },
+  skillItemText: {
+    color: '#333',
+  },
+  selectedSkillItemText: {
+    color: '#fff',
+  },
+  buttonDisabled: {
+  backgroundColor: '#cccccc',
+  opacity: 0.7,
+},
+buttonTextDisabled: {
+  color: '#666666',
+},
+  experienceInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  experienceTextInput: {
+    width: 60,
+    height: 40,
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+    borderRadius: 4,
+    paddingHorizontal: 8,
+    marginRight: 5,
+  },
+  experienceLabel: {
+    color: '#666',
+  },
+  suggestionsContainer: {
+    maxHeight: 200,
+    borderColor: '#ccc',
+    borderWidth: 1,
+    borderRadius: 8,
+    overflow: 'hidden',
   },
 });
