@@ -17,6 +17,8 @@ import traceback
 from serpapi import GoogleSearch
 from collections import Counter
 import re
+import math
+import spacy
 
 lock = threading.Lock()
 last_request_time = datetime.now() - timedelta(seconds=60)  # Initialize to allow immediate first request
@@ -29,13 +31,7 @@ cache_duration = timedelta(minutes=30)
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, resources={
-    r"/*": {
-        "origins": ["http://localhost:8081", "http://127.0.0.1:8081"],
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type"]
-    }
-})
+CORS(app)  # Enable CORS for all routes
 
 api_key = os.getenv('OPENAI_API_KEY')
 if not api_key:
@@ -109,6 +105,9 @@ industry_jobs = {
     # Add more industries and their common jobs
 }
 
+# Load the English language model
+nlp = spacy.load('en_core_web_md')
+
 def generate_fallback_analysis(job_data, user_data):
     """Generate a basic analysis without using OpenAI"""
     analysis = []
@@ -149,6 +148,35 @@ def make_openai_request(messages, max_tokens=300, temperature=0.7):
         print(f"Unexpected error in OpenAI request: {str(e)}")
         raise e
 
+def calculate_semantic_similarity(text1, text2):
+    """Calculate semantic similarity between two texts using word embeddings"""
+    if not text1 or not text2:
+        return 0.0
+        
+    # Process the texts
+    doc1 = nlp(text1.lower())
+    doc2 = nlp(text2.lower())
+    
+    # Calculate similarity
+    similarity = doc1.similarity(doc2)
+    
+    print(f"Comparing '{text1}' with '{text2}': {similarity:.2f}")
+    return similarity
+
+def analyze_pay_range(job_pay, user_prefs):
+    """Analyze pay range compatibility"""
+    try:
+        job_min = float(job_pay.get('min', 0))
+        job_max = float(job_pay.get('max', 0))
+        user_min = float(user_prefs.get('min', 0))
+        
+        if job_max >= user_min:
+            # Higher pay gets higher score
+            return min(1.0, (job_max - user_min) / (user_min * 0.5))
+        return 0.0
+    except:
+        return 0.0
+
 @app.route('/analyze-job-match', methods=['POST'])
 def analyze_job_match():
     try:
@@ -156,24 +184,109 @@ def analyze_job_match():
         job_data = data.get('job', {})
         user_data = data.get('user', {})
         
-        try:
-            messages = [
-                {"role": "system", "content": "You are a job matching expert providing friendly, detailed analysis."},
-                {"role": "user", "content": f"Analyze this job match. Job: {job_data}, User: {user_data}"}
+        # Initialize score components
+        title_score = 0.0
+        industry_score = 0.0
+        skills_score = 0.0
+        overview_score = 0.0
+        pay_score = 0.0
+        
+        # 1. Job Title Match (25%)
+        if job_data.get('jobTitle') and user_data.get('selectedJobs'):
+            title_similarities = [
+                calculate_semantic_similarity(
+                    job_data['jobTitle'],
+                    user_job.get('title', '')
+                )
+                for user_job in user_data['selectedJobs']
             ]
-            analysis = make_openai_request(messages)
-        except Exception as e:
-            print(f"Falling back to basic analysis: {e}")
-            analysis = generate_fallback_analysis(job_data, user_data)
+            title_score = max(title_similarities) if title_similarities else 0.0
+        
+        # 2. Industry Match (20%)
+        if job_data.get('industry') and user_data.get('industryPrefs'):
+            # Check both industry and industryPrefs arrays
+            all_user_industries = user_data['industryPrefs']
+            industry_similarities = [
+                calculate_semantic_similarity(
+                    job_data['industry'],
+                    industry
+                )
+                for industry in all_user_industries
+            ]
+            industry_score = max(industry_similarities) if industry_similarities else 0.0
+        
+        # 3. Skills Match (25%)
+        if job_data.get('requiredSkills') and user_data.get('selectedJobs'):
+            all_user_skills = []
+            for job in user_data['selectedJobs']:
+                all_user_skills.extend(job.get('skills', []))
+            
+            skill_scores = []
+            for req_skill in job_data['requiredSkills']:
+                skill_name = req_skill.get('name', '')
+                skill_years = req_skill.get('yearsOfExperience', 0)
+                
+                skill_similarities = [
+                    calculate_semantic_similarity(
+                        skill_name,
+                        user_skill
+                    )
+                    for user_skill in all_user_skills
+                ]
+                max_similarity = max(skill_similarities) if skill_similarities else 0.0
+                skill_scores.append(max_similarity)
+            
+            skills_score = sum(skill_scores) / len(skill_scores) if skill_scores else 0.0
+        
+        # 4. Overview Match (15%)
+        if job_data.get('job_overview') and user_data.get('overviewResponses'):
+            # Combine all overview responses into a single string
+            user_overview = ' '.join(user_data['overviewResponses'].values())
+            overview_score = calculate_semantic_similarity(
+                job_data['job_overview'],
+                user_overview
+            )
+        
+        # 5. Pay Range Analysis (15%)
+        if job_data.get('estPayRangeMin') is not None and job_data.get('estPayRangeMax') is not None:
+            base_pay = {
+                'min': job_data['estPayRangeMin'],
+                'max': job_data['estPayRangeMax']
+            }
+            
+            # Include tips in total compensation if available
+            if job_data.get('estTipRangeMin') is not None and job_data.get('estTipRangeMax') is not None:
+                base_pay['min'] += job_data['estTipRangeMin']
+                base_pay['max'] += job_data['estTipRangeMax']
+            
+            pay_score = analyze_pay_range(base_pay, {})  # No user pay preferences needed
+        
+        # Calculate weighted total score
+        total_score = (
+            title_score * 0.25 +
+            industry_score * 0.20 +
+            skills_score * 0.25 +
+            overview_score * 0.15 +
+            pay_score * 0.15
+        ) * 100  # Convert to 0-100 scale
         
         return jsonify({
             "success": True,
-            "analysis": analysis
+            "score": round(total_score, 2),
+            "components": {
+                "titleMatch": round(title_score * 100, 2),
+                "industryMatch": round(industry_score * 100, 2),
+                "skillsMatch": round(skills_score * 100, 2),
+                "overviewMatch": round(overview_score * 100, 2),
+                "payMatch": round(pay_score * 100, 2)
+            }
         })
+        
     except Exception as e:
+        print(f"Error in analyze-job-match: {str(e)}")
         return jsonify({
             "success": False,
-            "error": f"Error: {str(e)}"
+            "error": str(e)
         }), 500
 
 def parse_llm_response(response_text):
@@ -603,8 +716,6 @@ def get_trending_jobs():
             if 'jobs_results' in results:
                 print(f"Found additional results for search term: {search_term}")
                 new_jobs = [job['title'] for job in results.get('jobs_results', [])]
-                # Combine filtered existing jobs with new jobs
-                jobs = list(set(filtered_jobs + new_jobs))
         
         return jsonify({
             "success": True,
@@ -1324,5 +1435,159 @@ def reverse_geocode():
             "error": str(e)
         }), 500
 
+def calculate_job_similarity(job1, job2):
+    """
+    Calculate similarity between two jobs based on their titles
+    Returns a score between 0 and 1
+    """
+    print(f"\n--- Calculating Job Similarity ---")
+    print(f"Job 1: {json.dumps(job1, indent=2)}")
+    print(f"Job 2: {json.dumps(job2, indent=2)}")
+    
+    # Check if either job is missing
+    if not job1 or not job2:
+        print("Missing job data")
+        return 0.0
+        
+    # Get job titles
+    title1 = job1.get('title', '').lower()
+    title2 = job2.get('title', '').lower()
+    
+    print(f"Title 1: {title1}")
+    print(f"Title 2: {title2}")
+    
+    if not title1 or not title2:
+        print("Missing job titles")
+        return 0.0
+    
+    # Split titles into words and remove common words
+    common_words = {'and', 'or', 'the', 'in', 'at', 'of', 'for', 'to', 'with'}
+    words1 = set(w for w in title1.split() if w not in common_words)
+    words2 = set(w for w in title2.split() if w not in common_words)
+    
+    print(f"Words from title 1: {words1}")
+    print(f"Words from title 2: {words2}")
+    
+    # Calculate word overlap
+    if not words1 or not words2:
+        print("No valid words found after filtering")
+        return 0.0
+        
+    common_words = words1.intersection(words2)
+    unique_words = words1.union(words2)
+    
+    similarity = len(common_words) / len(unique_words)
+    
+    print(f"Common words: {common_words}")
+    print(f"All unique words: {unique_words}")
+    print(f"Similarity score: {similarity:.2f}")
+    
+    return similarity
+
+@app.route('/test-backend', methods=['GET'])
+def test_backend():
+    print("Test endpoint hit!")
+    return jsonify({
+        "success": True,
+        "message": "Backend is working"
+    })
+
+def calculate_distance(lat1, lon1, lat2, lon2):
+    """Calculate distance between two points in meters using Haversine formula"""
+    if not all([lat1, lon1, lat2, lon2]):
+        return 0
+        
+    R = 6371000  # Earth's radius in meters
+    
+    lat1, lon1, lat2, lon2 = map(float, [lat1, lon1, lat2, lon2])
+    
+    # Convert latitude and longitude to radians
+    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+    
+    # Haversine formula
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    
+    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+    c = 2 * math.asin(math.sqrt(a))
+    
+    return R * c  # Distance in meters
+
+@app.route('/calculate-match', methods=['POST'])
+def calculate_match():
+    try:
+        data = request.get_json()
+        print("\n=== Starting Calculate Match ===")
+        print("Received data:", json.dumps(data, indent=2))
+        
+        user_data = data.get('userData', {})
+        item_data = data.get('itemData', {})
+        
+        # Calculate job score only (40% weight)
+        job_score = calculate_job_score(user_data, item_data)
+        
+        # Return only the job score since location and availability are calculated client-side
+        return jsonify({
+            'score': job_score,
+            'jobScore': job_score
+        })
+        
+    except Exception as e:
+        print(f"Error in calculate_match: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+def calculate_job_score(user_data, item_data):
+    """Calculate overall job match score"""
+    max_score = 40  # 40% weight for job matching
+    
+    user_jobs = user_data.get('selectedJobs', [])
+    candidate_jobs = item_data.get('selectedJobs', [])
+    
+    if not user_jobs or not candidate_jobs:
+        return 0
+    
+    max_job_score = 0
+    
+    for user_job in user_jobs:
+        for candidate_job in candidate_jobs:
+            # Calculate title similarity (50% of job score)
+            title_sim = calculate_semantic_similarity(
+                user_job.get('title', ''),
+                candidate_job.get('title', '')
+            )
+            title_score = title_sim * 20  # Max 20 points
+            
+            # Calculate industry similarity (25% of job score)
+            industry_sim = calculate_semantic_similarity(
+                user_job.get('industry', ''),
+                candidate_job.get('industry', '')
+            )
+            industry_score = industry_sim * 10  # Max 10 points
+            
+            # Calculate skills match (25% of job score)
+            user_skills = [skill.get('name', '').lower() for skill in user_job.get('skills', [])]
+            candidate_skills = [skill.get('name', '').lower() for skill in candidate_job.get('skills', [])]
+            
+            if user_skills and candidate_skills:
+                skills_scores = []
+                for user_skill in user_skills:
+                    skill_scores = [calculate_semantic_similarity(user_skill, cand_skill) 
+                                  for cand_skill in candidate_skills]
+                    skills_scores.append(max(skill_scores))
+                skills_score = (sum(skills_scores) / len(skills_scores)) * 10
+            else:
+                skills_score = 0
+            
+            total_score = title_score + industry_score + skills_score
+            print("\nJob Match Details:")
+            print(f"Title Score: {title_score:.2f}/20")
+            print(f"Industry Score: {industry_score:.2f}/10")
+            print(f"Skills Score: {skills_score:.2f}/10")
+            print(f"Total Job Score: {total_score:.2f}/40")
+            
+            max_job_score = max(max_job_score, total_score)
+    
+    return max_job_score
+
 if __name__ == '__main__':
-    app.run(debug=True) 
+    app.run(host='0.0.0.0', port=5000, debug=True) 

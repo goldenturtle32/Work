@@ -94,51 +94,85 @@ export default function SignUpScreen({ navigation }) {
         return;
       }
 
+      console.log('Starting sign up process for:', { email, role });
+
       // Create user authentication
       const userCredential = await auth.createUserWithEmailAndPassword(email, password);
       const uid = userCredential.user.uid;
 
-      // Create base user document
-      await setDoc(doc(db, 'users', uid), {
+      // Prepare the base document data
+      const baseUserData = {
         email: email,
         role: role,
         provider: 'email',
         setupComplete: false,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
+      };
 
-      // Create role-specific document and update email
+      console.log('Creating documents for user:', { uid, email, role });
+
+      // Create documents in a batch to ensure atomicity
+      const batch = db.batch();
+
+      // Set base user document
+      const userRef = doc(db, 'users', uid);
+      batch.set(userRef, baseUserData);
+
+      // Set role-specific document with explicit email field
       if (role === 'worker') {
-        await setDoc(doc(db, 'user_attributes', uid), {
+        const userAttributesRef = doc(db, 'user_attributes', uid);
+        batch.set(userAttributesRef, {
           uid: uid,
-          email: email,
+          email: email,  // Explicitly set email
           role: 'worker',
           setupComplete: false,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
-
-        // Update email in user_attributes
-        await setDoc(doc(db, 'user_attributes', uid), {
-          email: email
-        }, { merge: true });
-
       } else if (role === 'employer') {
-        await setDoc(doc(db, 'job_attributes', uid), {
+        const jobAttributesRef = doc(db, 'job_attributes', uid);
+        // Create a new Job instance with the required fields
+        const jobData = {
           id: uid,
-          email: email,
+          email: email,  // Explicitly set email
           role: 'employer',
           setupComplete: false,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
-
-        // Update email in job_attributes
-        await setDoc(doc(db, 'job_attributes', uid), {
-          email: email
-        }, { merge: true });
+        };
+        console.log('Setting job_attributes document with data:', jobData);
+        batch.set(jobAttributesRef, jobData);
       }
 
+      // Commit the batch
+      await batch.commit();
+
+      // Verify the documents were created correctly
+      const verifyDocs = async () => {
+        try {
+          const userDoc = await db.collection('users').doc(uid).get();
+          console.log('User document created:', userDoc.data());
+
+          if (role === 'employer') {
+            const jobDoc = await db.collection('job_attributes').doc(uid).get();
+            const jobData = jobDoc.data();
+            console.log('Job attributes document created:', jobData);
+            
+            // Verify email field specifically
+            if (!jobData?.email) {
+              console.error('Email field missing in job_attributes document');
+            }
+          } else {
+            const userAttrDoc = await db.collection('user_attributes').doc(uid).get();
+            console.log('User attributes document created:', userAttrDoc.data());
+          }
+        } catch (error) {
+          console.error('Error verifying documents:', error);
+        }
+      };
+
+      await verifyDocs();
+
       console.log('Created user with role:', role);
-      console.log('User documents created and email updated in appropriate collection');
+      console.log('User documents created with email:', email);
 
       navigation.navigate('BasicInfo', { 
         userId: uid,

@@ -7,15 +7,33 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
-  ActivityIndicator
+  ActivityIndicator,
+  Platform
 } from 'react-native';
 import { useSetup } from '../../contexts/SetupContext';
 import ProgressStepper from '../../components/ProgressStepper';
 import { db, auth } from '../../firebase';
 import firebase from 'firebase/compat/app';
 
-// Update the BACKEND_URL to match the Flask server address
-const BACKEND_URL = 'http://127.0.0.1:5000';  // Changed from localhost to 127.0.0.1
+// Update the BACKEND_URL based on platform and environment
+const getBackendUrl = () => {
+  if (Platform.OS === 'android') {
+    return 'http://10.0.2.2:5000';  // Android Emulator
+  } else if (Platform.OS === 'ios') {
+    if (Platform.isPad || Platform.isTV) {
+      return 'http://localhost:5000';  // iOS Simulator
+    } else {
+      // For physical iOS devices, use your computer's local IP address
+      return 'http://192.168.0.100:5000';  // Your computer's actual IP
+    }
+  }
+  return 'http://localhost:5000';  // Default fallback
+};
+
+const BACKEND_URL = getBackendUrl();
+
+// Add this console log to help debug
+console.log('Using BACKEND_URL:', BACKEND_URL);
 
 export default function UserOverviewScreen({ navigation }) {
   const { setupData, updateSetupData } = useSetup();
@@ -66,7 +84,18 @@ export default function UserOverviewScreen({ navigation }) {
         selectedJobs: setupData.selectedJobs
       };
 
-      console.log('Sending payload:', payload); // Debug log
+      console.log('Sending payload:', payload);
+      console.log('Attempting to connect to:', BACKEND_URL);
+
+      // Add a test request first
+      try {
+        const testResponse = await fetch(`${BACKEND_URL}/test-backend`);
+        const testData = await testResponse.json();
+        console.log('Backend test response:', testData);
+      } catch (testError) {
+        console.error('Backend test failed:', testError);
+        throw new Error('Cannot connect to backend server');
+      }
 
       const response = await fetch(`${BACKEND_URL}/generate-overview-questions`, {
         method: 'POST',
@@ -75,6 +104,7 @@ export default function UserOverviewScreen({ navigation }) {
           'Accept': 'application/json'
         },
         body: JSON.stringify(payload),
+        timeout: 10000
       });
 
       if (!response.ok) {
@@ -82,7 +112,7 @@ export default function UserOverviewScreen({ navigation }) {
       }
 
       const data = await response.json();
-      console.log('Received questions:', data); // Debug log
+      console.log('Received questions:', data);
       
       if (data.success) {
         setOverviewQuestions(data.questions);
@@ -92,7 +122,10 @@ export default function UserOverviewScreen({ navigation }) {
       }
     } catch (error) {
       console.error('Error fetching overview questions:', error);
-      Alert.alert('Error', 'Failed to connect to server. Please try again.');
+      const errorMessage = error.message === 'Network request failed' 
+        ? 'Unable to connect to server. Please check your internet connection and try again.\nMake sure your phone and computer are on the same network.'
+        : `Failed to fetch questions: ${error.message}`;
+      Alert.alert('Error', errorMessage);
     }
   };
 
@@ -237,7 +270,7 @@ export default function UserOverviewScreen({ navigation }) {
             ))
           ) : (
             <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#0000ff" />
+              <ActivityIndicator size={32} color="#0000ff" />
               <Text style={styles.loadingText}>Loading questions...</Text>
             </View>
           )}

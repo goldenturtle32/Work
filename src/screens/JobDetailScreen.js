@@ -514,7 +514,10 @@ export default function JobDetailScreen({ route, navigation }) {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#0000ff" />
+        <ActivityIndicator 
+          color="#0000ff" 
+          style={{ transform: [{ scale: 1.4 }] }}
+        />
       </View>
     );
   }

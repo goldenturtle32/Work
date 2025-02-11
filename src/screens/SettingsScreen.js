@@ -41,12 +41,6 @@ export default function SettingsScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-      <LinearGradient
-        colors={['#1e3a8a', '#3b82f6']}
-        style={styles.header}
-      >
-        <Text style={styles.headerTitle}>Settings</Text>
-      </LinearGradient>
       <ScrollView style={styles.scrollView}>
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account Settings</Text>
@@ -57,7 +51,6 @@ export default function SettingsScreen({ navigation }) {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>App Preferences</Text>
-          {renderSettingItem('language-outline', 'Language', () => { /* Implement Language Settings */ })}
           <View style={styles.settingItem}>
             <Ionicons name="moon-outline" size={24} color="#1e3a8a" />
             <View style={styles.settingContent}>
@@ -69,7 +62,6 @@ export default function SettingsScreen({ navigation }) {
             </View>
           </View>
           {renderSettingItem('shield-checkmark-outline', 'Privacy Settings', () => setShowPrivacyModal(true))}
-          {renderSettingItem('calendar-outline', 'Edit Availability', () => navigation.navigate('Availability'))}
         </View>
 
         <View style={styles.section}>
@@ -117,17 +109,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
-  },
-  header: {
-    padding: 20,
-    paddingTop: 60,
-    paddingBottom: 20,
-  },
-  headerTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#ffffff',
-    textAlign: 'center',
   },
   scrollView: {
     flex: 1,

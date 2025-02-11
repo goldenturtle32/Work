@@ -1,15 +1,17 @@
+import { Platform } from 'react-native';
 import { registerRootComponent } from 'expo';
 import { AppRegistry } from 'react-native';
 import App from './App';
 import { name as appName } from './app.json';
 
-// Check if running on the web or native
-if (window && document) {
+if (Platform.OS === 'web') {
+  // This block only runs on web builds
   AppRegistry.registerComponent(appName, () => App);
   AppRegistry.runApplication(appName, {
     initialProps: {},
     rootTag: document.getElementById('root'),
   });
 } else {
-  registerRootComponent(App); // Native app registration
+  // This block runs on iOS / Android
+  registerRootComponent(App);
 }

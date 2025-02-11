@@ -99,7 +99,9 @@ export default function AppNavigator({ initialRouteName = 'Main' }) {
       <Stack.Screen 
         name="BasicInfo" 
         component={BasicInfoScreen}
-        options={{ headerShown: false }}
+        options={({ route }) => ({
+          headerShown: false,
+        })}
       />
       <Stack.Screen 
         name="LocationPreferences" 

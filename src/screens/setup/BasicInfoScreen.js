@@ -11,21 +11,42 @@ import { useSetup } from '../../contexts/SetupContext';
 import ProgressStepper from '../../components/ProgressStepper';
 import { AntDesign } from '@expo/vector-icons';
 import { db, auth } from '../../firebase';
+import { serverTimestamp } from 'firebase/firestore';
 
 export default function BasicInfoScreen({ navigation, route }) {
   const { setupData, updateSetupData } = useSetup();
   const [errors, setErrors] = useState({});
   const [userRole, setUserRole] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [includesTips, setIncludesTips] = useState(false);
 
   useEffect(() => {
     const fetchUserRole = async () => {
-      if (auth.currentUser) {
+      try {
         const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
-        const role = userDoc.data()?.role;
-        setUserRole(role);
-        console.log('User role:', role);
+        if (userDoc.exists) {
+          setUserRole(userDoc.data().role);
+          
+          // Fetch the existing email from the appropriate collection
+          const collection = userDoc.data().role === 'employer' ? 'job_attributes' : 'user_attributes';
+          const attributesDoc = await db.collection(collection).doc(auth.currentUser.uid).get();
+          
+          if (attributesDoc.exists) {
+            const existingData = attributesDoc.data();
+            // Initialize setupData with existing email
+            updateSetupData({
+              ...setupData,
+              email: existingData.email || auth.currentUser.email // Fallback to auth email
+            });
+          }
+        }
+        setLoading(false);
+      } catch (error) {
+        console.error('Error fetching user data:', error);
+        setLoading(false);
       }
     };
+
     fetchUserRole();
   }, []);
 
@@ -103,6 +124,20 @@ export default function BasicInfoScreen({ navigation, route }) {
           Number(setupData.estPayRangeMin) >= Number(setupData.estPayRangeMax)) {
         newErrors.estPayRangeMax = 'Maximum pay must be greater than minimum pay';
       }
+      
+      // Add validation for tips if included
+      if (includesTips) {
+        if (!setupData.estTipRangeMin) {
+          newErrors.estTipRangeMin = 'Minimum tip estimate is required';
+        }
+        if (!setupData.estTipRangeMax) {
+          newErrors.estTipRangeMax = 'Maximum tip estimate is required';
+        }
+        if (setupData.estTipRangeMin && setupData.estTipRangeMax && 
+            Number(setupData.estTipRangeMin) >= Number(setupData.estTipRangeMax)) {
+          newErrors.estTipRangeMax = 'Maximum tip must be greater than minimum tip';
+        }
+      }
     }
 
     if (Object.keys(newErrors).length > 0) {
@@ -111,25 +146,22 @@ export default function BasicInfoScreen({ navigation, route }) {
     }
 
     try {
-      const userId = auth.currentUser.uid;
-      const collectionName = userRole === 'worker' ? 'user_attributes' : 'job_attributes';
-      const data = userRole === 'worker' 
-        ? {
-            name: setupData.name,
-            dateOfBirth: setupData.dateOfBirth,
-            email: setupData.email,
-            updatedAt: new Date()
-          }
-        : {
-            jobTitle: setupData.jobTitle,
-            companyName: setupData.companyName,
-            email: setupData.email,
-            estPayRangeMin: Number(setupData.estPayRangeMin),
-            estPayRangeMax: Number(setupData.estPayRangeMax),
-            updatedAt: new Date()
-          };
+      // Ensure email is included in the update
+      const updatedData = {
+        ...setupData,
+        email: setupData.email || auth.currentUser.email // Fallback to auth email
+      };
 
-      await db.collection(collectionName).doc(userId).set(data, { merge: true });
+      // Update setupData with email included
+      updateSetupData(updatedData);
+
+      // Update the appropriate collection
+      const collection = userRole === 'employer' ? 'job_attributes' : 'user_attributes';
+      await db.collection(collection).doc(auth.currentUser.uid).update({
+        ...updatedData,
+        updatedAt: serverTimestamp()
+      });
+
       navigation.navigate('LocationPreferences');
     } catch (error) {
       console.error('Error updating attributes:', error);
@@ -248,6 +280,84 @@ export default function BasicInfoScreen({ navigation, route }) {
           </View>
         </View>
       </View>
+
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Does this job include tips?</Text>
+        <View style={styles.tipsButtonContainer}>
+          {['Yes', 'No'].map((option) => (
+            <TouchableOpacity
+              key={option}
+              style={[
+                styles.tipsButton,
+                includesTips === (option === 'Yes') && styles.tipsButtonActive
+              ]}
+              onPress={() => {
+                setIncludesTips(option === 'Yes');
+                if (option === 'No') {
+                  updateSetupData({ 
+                    estTipRangeMin: '', 
+                    estTipRangeMax: '' 
+                  });
+                }
+              }}
+            >
+              <Text style={[
+                styles.tipsButtonText,
+                includesTips === (option === 'Yes') && styles.tipsButtonTextActive
+              ]}>
+                {option}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+
+      {includesTips && (
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>Estimated Tips Range ($/hr)</Text>
+          <View style={styles.payRangeContainer}>
+            <View style={styles.payRangeInput}>
+              <TextInput
+                style={[
+                  styles.input,
+                  styles.payInput,
+                  errors.estTipRangeMin && styles.inputError
+                ]}
+                value={setupData.estTipRangeMin}
+                onChangeText={(text) => {
+                  updateSetupData({ estTipRangeMin: text });
+                  setErrors(prev => ({ ...prev, estTipRangeMin: null }));
+                }}
+                placeholder="Min"
+                placeholderTextColor="#64748b"
+                keyboardType="numeric"
+              />
+              {errors.estTipRangeMin && <Text style={styles.errorText}>{errors.estTipRangeMin}</Text>}
+            </View>
+            
+            <Text style={styles.payRangeSeparator}>to</Text>
+            
+            <View style={styles.payRangeInput}>
+              <TextInput
+                style={[
+                  styles.input,
+                  styles.payInput,
+                  errors.estTipRangeMax && styles.inputError
+                ]}
+                value={setupData.estTipRangeMax}
+                onChangeText={(text) => {
+                  updateSetupData({ estTipRangeMax: text });
+                  setErrors(prev => ({ ...prev, estTipRangeMax: null }));
+                }}
+                placeholder="Max"
+                placeholderTextColor="#64748b"
+                keyboardType="numeric"
+              />
+              {errors.estTipRangeMax && <Text style={styles.errorText}>{errors.estTipRangeMax}</Text>}
+            </View>
+          </View>
+        </View>
+      )}
     </View>
   );
 
@@ -311,6 +421,31 @@ const additionalStyles = {
     marginHorizontal: 10,
     color: '#64748b',
     fontWeight: '500',
+  },
+  tipsButtonContainer: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  tipsButton: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    alignItems: 'center',
+  },
+  tipsButtonActive: {
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb',
+  },
+  tipsButtonText: {
+    color: '#1e3a8a',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  tipsButtonTextActive: {
+    color: '#ffffff',
   },
 };
 

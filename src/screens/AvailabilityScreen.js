@@ -6,7 +6,8 @@ import { db, auth } from '../firebase';
 import { Ionicons } from '@expo/vector-icons';
 import firebase from 'firebase/compat/app';
 import ProgressStepper from '../components/ProgressStepper';
-// Replace the existing WebTimePicker component with this enhanced version
+
+// First, restore the WebTimePicker component at the top of the file
 const WebTimePicker = ({ value, onChange }) => {
   if (Platform.OS !== 'web') return null;
 
@@ -208,14 +209,23 @@ export default function AvailabilityScreen({ navigation, route }) {
     setTimeSlots(updatedSlots);
   };
 
-  const handleTimeChange = (index, field, time) => {
-    console.log('Updating time slot:', { index, field, time }); // Debug log
-    const updatedSlots = [...timeSlots];
-    updatedSlots[index] = {
-      ...updatedSlots[index],
-      [field]: time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
-    };
-    setTimeSlots(updatedSlots);
+  const handleTimeChange = (event, selectedTime) => {
+    if (event.type === 'set' && selectedTime) {
+      const { index, field } = showPickerModal;
+      const updatedSlots = [...timeSlots];
+      updatedSlots[index] = {
+        ...updatedSlots[index],
+        [field]: selectedTime.toLocaleTimeString([], { 
+          hour: '2-digit', 
+          minute: '2-digit', 
+          hour12: false 
+        })
+      };
+      setTimeSlots(updatedSlots);
+      setShowPickerModal({ show: false, index: null, field: '' });
+    } else if (event.type === 'dismissed') {
+      setShowPickerModal({ show: false, index: null, field: '' });
+    }
   };
 
   const openTimePickerModal = (index, field) => {
@@ -224,17 +234,6 @@ export default function AvailabilityScreen({ navigation, route }) {
       ? new Date(`1970-01-01T${timeSlots[index][field]}`)
       : new Date();
     setTempTime(currentTime);
-  };
-
-  const confirmTimeSelection = () => {
-    const { index, field } = showPickerModal;
-    const updatedSlots = [...timeSlots];
-    updatedSlots[index] = {
-      ...updatedSlots[index],
-      [field]: tempTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
-    };
-    setTimeSlots(updatedSlots);
-    setShowPickerModal({ show: false, index: null, field: '' });
   };
 
   const handleSaveAvailability = async () => {
@@ -435,7 +434,6 @@ export default function AvailabilityScreen({ navigation, route }) {
                             onChange={(event, selectedTime) => handleTimeChange(index, 'startTime', selectedTime)}
                           />
                         </View>
-                        <Text style={styles.toText}>to</Text>
                         <View style={styles.webTimePickerContainer}>
                           <Text style={styles.timeLabel}>End:</Text>
                           <WebTimePicker
@@ -452,7 +450,6 @@ export default function AvailabilityScreen({ navigation, route }) {
                         >
                           <Text>{slot.startTime || 'Start Time'}</Text>
                         </TouchableOpacity>
-                        <Text style={styles.toText}>to</Text>
                         <TouchableOpacity
                           style={styles.timeButton}
                           onPress={() => openTimePickerModal(index, 'endTime')}
@@ -485,7 +482,7 @@ export default function AvailabilityScreen({ navigation, route }) {
             </View>
           )}
 
-          {showPickerModal.show && (
+          {showPickerModal.show && Platform.OS === 'ios' && (
             <Modal transparent={true} animationType="slide">
               <View style={styles.modalContainer}>
                 <View style={styles.modalContent}>
@@ -495,7 +492,21 @@ export default function AvailabilityScreen({ navigation, route }) {
                     mode="time"
                     is24Hour={true}
                     display="spinner"
-                    onChange={handleTimeChange}
+                    onChange={(event, selectedTime) => {
+                      if (event.type === 'set' && selectedTime) {
+                        const { index, field } = showPickerModal;
+                        const updatedSlots = [...timeSlots];
+                        updatedSlots[index] = {
+                          ...updatedSlots[index],
+                          [field]: selectedTime.toLocaleTimeString([], { 
+                            hour: '2-digit', 
+                            minute: '2-digit', 
+                            hour12: false 
+                          })
+                        };
+                        setTimeSlots(updatedSlots);
+                      }
+                    }}
                   />
                   <View style={styles.modalButtonContainer}>
                     <TouchableOpacity
@@ -506,7 +517,7 @@ export default function AvailabilityScreen({ navigation, route }) {
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={[styles.modalButton, styles.confirmButton]}
-                      onPress={confirmTimeSelection}
+                      onPress={() => setShowPickerModal({ show: false, index: null, field: '' })}
                     >
                       <Text style={styles.modalButtonText}>Confirm</Text>
                     </TouchableOpacity>
@@ -515,7 +526,52 @@ export default function AvailabilityScreen({ navigation, route }) {
               </View>
             </Modal>
           )}
+
+          {showPickerModal.show && Platform.OS === 'android' && (
+            <DateTimePicker
+              value={tempTime}
+              mode="time"
+              is24Hour={true}
+              display="default"
+              onChange={(event, selectedTime) => {
+                if (event.type === 'set' && selectedTime) {
+                  const { index, field } = showPickerModal;
+                  const updatedSlots = [...timeSlots];
+                  updatedSlots[index] = {
+                    ...updatedSlots[index],
+                    [field]: selectedTime.toLocaleTimeString([], { 
+                      hour: '2-digit', 
+                      minute: '2-digit', 
+                      hour12: false 
+                    })
+                  };
+                  setTimeSlots(updatedSlots);
+                }
+                setShowPickerModal({ show: false, index: null, field: '' });
+              }}
+            />
+          )}
         </View>
+
+        {Object.keys(availability).length > 0 && (
+          <View style={styles.savedAvailabilityContainer}>
+            <Text style={styles.savedAvailabilityTitle}>Saved Availability</Text>
+            {Object.entries(availability).map(([day, dayData]) => (
+              <View key={day} style={styles.savedDayContainer}>
+                <View style={styles.savedDayHeader}>
+                  <Text style={styles.savedDayText}>{day}</Text>
+                </View>
+                <View style={styles.savedTimeSlotsContainer}>
+                  {dayData.slots?.map((slot, index) => (
+                    <Text key={index} style={styles.savedTimeSlot}>
+                      {slot.startTime} - {slot.endTime}
+                    </Text>
+                  ))}
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
       </ScrollView>
 
       <View style={styles.buttonContainer}>
@@ -699,7 +755,7 @@ const styles = StyleSheet.create({
     marginRight: 5,
   },
   confirmButton: {
-    backgroundColor: '#50cebb',
+    backgroundColor: '#4CAF50',
     marginLeft: 5,
   },
   modalButtonText: {
@@ -782,5 +838,46 @@ const styles = StyleSheet.create({
   },
   selectedDayButtonText: {
     color: '#ffffff',
+  },
+  savedAvailabilityContainer: {
+    padding: 16,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    marginHorizontal: 16,
+    marginTop: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  savedAvailabilityTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1e293b',
+    marginBottom: 16,
+  },
+  savedDayContainer: {
+    marginBottom: 12,
+  },
+  savedDayHeader: {
+    backgroundColor: '#f8fafc',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    marginBottom: 8,
+  },
+  savedDayText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#1e293b',
+  },
+  savedTimeSlotsContainer: {
+    paddingLeft: 12,
+  },
+  savedTimeSlot: {
+    fontSize: 14,
+    color: '#64748b',
+    marginBottom: 4,
   },
 });

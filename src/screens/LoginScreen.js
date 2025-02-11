@@ -30,32 +30,78 @@ export default function LoginScreen({ navigation }) {
       console.error("Error fetching user profile: ", error);
     }
   };
-
+ 
   const handleLogin = async () => {
     if (email.trim() === '' || password === '') {
       Alert.alert('Input Error', 'Please enter both email and password.');
       return;
     }
 
-    setLoading(true); // Start loading
+    setLoading(true);
 
     try {
-      console.log("Attempting to sign in with:", email);
+      // Attempt to sign in directly
       const userCredential = await auth.signInWithEmailAndPassword(email, password);
       const user = userCredential.user;
-      console.log("Sign-in successful:", user);
-
-      // Fetch and create the user profile instance
-      const currentUser = await fetchUserProfile(user.uid);
-      // You can now use `currentUser` throughout your app
       
-      // Navigate to the home screen
-      navigation.navigate('Home'); // Adjust as necessary
+      // Check if user has completed setup
+      const userDoc = await db.collection('users').doc(user.uid).get();
+      if (!userDoc.exists) {
+        throw new Error('User document not found');
+      }
+
+      const userData = userDoc.data();
+      const attributesCollection = userData.role === 'employer' ? 'job_attributes' : 'user_attributes';
+      const attributesDoc = await db.collection(attributesCollection).doc(user.uid).get();
+
+      // If setup is complete, navigate to Main
+      if (userDoc.exists && attributesDoc.exists && userData.setupComplete === true) {
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'Main' }],
+        });
+      }
+      // Don't navigate if setup is incomplete - App.js will handle this
+      
     } catch (error) {
       console.error("Login Error:", error);
-      Alert.alert('Login Error', error.message);
+      let errorMessage = 'An error occurred during login.';
+      
+      switch (error.code) {
+        case 'auth/user-not-found':
+          Alert.alert(
+            'Account Not Found',
+            'This email is not registered. Would you like to create an account?',
+            [
+              {
+                text: 'Sign Up',
+                onPress: () => navigation.navigate('SignUp'),
+                style: 'default',
+              },
+              {
+                text: 'Try Again',
+                style: 'cancel',
+              },
+            ]
+          );
+          break;
+        case 'auth/wrong-password':
+          errorMessage = 'Incorrect password. Please try again.';
+          Alert.alert('Login Error', errorMessage);
+          break;
+        case 'auth/invalid-email':
+          errorMessage = 'Invalid email format. Please check your email.';
+          Alert.alert('Login Error', errorMessage);
+          break;
+        case 'auth/user-disabled':
+          errorMessage = 'This account has been disabled. Please contact support.';
+          Alert.alert('Login Error', errorMessage);
+          break;
+        default:
+          Alert.alert('Login Error', errorMessage);
+      }
     } finally {
-      setLoading(false); // End loading
+      setLoading(false);
     }
   };
 
@@ -81,7 +127,10 @@ export default function LoginScreen({ navigation }) {
       />
 
       {loading ? (
-        <ActivityIndicator size="large" color="#0000ff" />
+        <ActivityIndicator 
+          color="#0000ff" 
+          style={{ transform: [{ scale: 1.4 }] }}
+        />
       ) : (
         <Button
           title="Login"

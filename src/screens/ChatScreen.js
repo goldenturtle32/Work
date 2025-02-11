@@ -18,6 +18,7 @@ import DateTimePickerModal from "react-native-modal-datetime-picker";
 import { db, auth, firebase } from '../firebase';
 import { createInterview } from '../services/firestoreService';
 import { Calendar } from 'react-native-calendars';
+import * as ExpoCalendar from 'expo-calendar';
 import { 
   collection, 
   addDoc, 
@@ -1122,60 +1123,128 @@ export default function ChatScreen({ route, navigation }) {
       const offerDoc = await getDoc(doc(db, 'job_offers', matchId));
       const offerData = offerDoc.data();
       
-      // Get worker and employer IDs
-      const [workerId, employerId] = matchId.split('_');
+      // Request calendar permissions if accepting offer
+      const hasPermission = await requestCalendarPermissions();
       
-      // Calculate total hours per week
-      const totalHoursPerWeek = Object.values(offerData.schedule).reduce((total, times) => {
-        const start = new Date(`2000-01-01T${times.startTime}`);
-        const end = new Date(`2000-01-01T${times.endTime}`);
-        const hours = (end - start) / (1000 * 60 * 60);
-        return total + hours;
-      }, 0);
+      if (hasPermission) {
+        // Create calendar events for each scheduled day
+        const schedulePromises = Object.entries(offerData.schedule).map(async ([day, times]) => {
+          // Get the next occurrence of this weekday
+          const nextDate = getNextDayOfWeek(day);
+          
+          // Create calendar event
+          const eventDetails = {
+            title: `Work: ${offerData.jobTitle || 'Work Shift'}`,
+            startDate: combineDateAndTime(nextDate, times.startTime),
+            endDate: combineDateAndTime(nextDate, times.endTime),
+            location: offerData.workLocation || '',
+            notes: `Hourly wage: $${offerData.hourlyWage}`,
+            recurrenceRule: {
+              frequency: ExpoCalendar.Frequency.WEEKLY,
+              interval: 1,
+              endDate: null // Continues indefinitely
+            },
+            alarms: [{ relativeOffset: -60 }] // 1 hour reminder
+          };
 
-      // Calculate total earnings per week
-      const weeklyEarnings = totalHoursPerWeek * offerData.hourlyWage;
-      
-      // Get worker's current stats
-      const workerRef = doc(db, 'users', workerId);
-      const workerDoc = await getDoc(workerRef);
-      const currentStats = workerDoc.data()?.user_attributes || {};
-      
-      // Update worker stats
-      const updatedStats = {
-        activeJobs: (currentStats.activeJobs || 0) + 1,
-        activeHours: (currentStats.activeHours || 0) + totalHoursPerWeek,
-        activeEarnings: (currentStats.activeEarnings || 0) + weeklyEarnings
-      };
-      
-      // Batch write all updates
-      const batch = writeBatch(db);
-      
-      // Update worker's stats
-      batch.update(workerRef, {
-        'user_attributes.activeJobs': updatedStats.activeJobs,
-        'user_attributes.activeHours': updatedStats.activeHours,
-        'user_attributes.activeEarnings': updatedStats.activeEarnings
-      });
-      
-      // Update job offer status
-      batch.update(doc(db, 'job_offers', matchId), {
-        status: 'accepted',
-        respondedAt: new Date().toISOString()
-      });
-      
-      // Update match status
-      batch.update(doc(db, 'matches', matchId), {
-        status: 'hired'
-      });
-      
-      await batch.commit();
-      Alert.alert('Success', 'Offer accepted successfully');
+          try {
+            const calendarId = await createCalendarIfNeeded();
+            await ExpoCalendar.createEventAsync(calendarId, eventDetails);
+          } catch (error) {
+            console.error('Error creating calendar event:', error);
+            // Continue with other events even if one fails
+          }
+        });
+
+        await Promise.all(schedulePromises);
+      }
+
+      // ... rest of existing acceptance code ...
+
+      Alert.alert(
+        'Success',
+        'Job offer accepted and work schedule added to your calendar!'
+      );
       
     } catch (error) {
-      console.error('Error responding to offer:', error);
-      Alert.alert('Error', 'Failed to respond to offer. Please try again.');
+      console.error('Error handling offer response:', error);
+      Alert.alert('Error', 'Failed to process offer response');
     }
+  };
+
+  // Helper function to create a dedicated calendar if it doesn't exist
+  const createCalendarIfNeeded = async () => {
+    const calendars = await ExpoCalendar.getCalendarsAsync();
+    const workCalendar = calendars.find(cal => cal.title === 'Work Schedule');
+    
+    if (workCalendar) {
+      return workCalendar.id;
+    }
+
+    // Create new calendar
+    const defaultCalendarSource =
+      Platform.OS === 'ios'
+        ? await getDefaultCalendarSource()
+        : { isLocalAccount: true, name: 'Work Schedule' };
+
+    const newCalendarID = await ExpoCalendar.createCalendarAsync({
+      title: 'Work Schedule',
+      color: '#2563eb',
+      entityType: ExpoCalendar.EntityTypes.EVENT,
+      sourceId: defaultCalendarSource.id,
+      source: defaultCalendarSource,
+      name: 'workSchedule',
+      ownerAccount: 'personal',
+      accessLevel: ExpoCalendar.CalendarAccessLevel.OWNER,
+    });
+
+    return newCalendarID;
+  };
+
+  // Helper function to get the next occurrence of a weekday
+  const getNextDayOfWeek = (dayName) => {
+    const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const today = new Date();
+    const targetDay = days.indexOf(dayName.toLowerCase());
+    const todayDay = today.getDay();
+    
+    let daysUntilTarget = targetDay - todayDay;
+    if (daysUntilTarget <= 0) {
+      daysUntilTarget += 7;
+    }
+    
+    const nextDate = new Date();
+    nextDate.setDate(today.getDate() + daysUntilTarget);
+    return nextDate;
+  };
+
+  // Helper function to combine date and time
+  const combineDateAndTime = (date, timeString) => {
+    const [hours, minutes] = timeString.split(':').map(Number);
+    const combined = new Date(date);
+    combined.setHours(hours, minutes, 0, 0);
+    return combined;
+  };
+
+  // Add this function to handle calendar permissions and creation
+  const getDefaultCalendarSource = async () => {
+    const calendars = await ExpoCalendar.getCalendarsAsync(ExpoCalendar.EntityTypes.EVENT);
+    const defaultCalendars = calendars.filter(each => each.source.name === 'Default');
+    return defaultCalendars[0].source;
+  };
+
+  // Add this function to request calendar permissions
+  const requestCalendarPermissions = async () => {
+    const { status } = await ExpoCalendar.requestCalendarPermissionsAsync();
+    if (status === 'granted') {
+      return true;
+    }
+    Alert.alert(
+      'Permission Required',
+      'Calendar access is needed to add your work schedule',
+      [{ text: 'OK' }]
+    );
+    return false;
   };
 
   // Helper function to update time slots

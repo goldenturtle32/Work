@@ -1,7 +1,14 @@
 // src/models/Job.js
 export default class Job {
   constructor(data) {
+    // User-specific fields
     this.id = data.id || '';
+    this.email = data.email || '';
+    this.role = data.role || '';
+    this.setupComplete = data.setupComplete !== undefined ? data.setupComplete : false;
+    this.createdAt = data.createdAt || null;
+    
+    // Job-specific fields
     this.location = data.location || '';
     this.requiredSkills = this.parseSkillsWithExperience(data.requiredSkills);
     this.requiredExperience = this.parseExperience(data.requiredExperience);
@@ -23,6 +30,13 @@ export default class Job {
     this.cityName = data.cityName || '';
     this.stateCode = data.stateCode || '';
     this.distance = data.distance !== undefined ? data.distance : null;
+    
+    // Add new tip-related fields
+    this.includesTips = data.includesTips || false;
+    this.tipRange = {
+      min: this.parseNumber(data.estTipRangeMin),
+      max: this.parseNumber(data.estTipRangeMax)
+    };
   }
 
   parseArray(value) {

@@ -19,6 +19,7 @@ import NewMatchModal from '../components/NewMatchModal';
 import styled from 'styled-components/native';
 import DotLoader from '../components/Loader';
 import { getFirestore, collection, query, where, getDocs } from 'firebase/firestore';
+import EmptyStateLoader from '../components/loaders/EmptyStateLoader';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -213,6 +214,134 @@ const calculateWeeklyHours = (availability) => {
   return Math.round(totalHours);
 };
 
+// Add these utility functions from the second example
+const getBackendUrl = () => {
+  if (Platform.OS === 'android') {
+    return 'http://10.0.2.2:5000';  // Android Emulator
+  } else if (Platform.OS === 'ios') {
+    if (Platform.isPad || Platform.isTV) {
+      return 'http://localhost:5000';  // iOS Simulator
+    } else {
+      return 'http://192.168.0.100:5000';  // Replace with your computer's IP
+    }
+  }
+  return 'http://localhost:5000';  // Default fallback
+};
+
+const BACKEND_URL = getBackendUrl();
+
+const calculateMatchScore = async (workerData, employerData) => {
+  try {
+    // Test backend connection
+    const testResponse = await fetch(`${BACKEND_URL}/test-backend`);
+    const testData = await testResponse.json();
+    console.log('Backend test response:', testData);
+
+    // Calculate match score
+    const requestData = {
+      userData: {
+        selectedJobs: workerData.selectedJobs || [],
+        location: workerData.location,
+        availability: workerData.availability,
+        locationPreference: 50000
+      },
+      itemData: {
+        selectedJobs: employerData.selectedJobs || [],
+        location: employerData.location,
+        availability: employerData.availability
+      }
+    };
+
+    const response = await fetch(`${BACKEND_URL}/calculate-match`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestData),
+      timeout: 10000
+    });
+
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    const { jobScore } = await response.json();
+
+    // Calculate location score
+    let locationScore = 0;
+    if (workerData.location && employerData.location) {
+      const distMiles = calculateDistance(
+        workerData.location.latitude,
+        workerData.location.longitude,
+        employerData.location.latitude,
+        employerData.location.longitude
+      );
+      const maxDistance = 50000;
+      locationScore = Math.max(0, (1 - distMiles / maxDistance) * 30);
+    }
+
+    // Calculate availability score
+    let availabilityScore = 0;
+    if (workerData.availability && employerData.availability) {
+      let matchingSlots = 0;
+      let totalSlots = 0;
+
+      Object.keys(employerData.availability).forEach((day) => {
+        const employerSlots = employerData.availability[day] || [];
+        const workerSlots = workerData.availability[day] || [];
+
+        const eSlots = Array.isArray(employerSlots) ? employerSlots : employerSlots.slots || [];
+        const wSlots = Array.isArray(workerSlots) ? workerSlots : workerSlots.slots || [];
+
+        eSlots.forEach((eSlot) => {
+          totalSlots++;
+          wSlots.forEach((wSlot) => {
+            if (checkTimeOverlap(eSlot, wSlot)) matchingSlots++;
+          });
+        });
+      });
+
+      availabilityScore = totalSlots > 0 ? (matchingSlots / totalSlots) * 30 : 0;
+    }
+
+    const totalScore = (jobScore || 0) + locationScore + availabilityScore;
+
+    // Log scoring breakdown
+    console.log('\n=== [Worker→Employer] Scoring Breakdown ===');
+    console.log(`Employer:        ${employerData.companyName || 'No Name'}`);
+    console.log(`Job Score (40):  ${jobScore ? jobScore.toFixed(2) : 0}`);
+    console.log(`Loc Score (30):  ${locationScore.toFixed(2)}`);
+    console.log(`Avail Score(30): ${availabilityScore.toFixed(2)}`);
+    console.log(`Total:           ${totalScore.toFixed(2)}`);
+    console.log('==========================================\n');
+
+    return totalScore;
+  } catch (err) {
+    console.error('Error in calculateMatchScore:', err);
+    return 0;
+  }
+};
+
+const renderSkills = (skills) => {
+  if (!Array.isArray(skills)) return null;
+  
+  return skills.map((skill, index) => {
+    // Ensure we have a string representation of the skill
+    let skillDisplay = '';
+    
+    if (typeof skill === 'object' && skill !== null) {
+      // Handle object format
+      const name = skill.name || '';
+      const years = skill.yearsOfExperience ? ` • ${skill.yearsOfExperience}yr` : '';
+      skillDisplay = `${name}${years}`;
+    } else {
+      // Handle string format
+      skillDisplay = String(skill || '');
+    }
+
+    return (
+      <View key={`skill-${index}`} style={styles.skillBubble}>
+        <Text style={styles.skillText}>{skillDisplay.trim()}</Text>
+      </View>
+    );
+  });
+};
+
 export default function HomeScreen({ navigation }) {
   const [items, setItems] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
@@ -269,90 +398,55 @@ export default function HomeScreen({ navigation }) {
   };
 
   useEffect(() => {
-    const fetchUserData = async () => {
+    const fetchData = async () => {
       try {
-        console.log('Current User:', auth.currentUser);
         if (!auth.currentUser) return;
 
-        const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
-        if (userDoc.exists) {
-          const userData = userDoc.data();
-          setCurrentUser(new User({ 
-            uid: userDoc.id, 
-            ...userData,
-            location: userData.location 
-          }));
-
-          if (userData.role === 'worker') {
-            const jobAttributesSnapshot = await db.collection('job_attributes').get();
-            const jobsData = jobAttributesSnapshot.docs.map(doc => {
-              const jobData = doc.data();
-              console.log('Complete job data from Firebase:', JSON.stringify(jobData, null, 2));
-              
-              // Calculate distance if both locations are available
-              let distance = null;
-              if (jobData.location && userData.location) {
-                distance = calculateDistance(
-                  userData.location.latitude,
-                  userData.location.longitude,
-                  jobData.location.latitude,
-                  jobData.location.longitude
-                );
-              }
-              
-              // Create job object with correct field mapping
-              return new Job({ 
-                id: doc.id,
-                ...jobData,
-                distance // Pass the calculated distance
-              });
-            });
-            console.log("Formatted items:", jobsData);
-            setItems(jobsData);
-          } else if (userData.role === 'employer') {
-            const userAttributesSnapshot = await db.collection('user_attributes')
-              .where('role', '==', 'worker').get();
-            const candidatesData = userAttributesSnapshot.docs.map(doc => {
-              const candidateData = doc.data();
-              console.log('Raw candidate data from Firebase:', JSON.stringify({
-                id: doc.id,
-                candidateData,
-                overview: candidateData.user_overview,
-                keys: Object.keys(candidateData)
-              }, null, 2));
-              const distance = candidateData.location && userData.location ? 
-                calculateDistance(
-                  userData.location.latitude,
-                  userData.location.longitude,
-                  candidateData.location.latitude,
-                  candidateData.location.longitude
-                ) : null;
-              
-              console.log('Creating worker candidate:', {
-                docId: doc.id,
-                candidateData: candidateData
-              });
-              
-              return new User({ 
-                id: doc.id,
-                uid: doc.id,
-                ...candidateData,
-                distance 
-              });
-            });
-            console.log("Formatted items:", candidatesData);
-            setItems(candidatesData);
-          }
+        // Get worker data
+        const workerDoc = await db.collection('user_attributes').doc(auth.currentUser.uid).get();
+        if (!workerDoc.exists) {
+          setIsLoading(false);
+          return;
         }
+
+        const workerData = workerDoc.data();
+        setCurrentUser(workerData);
+
+        // Get all employers
+        const employersSnapshot = await db.collection('job_attributes').get();
+        
+        // Calculate match scores for each employer
+        const employersWithScores = await Promise.all(
+          employersSnapshot.docs.map(async (doc) => {
+            const employerData = doc.data();
+            
+            // Calculate match score
+            const matchScore = await calculateMatchScore(
+              workerData,
+              employerData
+            );
+
+            return {
+              ...employerData,
+              id: doc.id,
+              matchScore
+            };
+          })
+        );
+
+        // Sort by match score (highest first)
+        employersWithScores.sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));
+        
+        setItems(employersWithScores);
+        setIsLoading(false);
       } catch (error) {
-        console.error("Error fetching data:", error);
-        setError(`Failed to fetch data: ${error.message}`);
-      } finally {
+        console.error('Error fetching data:', error);
+        setError(error.message);
         setIsLoading(false);
       }
     };
 
-    fetchUserData();
+    fetchData();
   }, []);
 
   useEffect(() => {
@@ -443,9 +537,10 @@ export default function HomeScreen({ navigation }) {
   const onSwipedLeft = (cardIndex) => handleSwipe(cardIndex, false);
 
   const onSwipedAll = () => {
-    console.log("All cards swiped, items length:", items.length);
-    setItems([]); // Clear the items when all cards are swiped
-    Alert.alert('End of List', 'You have swiped through all available items.');
+    // Clear any existing match data when all cards are swiped
+    setShowMatchModal(false);
+    setMatchData(null);
+    setMatchedJob(null);
   };
 
   const handleJobPress = (item) => {
@@ -515,8 +610,8 @@ export default function HomeScreen({ navigation }) {
     console.log('Item salary range:', item.salaryRange || item.estPayRange || {min: item.estPayRangeMin, max: item.estPayRangeMax});
 
     const payRange = {
-      min: item.salaryRange?.min || item.estPayRangeMin || 0,
-      max: item.salaryRange?.max || item.estPayRangeMax || 0
+      min: item.estPayRangeMin || 0,
+      max: item.estPayRangeMax || 0
     };
     console.log('Pay range:', payRange);
 
@@ -608,7 +703,7 @@ export default function HomeScreen({ navigation }) {
                   item.requiredSkills.map((skill, index) => (
                     <View key={index} style={styles.skillBubble}>
                       <Text style={styles.skillText}>
-                        {skill.name} • {skill.yearsOfExperience}yr
+                        {typeof skill === 'object' ? `${skill.name || ''} • ${skill.yearsOfExperience || 0}yr` : skill}
                       </Text>
                     </View>
                   ))
@@ -723,7 +818,7 @@ export default function HomeScreen({ navigation }) {
         <TouchableOpacity style={styles.retryButton} onPress={() => {
           setIsLoading(true);
           setError(null);
-          fetchUserData();
+          fetchData();
         }}>
           <Text style={styles.retryButtonText}>Retry</Text>
         </TouchableOpacity>
@@ -737,81 +832,89 @@ export default function HomeScreen({ navigation }) {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       {isLoading ? (
-        <ActivityIndicator size="large" color="#0000ff" />
-      ) : (
-        <View style={styles.container}>
-          {items.length === 0 ? (
-            <View style={styles.loaderContainer}>
-              <DotLoader />
-              <Text style={styles.noItemsText}>No more items to show</Text>
-            </View>
-          ) : (
-            <Swiper
-              ref={swiperRef}
-              cards={items}
-              renderCard={renderCard}
-              onSwipedRight={(cardIndex) => handleSwipe(cardIndex, true)}
-              onSwipedLeft={(cardIndex) => handleSwipe(cardIndex, false)}
-              onSwipedAll={onSwipedAll}
-              cardIndex={0}
-              backgroundColor={'#f0f0f0'}
-              stackSize={3}
-              stackSeparation={15}
-              animateCardOpacity
-              verticalSwipe={false}
-              overlayLabels={{
-                left: {
-                  title: 'NOPE',
-                  style: {
-                    label: {
-                      backgroundColor: '#FF4136',
-                      color: 'white',
-                      fontSize: 24,
-                      borderRadius: 10,
-                      padding: 10,
-                    },
-                    wrapper: {
-                      flexDirection: 'column',
-                      alignItems: 'flex-end',
-                      justifyContent: 'flex-start',
-                      marginTop: 20,
-                      marginLeft: -20,
-                    },
-                  },
-                },
-                right: {
-                  title: 'LIKE',
-                  style: {
-                    label: {
-                      backgroundColor: '#2ECC40',
-                      color: 'white',
-                      fontSize: 24,
-                      borderRadius: 10,
-                      padding: 10,
-                    },
-                    wrapper: {
-                      flexDirection: 'column',
-                      alignItems: 'flex-start',
-                      justifyContent: 'flex-start',
-                      marginTop: 20,
-                      marginLeft: 20,
-                    },
-                  },
-                },
-              }}
-            />
-          )}
-
-          <NewMatchModal 
-            visible={showMatchModal}
-            onClose={() => {
-              setShowMatchModal(false);
-              setMatchData(null);
-            }}
-            jobData={matchedJob}
-            matchData={matchData}
-          />
+        <View style={styles.loaderContainer}>
+          <ActivityIndicator size="large" color="#0000ff" />
         </View>
+      ) : items.length === 0 ? (
+        <View style={styles.noItemsContainer}>
+          <EmptyStateLoader />
+        </View>
+      ) : (
+        <Swiper
+          ref={swiperRef}
+          cards={items}
+          renderCard={renderCard}
+          onSwipedRight={(cardIndex) => handleSwipe(cardIndex, true)}
+          onSwipedLeft={(cardIndex) => handleSwipe(cardIndex, false)}
+          onSwipedAll={onSwipedAll}
+          cardIndex={0}
+          backgroundColor={'#f0f0f0'}
+          stackSize={3}
+          stackSeparation={15}
+          animateCardOpacity
+          verticalSwipe={false}
+          overlayLabels={{
+            left: {
+              title: 'NOPE',
+              style: {
+                label: {
+                  backgroundColor: '#FF4136',
+                  color: 'white',
+                  fontSize: 24,
+                  borderRadius: 10,
+                  padding: 10,
+                },
+                wrapper: {
+                  flexDirection: 'column',
+                  alignItems: 'flex-end',
+                  justifyContent: 'flex-start',
+                  marginTop: 20,
+                  marginLeft: -20,
+                },
+              },
+            },
+            right: {
+              title: 'LIKE',
+              style: {
+                label: {
+                  backgroundColor: '#2ECC40',
+                  color: 'white',
+                  fontSize: 24,
+                  borderRadius: 10,
+                  padding: 10,
+                },
+                wrapper: {
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  justifyContent: 'flex-start',
+                  marginTop: 20,
+                  marginLeft: 20,
+                },
+              },
+            },
+          }}
+        />
+      )}
+
+      {showMatchModal && matchedJob && (
+        <NewMatchModal 
+          visible={showMatchModal}
+          onClose={() => {
+            setShowMatchModal(false);
+            setMatchData(null);
+            setMatchedJob(null);
+          }}
+          jobData={matchedJob}
+          matchData={matchData}
+        >
+          <View style={styles.skillsContainer}>
+            {matchedJob.requiredSkills?.length > 0 ? (
+              renderSkills(matchedJob.requiredSkills)
+            ) : (
+              <Text style={styles.noSkillsText}>No required skills specified</Text>
+            )}
+          </View>
+        </NewMatchModal>
       )}
     </KeyboardAvoidingView>
   );
@@ -845,7 +948,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   jobTitle: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: '600',
     color: '#1f2937',
   },
@@ -940,12 +1043,13 @@ const styles = StyleSheet.create({
   },
   noItemsContainer: {
     flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  loaderContainer: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  noItemsText: {
-    fontSize: 18,
-    color: '#1e3a8a',
+    backgroundColor: '#ffffff',
   },
   errorContainer: {
     flex: 1,
@@ -1008,13 +1112,6 @@ const styles = StyleSheet.create({
   matchingSkillText: {
     color: '#ffffff',
     fontWeight: 'bold',
-  },
-  loaderContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    height: SCREEN_HEIGHT * 0.7,
-    marginBottom: 20,
   },
   noItemsText: {
     marginTop: 20,

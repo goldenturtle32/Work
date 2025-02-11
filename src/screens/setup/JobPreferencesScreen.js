@@ -18,6 +18,7 @@ import { fetchTrendingIndustries, fetchTrendingJobs, fetchTrendingSkills } from 
 import { auth, db } from '../../firebase';
 import firebase from 'firebase/compat/app';
 import 'firebase/compat/firestore';
+import axios from 'axios';
 
 const defaultIndustries = [
   "Technology",
@@ -101,9 +102,10 @@ export default function JobPreferencesScreen({ navigation }) {
     skills: []
   });
   const [suggestions, setSuggestions] = useState({
-    industries: [],
+    industries: industries,
     jobTypes: [],
-    skills: []
+    skills: [],
+    isLoading: false
   });
   const [inputValues, setInputValues] = useState({
     industryPrefs: '',
@@ -121,6 +123,9 @@ export default function JobPreferencesScreen({ navigation }) {
   const [stateCode, setStateCode] = useState('');
   const [selectedJobs, setSelectedJobs] = useState(setupData.selectedJobs || []);
   const [jobTypeSearchText, setJobTypeSearchText] = useState('');
+  const [showPreferences, setShowPreferences] = useState(false);
+  const [preferredIndustry, setPreferredIndustry] = useState('');
+  const [preferredJobType, setPreferredJobType] = useState('');
   console.log('Initial selectedJobs state:', selectedJobs);
 
   useEffect(() => {
@@ -224,22 +229,38 @@ export default function JobPreferencesScreen({ navigation }) {
     fetchUserLocation();
   }, [userRole]);
 
-  const updateIndustrySuggestions = useCallback(
-    debounce(async (searchTerm) => {
-      try {
-        const locationString = cityName && stateCode ? `${cityName}, ${stateCode}` : '';
-        const industries = await fetchTrendingIndustries(searchTerm, locationString);
-        
+  const updateIndustrySuggestions = (searchText) => {
+    console.log('Updating industry suggestions with:', searchText);
+    try {
+      if (!searchText) {
+        // If empty, show all industries
         setSuggestions(prev => ({
           ...prev,
-          industries: industries.slice(0, 15) // Show up to 15 results
+          industries: industries
         }));
-      } catch (error) {
-        console.error('Error updating industry suggestions:', error);
+        return;
       }
-    }, 300),
-    [cityName, stateCode]
-  );
+
+      // Filter industries based on search text
+      const filteredIndustries = industries.filter(industry =>
+        industry.toLowerCase().includes(searchText.toLowerCase())
+      );
+      
+      console.log('Filtered industries:', filteredIndustries);
+      
+      setSuggestions(prev => ({
+        ...prev,
+        industries: filteredIndustries
+      }));
+    } catch (error) {
+      console.error('Error updating industry suggestions:', error);
+      // Fallback to all industries on error
+      setSuggestions(prev => ({
+        ...prev,
+        industries: industries
+      }));
+    }
+  };
 
   const updateJobTypeSuggestions = useCallback(
     async (industry) => {
@@ -575,6 +596,8 @@ export default function JobPreferencesScreen({ navigation }) {
 
         await db.collection('user_attributes').doc(auth.currentUser.uid).set({
           selectedJobs: setupData.selectedJobs,
+          preferredIndustry: preferredIndustry.trim() || null,
+          preferredJobType: preferredJobType.trim() || null,
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
 
@@ -589,21 +612,48 @@ export default function JobPreferencesScreen({ navigation }) {
   const handleIndustrySelect = (industry) => {
     console.log('handleIndustrySelect called with:', industry);
     
+    // Update all states
     setAttributes(prev => ({
       ...prev,
       industryPrefs: [industry]
     }));
-    setSelectedIndustry(industry);
     
-    // Update setupData
-    updateSetupData({
-      ...setupData,
+    setInputValues(prev => ({
+      ...prev,
+      industryPrefs: industry
+    }));
+    
+    updateSetupData(prev => ({
+      ...prev,
       industryPrefs: [industry]
-    });
+    }));
 
-    // Fetch job suggestions when industry is selected
-    fetchJobSuggestions(industry);
+    // Clear job type when industry changes
+    setSelectedJobType('');
+    setJobTypeSearchText('');
+    
+    console.log('Updated states:', {
+      attributes: { industryPrefs: [industry] },
+      inputValues: { industryPrefs: industry },
+      setupData: { industryPrefs: [industry] }
+    });
   };
+
+  const handleIndustryPress = (industry) => {
+    console.log('Industry pressed:', industry);
+    if (!setupData.industryPrefs?.includes(industry)) {
+      handleIndustrySelect(industry);
+    }
+  };
+
+  const renderIndustryItem = ({ item }) => (
+    <TouchableOpacity
+      style={styles.dropdownItem}
+      onPress={() => handleIndustryPress(item)}
+    >
+      <Text>{item}</Text>
+    </TouchableOpacity>
+  );
 
   const removeJob = async (index) => {
     try {
@@ -655,13 +705,28 @@ export default function JobPreferencesScreen({ navigation }) {
         `&searchTerm=${encodeURIComponent(jobTypeSearchText)}` +
         `&location=${encodeURIComponent(locationString)}`;
       
-      console.log('Fetching job suggestions from:', url);
+      console.log('BACKEND_URL:', BACKEND_URL);
+      console.log('Attempting to fetch job suggestions from:', url);
       
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+      });
+
       if (!response.ok) { 
+        console.error('Response not OK:', {
+          status: response.status,
+          statusText: response.statusText,
+          url: response.url
+        });
         throw new Error(`HTTP error! status: ${response.status}`);
       }
+
       const data = await response.json();
+      console.log('Response data:', data);
       
       if (data.success) {
         console.log('Received job suggestions:', data.jobs);
@@ -673,7 +738,11 @@ export default function JobPreferencesScreen({ navigation }) {
         console.error('Error in job suggestions response:', data.error);
       }
     } catch (error) {
-      console.error('Error fetching job suggestions:', error);
+      console.error('Detailed fetch error:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      });
       setSuggestions(prev => ({
         ...prev,
         jobTypes: []
@@ -835,138 +904,422 @@ export default function JobPreferencesScreen({ navigation }) {
     </View>
   );
 
+  // Add this useEffect to initialize suggestions
+  useEffect(() => {
+    setSuggestions(prev => ({
+      ...prev,
+      industries: industries
+    }));
+  }, []);
+
+  const renderContent = () => (
+    <>
+      <View style={styles.header}>
+        <Text style={styles.title}>
+          {userRole === 'employer' 
+            ? "Tell us about the position"
+            : "Select your job preferences"}
+        </Text>
+        <Text style={styles.subtitle}>
+          {userRole === 'employer'
+            ? "Define the role you're hiring for"
+            : "Choose industries and roles you're interested in"}
+        </Text>
+      </View>
+
+      <View style={styles.form}>
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>Industry</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Select Industry"
+            value={selectedIndustry || inputValues.industryPrefs}
+            onFocus={() => {
+              console.log('Industry input focused');
+              setShowIndustryDropdown(true);
+              updateIndustrySuggestions('');
+            }}
+            onBlur={() => {
+              console.log('Input blurred');
+              setTimeout(() => setShowIndustryDropdown(false), 200);
+            }}
+          />
+          {showIndustryDropdown && (
+            <View style={styles.suggestionsContainer}>
+              {industries.map((industry, index) => (
+                <TouchableOpacity
+                  key={index}
+                  style={styles.suggestionItem}
+                  onPress={() => {
+                    handleIndustrySelect(industry);
+                    setShowIndustryDropdown(false);
+                  }}
+                >
+                  <Text style={styles.suggestionText}>{industry}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </View>
+
+        {/* Display selected industries */}
+        <View style={styles.selectedItemsContainer}>
+          {setupData.industryPrefs?.map((industry, index) => (
+            <View key={index} style={styles.selectedItem}>
+              <Text>{industry}</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  const updatedPrefs = setupData.industryPrefs.filter((_, i) => i !== index);
+                  updateSetupData({
+                    ...setupData,
+                    industryPrefs: updatedPrefs
+                  });
+                }}
+              >
+                <Ionicons name="close-circle" size={20} color="red" />
+              </TouchableOpacity>
+            </View>
+          ))}
+        </View>
+
+        {attributes.industryPrefs?.[0] && (
+          <>
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Job Type</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Select or Type Job Title"
+                value={selectedJobType || jobTypeSearchText}
+                editable={true}
+                onChangeText={(text) => {
+                  setJobTypeSearchText(text);
+                  setSelectedJobType(''); // Clear selected job when typing
+                  if (attributes.industryPrefs?.[0]) {
+                    fetchJobSuggestions(attributes.industryPrefs[0]);
+                  }
+                }}
+                onFocus={() => {
+                  console.log('Job Type input focused');
+                  setShowJobTypeDropdown(true);
+                  if (attributes.industryPrefs?.[0]) {
+                    fetchJobSuggestions(attributes.industryPrefs[0]);
+                  }
+                }}
+                onBlur={() => {
+                  console.log('Job Type input blurred');
+                  // If there's text but no selection was made, use the typed text
+                  if (jobTypeSearchText && !selectedJobType) {
+                    setSelectedJobType(jobTypeSearchText);
+                    handleJobTypeSelect(jobTypeSearchText);
+                  }
+                  setTimeout(() => setShowJobTypeDropdown(false), 200);
+                }}
+              />
+              {showJobTypeDropdown && (
+                <View style={styles.dropdown}>
+                  {/* Show typed text as first option if it doesn't match any suggestions */}
+                  {jobTypeSearchText && 
+                   !suggestions.jobTypes.some(job => 
+                     job.toLowerCase() === jobTypeSearchText.toLowerCase()
+                   ) && (
+                    <TouchableOpacity
+                      style={[styles.dropdownItem, styles.customDropdownItem]}
+                      onPress={() => {
+                        setSelectedJobType(jobTypeSearchText);
+                        handleJobTypeSelect(jobTypeSearchText);
+                        setShowJobTypeDropdown(false);
+                      }}
+                    >
+                      <Text>Use: "{jobTypeSearchText}"</Text>
+                    </TouchableOpacity>
+                  )}
+                  
+                  {/* Show filtered suggestions */}
+                  {suggestions.jobTypes
+                    .filter(jobType => 
+                      !jobTypeSearchText || 
+                      jobType.toLowerCase().includes(jobTypeSearchText.toLowerCase())
+                    )
+                    .map((jobType) => (
+                      <TouchableOpacity
+                        key={jobType}
+                        style={styles.dropdownItem}
+                        onPress={() => {
+                          setSelectedJobType(jobType);
+                          setJobTypeSearchText('');
+                          handleJobTypeSelect(jobType);
+                          setShowJobTypeDropdown(false);
+                        }}
+                      >
+                        <Text>{jobType}</Text>
+                      </TouchableOpacity>
+                    ))}
+                </View>
+              )}
+            </View>
+
+            {/* Skills Selection - Show when job type is selected */}
+            {attributes.jobTypePrefs && renderSkills()}
+          </>
+        )}
+      </View>
+    </>
+  );
+
+  // Add or modify the isFormValid function
+  const isFormValid = () => {
+    if (userRole === 'employer') {
+      return (
+        setupData.industryPrefs?.length > 0 &&
+        setupData.selectedJobs?.length > 0 &&
+        setupData.skills?.length > 0
+      );
+    } else {
+      // Worker validation logic
+      return setupData.selectedJobs?.length > 0; // Only check if they've added at least one job
+    }
+  };
+
   return (
     <View style={styles.container}>
       <ProgressStepper currentStep={3} />
       
-      <ScrollView style={styles.content}>
-        <View style={styles.header}>
-          <Text style={styles.title}>
-            {userRole === 'employer' 
-              ? "Tell us about the position"
-              : "Select your job preferences"}
-          </Text>
-          <Text style={styles.subtitle}>
-            {userRole === 'employer'
-              ? "Define the role you're hiring for"
-              : "Choose industries and roles you're interested in"}
-          </Text>
-        </View>
-
-        <View style={styles.form}>
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Industry</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Select Industry"
-              value={selectedIndustry || attributes?.industryPrefs?.[0] || ''}
-              onFocus={() => {
-                console.log('Industry input focused');
-                setShowIndustryDropdown(true);
-              }}
-              onBlur={() => {
-                console.log('Input blurred');
-                // Add slight delay to allow selection to process
-                setTimeout(() => setShowIndustryDropdown(false), 200);
-              }}
-            />
-            {showIndustryDropdown && (
-              <View style={styles.dropdown}>
-                {industries.map((industry) => (
-                  <TouchableOpacity
-                    key={industry}
-                    style={styles.dropdownItem}
-                    onPress={() => {
-                      setSelectedIndustry(industry);
-                      handleIndustrySelect(industry);
-                      setShowIndustryDropdown(false);
-                    }}
-                  >
-                    <Text>{industry}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
+      <ScrollView keyboardShouldPersistTaps="handled">
+        <View style={styles.content}>
+          <View style={styles.header}>
+            <Text style={styles.title}>
+              {userRole === 'employer' 
+                ? "Tell us about the position"
+                : "Select your job preferences"}
+            </Text>
+            <Text style={styles.subtitle}>
+              {userRole === 'employer'
+                ? "Define the role you're hiring for"
+                : "Choose industries and roles you're interested in"}
+            </Text>
           </View>
 
-          {attributes.industryPrefs?.[0] && (
-            <>
-              <View style={styles.inputContainer}>
-                <Text style={styles.label}>Job Type</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Select or Type Job Title"
-                  value={selectedJobType || jobTypeSearchText}
-                  editable={true}
-                  onChangeText={(text) => {
-                    setJobTypeSearchText(text);
-                    setSelectedJobType(''); // Clear selected job when typing
-                    if (attributes.industryPrefs?.[0]) {
-                      fetchJobSuggestions(attributes.industryPrefs[0]);
-                    }
-                  }}
-                  onFocus={() => {
-                    console.log('Job Type input focused');
-                    setShowJobTypeDropdown(true);
-                    if (attributes.industryPrefs?.[0]) {
-                      fetchJobSuggestions(attributes.industryPrefs[0]);
-                    }
-                  }}
-                  onBlur={() => {
-                    console.log('Job Type input blurred');
-                    // If there's text but no selection was made, use the typed text
-                    if (jobTypeSearchText && !selectedJobType) {
-                      setSelectedJobType(jobTypeSearchText);
-                      handleJobTypeSelect(jobTypeSearchText);
-                    }
-                    setTimeout(() => setShowJobTypeDropdown(false), 200);
-                  }}
-                />
-                {showJobTypeDropdown && (
-                  <View style={styles.dropdown}>
-                    {/* Show typed text as first option if it doesn't match any suggestions */}
-                    {jobTypeSearchText && 
-                     !suggestions.jobTypes.some(job => 
-                       job.toLowerCase() === jobTypeSearchText.toLowerCase()
-                     ) && (
-                      <TouchableOpacity
-                        style={[styles.dropdownItem, styles.customDropdownItem]}
-                        onPress={() => {
-                          setSelectedJobType(jobTypeSearchText);
-                          handleJobTypeSelect(jobTypeSearchText);
-                          setShowJobTypeDropdown(false);
-                        }}
-                      >
-                        <Text>Use: "{jobTypeSearchText}"</Text>
-                      </TouchableOpacity>
-                    )}
-                    
-                    {/* Show filtered suggestions */}
-                    {suggestions.jobTypes
-                      .filter(jobType => 
-                        !jobTypeSearchText || 
-                        jobType.toLowerCase().includes(jobTypeSearchText.toLowerCase())
-                      )
-                      .map((jobType) => (
+          <View style={styles.form}>
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Industry</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Select Industry"
+                value={selectedIndustry || inputValues.industryPrefs}
+                onFocus={() => {
+                  console.log('Industry input focused');
+                  setShowIndustryDropdown(true);
+                  updateIndustrySuggestions('');
+                }}
+                onBlur={() => {
+                  console.log('Input blurred');
+                  setTimeout(() => setShowIndustryDropdown(false), 200);
+                }}
+              />
+              {showIndustryDropdown && (
+                <View style={styles.suggestionsContainer}>
+                  {industries.map((industry, index) => (
+                    <TouchableOpacity
+                      key={index}
+                      style={styles.suggestionItem}
+                      onPress={() => {
+                        handleIndustrySelect(industry);
+                        setShowIndustryDropdown(false);
+                      }}
+                    >
+                      <Text style={styles.suggestionText}>{industry}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+            </View>
+
+            {/* Display selected industries */}
+            <View style={styles.selectedItemsContainer}>
+              {setupData.industryPrefs?.map((industry, index) => (
+                <View key={index} style={styles.selectedItem}>
+                  <Text>{industry}</Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      const updatedPrefs = setupData.industryPrefs.filter((_, i) => i !== index);
+                      updateSetupData({
+                        ...setupData,
+                        industryPrefs: updatedPrefs
+                      });
+                    }}
+                  >
+                    <Ionicons name="close-circle" size={20} color="red" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+
+            {attributes.industryPrefs?.[0] && (
+              <>
+                <View style={styles.inputContainer}>
+                  <Text style={styles.label}>Job Type</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Select or Type Job Title"
+                    value={selectedJobType || jobTypeSearchText}
+                    editable={true}
+                    onChangeText={(text) => {
+                      setJobTypeSearchText(text);
+                      setSelectedJobType(''); // Clear selected job when typing
+                      if (attributes.industryPrefs?.[0]) {
+                        fetchJobSuggestions(attributes.industryPrefs[0]);
+                      }
+                    }}
+                    onFocus={() => {
+                      console.log('Job Type input focused');
+                      setShowJobTypeDropdown(true);
+                      if (attributes.industryPrefs?.[0]) {
+                        fetchJobSuggestions(attributes.industryPrefs[0]);
+                      }
+                    }}
+                    onBlur={() => {
+                      console.log('Job Type input blurred');
+                      // If there's text but no selection was made, use the typed text
+                      if (jobTypeSearchText && !selectedJobType) {
+                        setSelectedJobType(jobTypeSearchText);
+                        handleJobTypeSelect(jobTypeSearchText);
+                      }
+                      setTimeout(() => setShowJobTypeDropdown(false), 200);
+                    }}
+                  />
+                  {showJobTypeDropdown && (
+                    <View style={styles.dropdown}>
+                      {/* Show typed text as first option if it doesn't match any suggestions */}
+                      {jobTypeSearchText && 
+                       !suggestions.jobTypes.some(job => 
+                         job.toLowerCase() === jobTypeSearchText.toLowerCase()
+                       ) && (
                         <TouchableOpacity
-                          key={jobType}
-                          style={styles.dropdownItem}
+                          style={[styles.dropdownItem, styles.customDropdownItem]}
                           onPress={() => {
-                            setSelectedJobType(jobType);
-                            setJobTypeSearchText('');
-                            handleJobTypeSelect(jobType);
+                            setSelectedJobType(jobTypeSearchText);
+                            handleJobTypeSelect(jobTypeSearchText);
                             setShowJobTypeDropdown(false);
                           }}
                         >
-                          <Text>{jobType}</Text>
+                          <Text>Use: "{jobTypeSearchText}"</Text>
                         </TouchableOpacity>
-                      ))}
-                  </View>
-                )}
-              </View>
+                      )}
+                      
+                      {/* Show filtered suggestions */}
+                      {suggestions.jobTypes
+                        .filter(jobType => 
+                          !jobTypeSearchText || 
+                          jobType.toLowerCase().includes(jobTypeSearchText.toLowerCase())
+                        )
+                        .map((jobType) => (
+                          <TouchableOpacity
+                            key={jobType}
+                            style={styles.dropdownItem}
+                            onPress={() => {
+                              setSelectedJobType(jobType);
+                              setJobTypeSearchText('');
+                              handleJobTypeSelect(jobType);
+                              setShowJobTypeDropdown(false);
+                            }}
+                          >
+                            <Text>{jobType}</Text>
+                          </TouchableOpacity>
+                        ))}
+                    </View>
+                  )}
+                </View>
 
-              {/* Skills Selection - Show when job type is selected */}
-              {attributes.jobTypePrefs && renderSkills()}
+                {/* Skills Selection - Show when job type is selected */}
+                {attributes.jobTypePrefs && renderSkills()}
+              </>
+            )}
+          </View>
+
+          {/* Add Job button and Selected Jobs section for workers */}
+          {userRole === 'worker' && (
+            <>
+              <TouchableOpacity 
+                style={[
+                  styles.addJobButton, 
+                  (!attributes.industryPrefs[0] || !attributes.jobTypePrefs || attributes.skills.length === 0) && 
+                  styles.addJobButtonDisabled
+                ]} 
+                onPress={handleAddJob}
+                disabled={!attributes.industryPrefs[0] || !attributes.jobTypePrefs || attributes.skills.length === 0}
+              >
+                <Text style={styles.addJobButtonText}>Add Selected Job</Text>
+              </TouchableOpacity>
+
+              {selectedJobs.length > 0 && (
+                <View style={styles.selectedJobsContainer}>
+                  <Text style={styles.selectedJobsTitle}>
+                    Selected Jobs ({selectedJobs.length})
+                  </Text>
+                  {selectedJobs.map((job, index) => (
+                    <View key={index} style={styles.selectedJobItem}>
+                      <View style={styles.selectedJobInfo}>
+                        <Text style={styles.jobTitle}>{job.title}</Text>
+                        <Text style={styles.jobIndustry}>{job.industry}</Text>
+                        <Text style={styles.jobSkills}>
+                          Skills: {job.skills.map(skill => skill.name).join(', ')}
+                        </Text>
+                      </View>
+                      <TouchableOpacity 
+                        onPress={() => removeJob(index)}
+                        style={styles.removeButton}
+                      >
+                        <Text style={styles.removeButtonText}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              {userRole === 'worker' && selectedJobs.length > 0 && (
+                <View style={styles.preferencesContainer}>
+                  <TouchableOpacity 
+                    style={styles.preferencesHeader}
+                    onPress={() => setShowPreferences(!showPreferences)}
+                  >
+                    <Text style={styles.preferencesTitle}>
+                      🎯 Tell us about your dream job (Optional)
+                    </Text>
+                    <Text style={styles.preferencesSubtitle}>
+                      This helps us find positions that better match your career goals
+                    </Text>
+                    <Ionicons 
+                      name={showPreferences ? "chevron-up" : "chevron-down"} 
+                      size={24} 
+                      color="#1e3a8a" 
+                    />
+                  </TouchableOpacity>
+
+                  {showPreferences && (
+                    <View style={styles.preferencesContent}>
+                      <View style={styles.preferenceField}>
+                        <Text style={styles.preferenceLabel}>Preferred Industry</Text>
+                        <TextInput
+                          style={styles.preferenceInput}
+                          placeholder="e.g., Technology, Healthcare, Finance"
+                          value={preferredIndustry}
+                          onChangeText={setPreferredIndustry}
+                        />
+                      </View>
+
+                      <View style={styles.preferenceField}>
+                        <Text style={styles.preferenceLabel}>Dream Role/Position</Text>
+                        <TextInput
+                          style={styles.preferenceInput}
+                          placeholder="e.g., Senior Software Engineer, Project Manager"
+                          value={preferredJobType}
+                          onChangeText={setPreferredJobType}
+                        />
+                      </View>
+                    </View>
+                  )}
+                </View>
+              )}
             </>
           )}
         </View>
@@ -979,68 +1332,17 @@ export default function JobPreferencesScreen({ navigation }) {
         >
           <Text style={styles.backButtonText}>Back</Text>
         </TouchableOpacity>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[
             styles.nextButton,
-            ((userRole === 'employer' && (!attributes.industryPrefs?.[0] || !attributes.jobTypePrefs || !attributes.skills?.length)) ||
-             (userRole === 'worker' && !setupData.selectedJobs?.length)) && 
-            styles.nextButtonDisabled
+            isFormValid() ? styles.nextButtonEnabled : styles.nextButtonDisabled
           ]}
           onPress={handleNext}
+          disabled={!isFormValid()}
         >
           <Text style={styles.nextButtonText}>Next</Text>
         </TouchableOpacity>
       </View>
-
-      {/* Selected Jobs - Single Section */}
-      {userRole === 'worker' && (
-        <>
-          <TouchableOpacity 
-            style={[
-              styles.addJobButton, 
-              (!attributes.industryPrefs[0] || !attributes.jobTypePrefs || attributes.skills.length === 0) && 
-              styles.addJobButtonDisabled
-            ]} 
-            onPress={handleAddJob}
-          >
-            <Text style={styles.addJobButtonText}>Add Job</Text>
-          </TouchableOpacity>
-
-          {selectedJobs.length > 0 && (
-            <View style={styles.selectedJobsContainer}>
-              <Text style={styles.selectedJobsTitle}>
-                Selected Jobs ({selectedJobs.length})
-              </Text>
-              <View>
-                {selectedJobs.map((job, index) => (
-                  <View key={index} style={styles.selectedJobItem}>
-                    <View style={styles.selectedJobInfo}>
-                      <Text style={styles.jobTitle}>{job.title}</Text>
-                      <Text style={styles.jobIndustry}>{job.industry}</Text>
-                      <Text style={styles.jobSkills}>
-                        Skills: {job.skills.map(skill => skill.name).join(', ')}
-                      </Text>
-                    </View>
-                    <TouchableOpacity 
-                      onPress={() => {
-                        const updatedJobs = selectedJobs.filter((_, i) => i !== index);
-                        setSelectedJobs(updatedJobs);
-                        updateSetupData({
-                          ...setupData,
-                          selectedJobs: updatedJobs
-                        });
-                      }}
-                      style={styles.removeButton}
-                    >
-                      <Text style={styles.removeButtonText}>✕</Text>
-                    </TouchableOpacity>
-                  </View>
-                ))}
-              </View>
-            </View>
-          )}
-        </>
-      )}
     </View>
   );
 }
@@ -1052,7 +1354,6 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
-    padding: 24,
   },
   header: {
     marginBottom: 32,
@@ -1070,13 +1371,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   form: {
+    padding: 24,
     maxWidth: 440,
     width: '100%',
     alignSelf: 'center',
   },
   inputContainer: {
-    marginBottom: 15,
-    position: 'relative',
+    marginBottom: 20,
     zIndex: 1,
   },
   label: {
@@ -1086,11 +1387,12 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   input: {
+    height: 40,
     borderWidth: 1,
     borderColor: '#ddd',
-    padding: 10,
     borderRadius: 5,
-    backgroundColor: '#fff',
+    paddingHorizontal: 10,
+    backgroundColor: 'white',
   },
   suggestionsContainer: {
     position: 'absolute',
@@ -1104,14 +1406,21 @@ const styles = StyleSheet.create({
     marginTop: 2,
     maxHeight: 200,
     zIndex: 1000,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
   },
   suggestionItem: {
-    padding: 10,
+    padding: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
+    backgroundColor: 'white',
   },
   suggestionText: {
     color: '#1e3a8a',
+    fontSize: 14,
   },
   selectedItemsContainer: {
     flexDirection: 'row',
@@ -1221,13 +1530,15 @@ const styles = StyleSheet.create({
   },
   nextButton: {
     flex: 1,
-    backgroundColor: '#2563eb',
     padding: 12,
     borderRadius: 8,
     alignItems: 'center',
   },
+  nextButtonEnabled: {
+    backgroundColor: '#2563eb', // Blue color when enabled
+  },
   nextButtonDisabled: {
-    backgroundColor: '#94a3b8',
+    backgroundColor: '#94a3b8', // Grey color when disabled
   },
   nextButtonText: {
     color: '#ffffff',
@@ -1323,23 +1634,32 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
   },
-  dropdown: {
+  dropdownContainer: {
     position: 'absolute',
     top: '100%',
     left: 0,
     right: 0,
-    backgroundColor: '#fff',
+    backgroundColor: 'white',
     borderWidth: 1,
     borderColor: '#ddd',
     borderRadius: 5,
-    zIndex: 2,
     maxHeight: 200,
-    overflow: 'scroll',
+    zIndex: 1000,
+    elevation: 5,
+    overflow: 'hidden',
+  },
+  dropdown: {
+    flex: 1,
+    backgroundColor: 'white',
+  },
+  dropdownContent: {
+    flexGrow: 0,
   },
   dropdownItem: {
-    padding: 10,
+    padding: 15,
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
+    backgroundColor: 'white',
   },
   debugInfo: {
     padding: 10,
@@ -1377,5 +1697,100 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f9ff',
     borderWidth: 1,
     borderColor: '#e2e8f0',
+  },
+  scrollView: {
+    flex: 1,
+    width: '100%',
+  },
+  inputContainer: {
+    marginHorizontal: 20,
+    marginVertical: 10,
+    zIndex: 1,
+  },
+  input: {
+    height: 40,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 5,
+    paddingHorizontal: 10,
+    backgroundColor: 'white',
+  },
+  dropdown: {
+    position: 'absolute',
+    top: '100%',
+    left: 0,
+    right: 0,
+    backgroundColor: 'white',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 5,
+    maxHeight: 200,
+    zIndex: 1000,
+    elevation: 5,
+  },
+  dropdownItem: {
+    padding: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  selectedItemsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    padding: 10,
+    marginHorizontal: 10,
+  },
+  selectedItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#e0e0e0',
+    borderRadius: 15,
+    padding: 8,
+    margin: 4,
+  },
+  preferencesContainer: {
+    marginHorizontal: 20,
+    marginVertical: 10,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    overflow: 'hidden',
+  },
+  preferencesHeader: {
+    padding: 16,
+    backgroundColor: '#f8fafc',
+  },
+  preferencesTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1e3a8a',
+    marginBottom: 4,
+  },
+  preferencesSubtitle: {
+    fontSize: 14,
+    color: '#64748b',
+    marginBottom: 8,
+  },
+  preferencesContent: {
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  preferenceField: {
+    marginBottom: 16,
+  },
+  preferenceLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#1e3a8a',
+    marginBottom: 8,
+  },
+  preferenceInput: {
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 14,
+    backgroundColor: '#fff',
   },
 }); 

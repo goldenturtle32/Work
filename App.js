@@ -169,9 +169,7 @@ export default function App() {
         setUser(user);
         console.log('Checking setup status for user:', user.uid);
         
-        // First get the user document to determine role
         const userDoc = await db.collection('users').doc(user.uid).get();
-        
         if (!userDoc.exists) {
           console.log('User document does not exist');
           setIsSetupComplete(false);
@@ -179,30 +177,31 @@ export default function App() {
         }
 
         const userData = userDoc.data();
-        console.log('User role:', userData.role);
-        
-        // Determine which attributes collection to check based on role
         const attributesCollection = userData.role === 'employer' ? 'job_attributes' : 'user_attributes';
         const attributesDoc = await db.collection(attributesCollection).doc(user.uid).get();
 
-        const isComplete = userDoc.exists && 
-                          attributesDoc.exists && 
-                          userData.setupComplete === true;
+        // Simplified setup check
+        const setupComplete = Boolean(
+          userDoc.exists &&
+          attributesDoc.exists &&
+          userData.setupComplete === true
+        );
 
-        console.log('Setup complete check:', {
-          userDocExists: userDoc.exists,
-          attributesDocExists: attributesDoc.exists,
+        console.log('Setup status:', {
+          uid: user.uid,
+          setupComplete,
+          role: userData.role,
           setupCompleteFlag: userData.setupComplete,
-          finalStatus: isComplete
+          hasAttributes: attributesDoc.exists
         });
 
-        setIsSetupComplete(isComplete);
+        setIsSetupComplete(setupComplete);
       } else {
         setUser(null);
         setIsSetupComplete(false);
       }
     } catch (error) {
-      console.error('Error checking setup status:', error);
+      console.error('Error in onAuthStateChanged:', error);
       console.error('Error details:', error.message);
       setIsSetupComplete(false);
     } finally {
@@ -233,7 +232,7 @@ export default function App() {
         ) : !isSetupComplete ? (
           <SetupStack />
         ) : (
-          <AppNavigator /> // Changed from <MainTabs /> to <AppNavigator />
+          <AppNavigator initialRouteName="Main" />
         )}
       </NavigationContainer>
     </SetupProvider>

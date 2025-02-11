@@ -43,7 +43,10 @@ export default function UserDetailScreen({ route, navigation }) {
     if (loading) {
       return (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#3b82f6" />
+          <ActivityIndicator 
+            color="#3b82f6" 
+            style={{ transform: [{ scale: 1.4 }] }}
+          />
           <Text style={styles.loadingText}>Loading worker details...</Text>
         </View>
       );
