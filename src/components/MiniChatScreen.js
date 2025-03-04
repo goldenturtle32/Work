@@ -1,14 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  View, 
-  Text, 
-  TextInput, 
-  TouchableOpacity, 
-  FlatList, 
-  StyleSheet,
-  KeyboardAvoidingView,
-  Platform 
-} from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, KeyboardAvoidingView, Platform } from 'react-native';
 import { db, auth, firebase } from '../firebase';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -19,83 +10,74 @@ const SUGGESTED_MESSAGES = [
   "What are your salary expectations?"
 ];
 
-export default function MiniChatScreen({ matchData }) {
-  const [message, setMessage] = useState('');
+const MiniChatScreen = ({ matchData }) => {
   const [messages, setMessages] = useState([]);
-  const currentUser = auth.currentUser;
+  const [newMessage, setNewMessage] = useState('');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!matchData?.id) return;
 
-    // Subscribe to messages for this chat
-    const unsubscribe = db.collection('chats')
+    const unsubscribe = db
+      .collection('chats')
       .doc(matchData.id)
       .collection('messages')
       .orderBy('timestamp', 'desc')
       .onSnapshot(snapshot => {
-        const newMessages = snapshot.docs.map(doc => ({
+        const messageList = snapshot.docs.map(doc => ({
           id: doc.id,
-          ...doc.data(),
-          timestamp: doc.data().timestamp?.toDate() || new Date()
+          ...doc.data()
         }));
-        setMessages(newMessages);
+        setMessages(messageList);
+        setLoading(false);
       });
 
     return () => unsubscribe();
-  }, [matchData?.id]);
+  }, [matchData]);
 
   const sendMessage = async () => {
-    if (!message.trim() || !matchData?.id) return;
+    if (!newMessage.trim()) return;
 
     try {
-      // First create the chat document if it doesn't exist
-      await db.collection('chats').doc(matchData.id).set({
-        participants: [matchData.workerId, matchData.employerId],
-        createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      }, { merge: true });
-
-      // Then add the message
-      const messageData = {
-        text: message.trim(),
-        senderId: currentUser.uid,
-        sender: currentUser.uid === matchData.workerId ? 'worker' : 'employer',
-        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-        read: false
-      };
-
-      await db.collection('chats')
+      const messageRef = db
+        .collection('chats')
         .doc(matchData.id)
-        .collection('messages')
-        .add(messageData);
+        .collection('messages');
 
-      // Update the last message in the chat document
-      await db.collection('chats').doc(matchData.id).update({
-        lastMessage: messageData.text,
-        lastMessageTime: messageData.timestamp
+      await messageRef.add({
+        text: newMessage.trim(),
+        senderId: auth.currentUser.uid,
+        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
       });
 
-      setMessage('');
+      await db.collection('chats').doc(matchData.id).update({
+        lastMessage: newMessage.trim(),
+        lastMessageTime: firebase.firestore.FieldValue.serverTimestamp(),
+      });
+
+      setNewMessage('');
     } catch (error) {
       console.error('Error sending message:', error);
     }
   };
 
-  const renderMessage = ({ item }) => (
-    <View style={[
-      styles.messageContainer,
-      item.senderId === currentUser.uid ? styles.userMessage : styles.otherMessage
-    ]}>
-      <Text style={[
-        styles.messageText,
-        item.senderId === currentUser.uid ? styles.userMessageText : styles.otherMessageText
+  const renderMessage = ({ item }) => {
+    const isCurrentUser = item.senderId === auth.currentUser.uid;
+
+    return (
+      <View style={[
+        styles.messageContainer,
+        isCurrentUser ? styles.currentUserMessage : styles.otherUserMessage
       ]}>
-        {item.text}
-      </Text>
-      <Text style={styles.timestamp}>
-        {item.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-      </Text>
-    </View>
-  );
+        <Text style={[
+          styles.messageText,
+          isCurrentUser ? styles.currentUserText : styles.otherUserText
+        ]}>
+          {item.text}
+        </Text>
+      </View>
+    );
+  };
 
   const renderEmptyChat = () => (
     <View style={styles.emptyContainer}>
@@ -105,7 +87,7 @@ export default function MiniChatScreen({ matchData }) {
           <TouchableOpacity
             key={index}
             style={styles.suggestionBubble}
-            onPress={() => setMessage(msg)}
+            onPress={() => setNewMessage(msg)}
           >
             <Text style={styles.suggestionText}>{msg}</Text>
           </TouchableOpacity>
@@ -116,97 +98,109 @@ export default function MiniChatScreen({ matchData }) {
 
   return (
     <KeyboardAvoidingView 
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
       style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 60 : 0}
     >
-      <FlatList
-        data={messages}
-        renderItem={renderMessage}
-        keyExtractor={item => item.id}
-        inverted
-        style={styles.messagesList}
-        ListEmptyComponent={renderEmptyChat}
-      />
-      
-      <View style={styles.inputContainer}>
-        <TextInput
-          style={styles.input}
-          value={message}
-          onChangeText={setMessage}
-          placeholder="Type a message..."
-          multiline
+      <View style={styles.chatContainer}>
+        <FlatList
+          data={messages}
+          renderItem={renderMessage}
+          keyExtractor={item => item.id}
+          inverted={false}
+          contentContainerStyle={[
+            styles.messagesList,
+            Platform.OS === 'ios' && { flexDirection: 'column' }
+          ]}
+          style={Platform.OS === 'ios' ? { transform: [{ scaleY: 1 }] } : {}}
+          ListEmptyComponent={renderEmptyChat}
         />
-        <TouchableOpacity 
-          style={styles.sendButton} 
-          onPress={sendMessage}
-          disabled={!message.trim()}
-        >
-          <Ionicons 
-            name="send" 
-            size={24} 
-            color={message.trim() ? "#007AFF" : "#A0A0A0"} 
+        
+        <View style={styles.inputContainer}>
+          <TextInput
+            style={styles.input}
+            value={newMessage}
+            onChangeText={setNewMessage}
+            placeholder="Type a message..."
+            placeholderTextColor="#666"
+            multiline
           />
-        </TouchableOpacity>
+          <TouchableOpacity 
+            style={styles.sendButton} 
+            onPress={sendMessage}
+            disabled={!newMessage.trim()}
+          >
+            <Ionicons 
+              name="send" 
+              size={24} 
+              color={newMessage.trim() ? "#185ee0" : "#666"} 
+            />
+          </TouchableOpacity>
+        </View>
       </View>
     </KeyboardAvoidingView>
   );
-}
+};
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: '#fff',
+  },
+  chatContainer: {
+    flex: 1,
+    justifyContent: 'space-between',
+    ...(Platform.OS === 'ios' && {
+      transform: [{ scaleY: 1 }]
+    })
   },
   messagesList: {
-    flex: 1,
-    padding: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    flexGrow: 1,
   },
   messageContainer: {
     maxWidth: '80%',
-    padding: 10,
-    borderRadius: 15,
-    marginVertical: 3,
+    marginVertical: 4,
+    padding: 12,
+    borderRadius: 16,
   },
-  userMessage: {
+  currentUserMessage: {
     alignSelf: 'flex-end',
-    backgroundColor: '#007AFF',
+    backgroundColor: '#185ee0',
+    borderBottomRightRadius: 4,
   },
-  otherMessage: {
+  otherUserMessage: {
     alignSelf: 'flex-start',
-    backgroundColor: '#E5E5EA',
+    backgroundColor: '#f0f0f0',
+    borderBottomLeftRadius: 4,
   },
   messageText: {
     fontSize: 16,
   },
-  userMessageText: {
-    color: '#FFFFFF',
+  currentUserText: {
+    color: '#fff',
   },
-  otherMessageText: {
-    color: '#000000',
-  },
-  timestamp: {
-    fontSize: 12,
-    color: '#8E8E93',
-    marginTop: 4,
-    alignSelf: 'flex-end',
+  otherUserText: {
+    color: '#333',
   },
   inputContainer: {
     flexDirection: 'row',
-    padding: 10,
-    backgroundColor: '#FFFFFF',
+    padding: 16,
     borderTopWidth: 1,
-    borderTopColor: '#E5E5EA',
+    borderTopColor: '#e0e0e0',
     alignItems: 'center',
+    backgroundColor: '#fff',
   },
   input: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
+    backgroundColor: '#f0f0f0',
     borderRadius: 20,
-    paddingHorizontal: 15,
+    paddingHorizontal: 16,
     paddingVertical: 8,
-    marginRight: 10,
+    marginRight: 8,
     maxHeight: 100,
+    fontSize: 16,
   },
   sendButton: {
     padding: 8,
@@ -242,4 +236,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
   },
-}); 
+});
+
+export default MiniChatScreen; 

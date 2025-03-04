@@ -284,7 +284,10 @@ export default function MatchesScreen({ navigation }) {
               {userRole === 'worker' ? (
                 <View style={styles.iconTextContainer}>
                   <Ionicons name="business" size={16} color="#6b7280" />
-                  <Text style={styles.name}>{matchDetails.company || 'Company'}</Text>
+                  <Text style={styles.name}>
+                    {matchDetails.jobTitle ? `${matchDetails.jobTitle} - ` : ''}
+                    {matchDetails.companyName || 'Company'}
+                  </Text>
                 </View>
               ) : (
                 <View style={styles.iconTextContainer}>
@@ -296,7 +299,9 @@ export default function MatchesScreen({ navigation }) {
             
             <View style={styles.iconTextContainer}>
               <Ionicons name="location" size={16} color="#6b7280" />
-              <Text style={styles.locationText}>{matchDetails.location || 'Location not specified'}</Text>
+              <Text style={styles.locationText}>
+                {matchDetails.cityName || 'Location not specified'}
+              </Text>
             </View>
 
             {item.lastMessage && (

@@ -5,8 +5,15 @@ require Pod::Executable.execute_command('node', ['-p',
     {paths: [process.argv[1]]},
   )', __dir__]).strip
 
+# Add this at the top of your Podfile if it's not already there
+require_relative '../node_modules/react-native/scripts/react_native_pods'
+require_relative '../node_modules/@react-native-community/cli-platform-ios/native_modules'
+
 platform :ios, min_ios_version_supported
 prepare_react_native_project!
+
+# Add this line to enable notification capabilities
+pod 'Firebase/Messaging'
 
 linkage = ENV['USE_FRAMEWORKS']
 if linkage != nil
@@ -20,8 +27,15 @@ target 'TempProject' do
   use_react_native!(
     :path => config[:reactNativePath],
     # An absolute path to your application root.
-    :app_path => "#{Pod::Config.instance.installation_root}/.."
+    :app_path => "#{Pod::Config.instance.installation_root}/..",
+    # to enable hermes on iOS, change `false` to `true` and then install pods
+    :hermes_enabled => true
   )
+
+  # Add any other pods your app needs
+  
+  # This is critical for FCM
+  pod 'RNFBMessaging', :path => '../node_modules/@react-native-firebase/messaging'
 
   target 'TempProjectTests' do
     inherit! :complete

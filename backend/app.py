@@ -19,6 +19,8 @@ from collections import Counter
 import re
 import math
 import spacy
+import openai
+import googlemaps
 
 lock = threading.Lock()
 last_request_time = datetime.now() - timedelta(seconds=60)  # Initialize to allow immediate first request
@@ -37,7 +39,7 @@ api_key = os.getenv('OPENAI_API_KEY')
 if not api_key:
     print("Warning: OpenAI API key not found in environment variables")
     
-client = OpenAI(api_key=api_key)
+client = OpenAI()
 
 pytrends = TrendReq(hl='en-US', tz=360)
 
@@ -107,6 +109,10 @@ industry_jobs = {
 
 # Load the English language model
 nlp = spacy.load('en_core_web_md')
+
+# Add after other environment variables
+GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_MAPS_API_KEY')
+gmaps = googlemaps.Client(key=GOOGLE_MAPS_API_KEY) if GOOGLE_MAPS_API_KEY else None
 
 def generate_fallback_analysis(job_data, user_data):
     """Generate a basic analysis without using OpenAI"""
@@ -816,40 +822,145 @@ def clean_skill_name(skill):
         
     return skill
 
-@app.route('/suggest-skills', methods=['POST'])
+@app.route('/suggest-skills', methods=['GET'])
 def suggest_skills():
     try:
-        data = request.json
-        job_title = data.get('jobTitle', '')
+        job_title = request.args.get('jobTitle', '')
+        industry = request.args.get('industry', '')
+        location = request.args.get('location', '')
         
-        messages = [
-            {"role": "system", "content": "You are a job skills expert. Provide relevant skills for job titles in JSON array format."},
-            {"role": "user", "content": f"List 10 key skills required for a {job_title} position. Return only a JSON array of skill names."}
-        ]
+        print(f"\n=== Getting Skill Suggestions ===")
+        print(f"Job Title: {job_title}")
+        print(f"Industry: {industry}")
+        print(f"Location: {location}")
         
-        response = make_openai_request(messages)
+        # First get raw skills from OpenAI
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You are a career advisor specializing in identifying key skills for specific jobs.
+                    For the given job title and industry, list the top 10 most relevant and in-demand skills.
+                    Include both technical and soft skills where appropriate.
+                    Return only the skills as a comma-separated list, without numbers or explanations.
+                    
+                    IMPORTANT:
+                    - List only actual skills (not benefits, responsibilities, or requirements)
+                    - Keep skills concise (1-3 words)
+                    - Focus on core competencies
+                    - Avoid listing tools or specific software unless crucial
+                    """
+                },
+                {
+                    "role": "user",
+                    "content": f"What are the most important skills for a {job_title} in the {industry} industry?"
+                }
+            ],
+            temperature=0.3,
+            max_tokens=200
+        )
         
-        # Parse the response into a list of skills
-        try:
-            skills = json.loads(response)
-            if not isinstance(skills, list):
-                skills = response.strip('[]').split(',')
-        except:
-            skills = response.strip('[]').split(',')
+        # Parse the initial skills
+        raw_skills = [skill.strip() for skill in response.choices[0].message.content.split(',')]
+        print(f"Raw skills: {raw_skills}")
         
-        # Clean and format skills
-        skills = [s.strip().strip('"\'') for s in skills if s.strip()]
+        # Normalize each skill
+        normalized_skills = []
+        for skill in raw_skills:
+            try:
+                # Use OpenAI to normalize each skill
+                normalize_response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": """You are a skill normalizer. Your task is to:
+                            1. Convert the input into a proper skill if possible
+                            2. Remove any non-skill items (benefits, requirements, etc.)
+                            3. Keep only 1-3 word core skills
+                            4. Return only the normalized skill name or REMOVE if not a valid skill
+                            
+                            Examples:
+                            - "Vision Insurance Compensation Package" -> "REMOVE"
+                            - "Remote Work Noemployment Type Fulltime" -> "REMOVE"
+                            - "Perform A Variety Of Other Duties" -> "REMOVE"
+                            - "Customer Service Experience For Job Description" -> "Customer Service"
+                            - "Leadership Training Programs" -> "Leadership"
+                            - "Similar Diesel Equipment And" -> "Equipment Maintenance"
+                            - "Perform Fluid Exchanges" -> "Fluid Maintenance"
+                            - "Collaborate With Cross" -> "Cross-functional Collaboration"
+                            """
+                        },
+                        {
+                            "role": "user",
+                            "content": f"Normalize this skill: {skill}"
+                        }
+                    ],
+                    temperature=0,
+                    max_tokens=50
+                )
+                
+                normalized_skill = normalize_response.choices[0].message.content.strip()
+                if normalized_skill != "REMOVE":
+                    normalized_skills.append(normalized_skill)
+                print(f"Normalized '{skill}' → '{normalized_skill}'")
+                
+            except Exception as e:
+                print(f"Error normalizing skill: {str(e)}")
+                if len(skill) <= 30 and not any(word in skill.lower() for word in ['insurance', 'benefit', 'time off', 'leave']):
+                    normalized_skills.append(skill)
+        
+        # Remove duplicates and sort
+        unique_skills = sorted(list(set(normalized_skills)))
+        
+        # Ensure we have enough skills
+        if len(unique_skills) < 5:
+            default_skills = [
+                "Communication",
+                "Problem Solving",
+                "Team Work",
+                "Project Management",
+                "Time Management",
+                "Leadership",
+                "Analytics",
+                "Critical Thinking",
+                "Organization",
+                "Attention to Detail"
+            ]
+            unique_skills.extend([s for s in default_skills if s not in unique_skills])
+            unique_skills = unique_skills[:10]  # Keep top 10
+        
+        print(f"Final normalized skills: {unique_skills}")
         
         return jsonify({
             "success": True,
-            "skills": skills
+            "skills": unique_skills
         })
         
     except Exception as e:
+        print(f"Error in suggest_skills: {str(e)}")
+        traceback.print_exc()
+        
+        # Return default skills on error
+        default_skills = [
+            "Communication",
+            "Problem Solving",
+            "Team Work",
+            "Project Management",
+            "Time Management",
+            "Leadership",
+            "Analytics",
+            "Critical Thinking",
+            "Organization",
+            "Attention to Detail"
+        ]
+        
         return jsonify({
-            "success": False,
+            "success": True,
+            "skills": default_skills,
             "error": str(e)
-        }), 500
+        })
 
 @app.route('/check-skill-relevance', methods=['POST'])
 def check_skill_relevance():
@@ -1320,68 +1431,76 @@ def suggest_industries():
         }), 500
 
 # Add this new route for job type suggestions
-@app.route('/suggest-jobs', methods=['GET', 'POST'])
+@app.route('/suggest-jobs', methods=['GET'])
 def suggest_jobs():
     try:
-        if request.method == 'GET':
-            industry = request.args.get('industry', '').strip()
-            search_term = request.args.get('searchTerm', '').strip()
-            location = request.args.get('location', 'United States')
-        else:
-            data = request.json
-            industry = data.get('industry', '').strip()
-            search_term = data.get('searchText', '').strip()
-            location = data.get('location', 'United States')
-
-        print(f"\n=== Getting Jobs for industry: '{industry}', search: '{search_term}' ===")
-
-        # Use SERP API to get job suggestions
-        params = {
-            "api_key": SERP_API_KEY,
-            "engine": "google_jobs",
-            "q": f"{search_term} {industry} jobs" if search_term else f"{industry} jobs",
-            "location": format_location(location),
-            "hl": "en",
-            "gl": "us",
-            "chips": "date_posted:today"
-        }
-
-        search = GoogleSearch(params)
-        results = search.get_dict()
-
-        if 'error' in results:
-            print(f"SERP API error: {results.get('error')}")
-            return jsonify({
-                "success": True,
-                "jobs": get_default_jobs(industry)
-            })
-
-        # Extract and clean job titles
-        job_titles = []
-        seen_titles = set()
+        industry = request.args.get('industry', '')
+        search_term = request.args.get('searchTerm', '')
+        location = request.args.get('location', '')
         
-        for job in results.get('jobs_results', []):
-            title = clean_job_title(job.get('title', ''))
-            if title and title not in seen_titles:
-                seen_titles.add(title)
-                job_titles.append(title)
-
-        # If no results, use default jobs
-        if not job_titles:
-            job_titles = get_default_jobs(industry)
-
-        # Limit to 15 suggestions
-        job_titles = job_titles[:15]
+        print(f"\n=== Getting Job Suggestions ===")
+        print(f"Industry: {industry}")
+        print(f"Search: {search_term}")
+        print(f"Location: {location}")
         
-        print(f"Returning job titles: {job_titles}")
-
+        # Get initial job suggestions using your existing function
+        raw_jobs = get_trending_jobs_serp(industry, location)
+        print(f"Raw jobs: {raw_jobs}")
+        
+        # Normalize each job title
+        normalized_jobs = []
+        for job_title in raw_jobs:
+            try:
+                # Use new OpenAI API format
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": """You are a job title normalizer. Your task is to:
+                            1. Remove unnecessary details like locations, facility names, shift info, and employment type (PT/FT)
+                            2. Remove parentheses and their contents unless essential to the role
+                            3. Standardize common variations
+                            4. Keep only the core job title
+                            5. Return only the simplified title without any explanation
+                            
+                            Examples:
+                            - "Information Technology [It] Support Specialist" -> "IT Support Specialist"
+                            - "Lead/Senior Tech - Ca" -> "Senior Technician"
+                            - "Information Technology Specialist I" -> "IT Specialist"
+                            - "Director Technology Support & Operations" -> "Technology Support Director"
+                            """
+                        },
+                        {
+                            "role": "user",
+                            "content": f"Normalize this job title: {job_title}"
+                        }
+                    ],
+                    temperature=0,
+                    max_tokens=50
+                )
+                
+                normalized_title = response.choices[0].message.content.strip()
+                normalized_title = normalized_title.replace('"', '').replace("'", "")
+                print(f"Normalized '{job_title}' → '{normalized_title}'")
+                normalized_jobs.append(normalized_title)
+                
+            except Exception as e:
+                print(f"Error normalizing job title: {str(e)}")
+                normalized_jobs.append(job_title)
+        
+        # Remove duplicates
+        unique_jobs = list(set(normalized_jobs))
+        print(f"Final normalized jobs: {unique_jobs}")
+        
         return jsonify({
             "success": True,
-            "jobs": job_titles
+            "jobs": unique_jobs
         })
+        
     except Exception as e:
-        print(f"Error in suggest-jobs: {str(e)}")
-        traceback.print_exc()  # Print full traceback
+        print(f"Error in suggest_jobs: {str(e)}")
+        traceback.print_exc()
         return jsonify({
             "success": False,
             "error": str(e)
@@ -1588,6 +1707,569 @@ def calculate_job_score(user_data, item_data):
             max_job_score = max(max_job_score, total_score)
     
     return max_job_score
+
+@app.route('/normalize-job-title', methods=['POST'])
+def normalize_job_title():
+    try:
+        print("\n=== Normalize Job Title Request ===")
+        print(f"Headers: {dict(request.headers)}")
+        print(f"Data: {request.get_data(as_text=True)}")
+        
+        data = request.get_json()
+        if not data:
+            print("No JSON data received")
+            return jsonify({
+                "error": "No data provided",
+                "normalizedTitle": None
+            }), 400
+            
+        job_title = data.get('jobTitle', '')
+        print(f"\nProcessing job title: {job_title}")
+
+        if not job_title:
+            print("No job title provided")
+            return jsonify({
+                "error": "No job title provided",
+                "normalizedTitle": None
+            }), 400
+
+        # Call OpenAI to normalize the job title
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You are a job title normalizer. Your task is to:
+                    1. Remove unnecessary details like locations, facility names, shift info, and employment type (PT/FT)
+                    2. Remove parentheses and their contents unless essential to the role
+                    3. Standardize common variations
+                    4. Keep only the core job title
+                    5. Return only the simplified title without any explanation
+                    
+                    Examples:
+                    - "Information Technology [It] Support Specialist" -> "IT Support Specialist"
+                    - "Lead/Senior Tech - Ca" -> "Senior Technician"
+                    - "Information Technology Specialist I" -> "IT Specialist"
+                    - "Director Technology Support & Operations" -> "Technology Support Director"
+                    """
+                },
+                {
+                    "role": "user",
+                    "content": f"Normalize this job title: {job_title}"
+                }
+            ],
+            temperature=0,
+            max_tokens=50
+        )
+
+        normalized_title = response.choices[0].message.content.strip()
+        normalized_title = normalized_title.replace('"', '').replace("'", "")
+        
+        print(f"Successfully normalized: '{job_title}' → '{normalized_title}'")
+        
+        return jsonify({
+            "originalTitle": job_title,
+            "normalizedTitle": normalized_title
+        })
+
+    except Exception as e:
+        print(f"Error normalizing job title: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "originalTitle": job_title,
+            "normalizedTitle": job_title
+        }), 500
+
+@app.route('/suggest-salary', methods=['GET'])
+def suggest_salary():
+    try:
+        job_title = request.args.get('jobTitle', '')
+        industry = request.args.get('industry', '')
+        location = request.args.get('location', '')
+        skills = request.args.get('skills', '').split(',')
+        
+        print(f"\n=== Getting Salary Suggestions ===")
+        print(f"Job Title: {job_title}")
+        print(f"Industry: {industry}")
+        print(f"Location: {location}")
+        print(f"Skills: {skills}")
+
+        # Get real job postings from SERP API
+        search_query = f"{job_title} jobs in {location}"
+        params = {
+            "engine": "google_jobs",
+            "q": search_query,
+            "location": location,
+            "hl": "en",
+            "api_key": os.getenv('SERP_API_KEY')
+        }
+
+        try:
+            search = GoogleSearch(params)
+            results = search.get_dict()
+            jobs_list = results.get("jobs_results", [])
+            
+            # Extract salary information from job postings
+            salary_data = []
+            for job in jobs_list:
+                if "salary" in job:
+                    salary_info = job["salary"]
+                    # Convert salary to hourly if needed
+                    try:
+                        # Extract min and max from the salary string
+                        salary_text = salary_info.get("text", "").lower()
+                        
+                        # Skip if no clear salary information
+                        if not any(term in salary_text for term in ['hour', 'hr', 'year', 'yr', 'month', 'mo']):
+                            continue
+                            
+                        # Extract numbers from the string
+                        numbers = re.findall(r'\d+\.?\d*', salary_text)
+                        if len(numbers) >= 2:
+                            min_sal = float(numbers[0])
+                            max_sal = float(numbers[1])
+                            
+                            # Convert to hourly rate if needed
+                            if 'year' in salary_text or 'yr' in salary_text:
+                                min_sal = min_sal / (52 * 40)  # Convert yearly to hourly
+                                max_sal = max_sal / (52 * 40)
+                            elif 'month' in salary_text or 'mo' in salary_text:
+                                min_sal = min_sal / (4 * 40)   # Convert monthly to hourly
+                            
+                            salary_data.append({
+                                "min": min_sal,
+                                "max": max_sal
+                            })
+                    except Exception as e:
+                        print(f"Error parsing salary: {str(e)}")
+                        continue
+
+            print(f"Found {len(salary_data)} salary data points")
+            
+            # Calculate average ranges from real job postings
+            if salary_data:
+                avg_min = sum(s["min"] for s in salary_data) / len(salary_data)
+                avg_max = sum(s["max"] for s in salary_data) / len(salary_data)
+                print(f"Average salary range from postings: ${avg_min:.2f} - ${avg_max:.2f}/hr")
+            else:
+                avg_min = None
+                avg_max = None
+                print("No salary data found in job postings")
+
+        except Exception as e:
+            print(f"Error fetching SERP data: {str(e)}")
+            avg_min = None
+            avg_max = None
+
+        # Use OpenAI to analyze and suggest salary range
+        prompt_content = f"""Suggest an hourly pay range for:
+        Job: {job_title}
+        Industry: {industry}
+        Location: {location}
+        Skills: {', '.join(skills)}
+        """
+        
+        if avg_min is not None and avg_max is not None:
+            prompt_content += f"\nMarket data shows an average range of ${avg_min:.2f} - ${avg_max:.2f}/hr in this area."
+
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You are a compensation analyst specializing in salary recommendations.
+                    Analyze the provided information and market data to suggest a realistic hourly pay range.
+                    Consider:
+                    1. Local market rates (if provided)
+                    2. Industry standards
+                    3. Required skills
+                    4. Geographic location
+                    5. Current market conditions
+                    
+                    Return the response in JSON format with these fields:
+                    {
+                        "minPay": number (hourly rate),
+                        "maxPay": number (hourly rate),
+                        "explanation": string (brief explanation including market data if available)
+                    }
+                    """
+                },
+                {
+                    "role": "user",
+                    "content": prompt_content
+                }
+            ],
+            temperature=0.3,
+            max_tokens=200
+        )
+        
+        # Parse the response
+        suggestion = response.choices[0].message.content.strip()
+        salary_data = json.loads(suggestion)
+        
+        # Add market data to the response
+        if avg_min is not None and avg_max is not None:
+            salary_data["marketData"] = {
+                "avgMin": round(avg_min, 2),
+                "avgMax": round(avg_max, 2)
+            }
+        
+        print(f"Final salary suggestion: {salary_data}")
+        
+        return jsonify({
+            "success": True,
+            "salary": salary_data
+        })
+        
+    except Exception as e:
+        print(f"Error in suggest_salary: {str(e)}")
+        traceback.print_exc()
+        
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/travel-times', methods=['GET'])
+def get_travel_times():
+    try:
+        # Get parameters from request
+        origin_lat = request.args.get('origin_lat')
+        origin_lng = request.args.get('origin_lng')
+        dest_lat = request.args.get('dest_lat')
+        dest_lng = request.args.get('dest_lng')
+        arrival_time = request.args.get('arrival_time')
+
+        if not all([origin_lat, origin_lng, dest_lat, dest_lng]):
+            return jsonify({
+                "success": False,
+                "error": "Missing coordinates"
+            }), 400
+
+        # Format coordinates
+        origin = f"{origin_lat},{origin_lng}"
+        destination = f"{dest_lat},{dest_lng}"
+
+        # Set up SERP API parameters
+        base_params = {
+            "engine": "google_maps_directions",
+            "api_key": SERP_API_KEY,
+            "origin": origin,
+            "destination": destination,
+            "hl": "en"
+        }
+
+        # Get directions for different modes
+        modes = ['driving', 'transit', 'walking']
+        results = {}
+
+        for mode in modes:
+            try:
+                params = base_params.copy()
+                params["travel_mode"] = mode
+                if arrival_time and mode != 'walking':
+                    params["arrival_time"] = arrival_time
+
+                search = GoogleSearch(params)
+                data = search.get_dict()
+
+                if 'directions' in data and data['directions']:
+                    route = data['directions'][0]  # Get first route
+                    leg = route['legs'][0]  # Get first leg
+                    
+                    results[mode] = {
+                        'duration': leg.get('duration', {}).get('text', 'N/A'),
+                        'distance': leg.get('distance', {}).get('text', 'N/A')
+                    }
+                else:
+                    results[mode] = {
+                        'duration': 'N/A',
+                        'distance': 'N/A'
+                    }
+
+            except Exception as e:
+                print(f"Error getting {mode} directions: {str(e)}")
+                results[mode] = {
+                    'duration': 'N/A',
+                    'distance': 'N/A'
+                }
+
+        return jsonify({
+            "success": True,
+            "travel_times": results
+        })
+
+    except Exception as e:
+        print(f"Error in get_travel_times: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+def truncate_text(text, max_length=200):
+    if len(text) <= max_length:
+        return text
+    return text[:max_length-3] + "..."
+
+@app.route('/analyze-job-fit', methods=['POST'])
+def analyze_job_fit():
+    try:
+        data = request.json
+        job_data = data.get('job', {})
+        user_data = data.get('user', {})
+
+        # Gather all the analysis points
+        job_skills = [s.get('name') if isinstance(s, dict) else s for s in job_data.get('requiredSkills', [])]
+        user_skills = user_data.get('skills', [])
+        
+        # Calculate distance if locations are available
+        distance_text = "N/A"
+        if 'location' in job_data and 'location' in user_data:
+            distance = calculate_distance(
+                user_data['location']['latitude'],
+                user_data['location']['longitude'],
+                job_data['location']['latitude'],
+                job_data['location']['longitude']
+            )
+            distance_text = f"{distance:.1f}"
+
+        # Build job details
+        job_title = job_data.get('jobTitle', 'this position')
+        company_name = job_data.get('companyName', 'the company')
+        pay_min = job_data.get('estPayRangeMin', 0)
+        pay_max = job_data.get('estPayRangeMax', 0)
+        user_min_pay = user_data.get('payRangeMin', 0)
+
+        # Construct the prompt
+        prompt = (
+            "Analyze this job match and provide insights in a conversational, natural tone:\n\n"
+            "Job Details:\n"
+            f"- Title: {job_title} at {company_name}\n"
+            f"- Required Skills: {', '.join(job_skills)}\n"
+            f"- Pay Range: ${pay_min}-${pay_max}/hr\n\n"
+            "Candidate Details:\n"
+            f"- Skills: {', '.join(user_skills)}\n"
+            f"- Minimum Pay: ${user_min_pay}/hr\n"
+            f"- Distance to job: {distance_text} miles\n\n"
+            "Please analyze this match and provide:\n"
+            "1. A list of pros (advantages and good matches)\n"
+            "2. A list of cons (potential challenges or mismatches)\n"
+            "3. A brief, natural-sounding summary of the overall fit\n\n"
+            "Format the response as a JSON object with these keys:\n"
+            "{\n"
+            '    "pros": ["detailed pro point 1", "detailed pro point 2", ...],\n'
+            '    "cons": ["detailed con point 1", "detailed con point 2", ...],\n'
+            '    "summary": "natural language summary"\n'
+            "}\n\n"
+            "Make the analysis sound conversational and personalized, avoiding repetitive patterns."
+        )
+
+        # Get detailed analysis first
+        detailed_response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "You are a helpful job match analyst providing insights about job opportunities. Focus on providing detailed, personalized analysis."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=500
+        )
+
+        # Parse the detailed response
+        detailed_analysis = json.loads(detailed_response.choices[0].message.content.strip())
+
+        # Create a summarization prompt
+        summary_prompt = f"""
+        Create concise, natural-sounding summaries (maximum 150 characters each) of the following pros and cons for a job match:
+
+        PROS:
+        {'; '.join(detailed_analysis['pros'])}
+
+        CONS:
+        {'; '.join(detailed_analysis['cons'])}
+
+        Please provide the response in JSON format:
+        {{
+            "pros_summary": "brief natural summary of pros",
+            "cons_summary": "brief natural summary of cons"
+        }}
+
+        Each summary should capture the key points while maintaining a natural, flowing tone.
+        """
+
+        # Get condensed summaries
+        summary_response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a concise summarizer. Create natural-sounding summaries that maintain key information while staying under 150 characters."
+                },
+                {
+                    "role": "user",
+                    "content": summary_prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=200
+        )
+
+        # Parse the summary response
+        summaries = json.loads(summary_response.choices[0].message.content.strip())
+        
+        analysis = {
+            "condensed": {
+                "pros": summaries["pros_summary"],
+                "cons": summaries["cons_summary"],
+                "summary": detailed_analysis["summary"]
+            },
+            "full": detailed_analysis
+        }
+        
+        return jsonify({
+            "success": True,
+            "analysis": analysis
+        })
+
+    except Exception as e:
+        print(f"Error in analyze_job_fit: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/analyze-employee-fit', methods=['POST'])
+def analyze_employee_fit():
+    try:
+        data = request.json
+        job = data.get('job')  # This will be the employee data
+        user = data.get('user')  # This will be the employer data
+        
+        if not job or not user:
+            return jsonify({'success': False, 'error': 'Missing data'})
+
+        # Extract relevant data for the prompt
+        employee_name = job.get('name', 'Candidate')
+        employee_skills = []
+        for selected_job in job.get('selectedJobs', []):
+            if selected_job.get('skills'):
+                employee_skills.extend([skill.get('name', '') for skill in selected_job['skills']])
+
+        employer_skills = []
+        for selected_job in user.get('selectedJobs', []):
+            if selected_job.get('skills'):
+                employer_skills.extend([skill.get('name', '') for skill in selected_job['skills']])
+
+        # Construct the prompt
+        prompt = (
+            "Analyze this candidate match and provide insights in a conversational, natural tone:\n\n"
+            "Candidate Details:\n"
+            f"- Name: {employee_name}\n"
+            f"- Skills: {', '.join(employee_skills)}\n"
+            f"- Profile Overview: {job.get('user_overview', 'No overview provided')}\n\n"
+            "Your Requirements:\n"
+            f"- Required Skills: {', '.join(employer_skills)}\n\n"
+            "Please analyze this match and provide:\n"
+            "1. A list of pros (advantages and good matches)\n"
+            "2. A list of cons (potential challenges or mismatches)\n"
+            "3. A brief, natural-sounding summary of the overall fit\n\n"
+            "Format the response as a JSON object with these keys:\n"
+            "{\n"
+            '    "pros": ["detailed pro point 1", "detailed pro point 2", ...],\n'
+            '    "cons": ["detailed con point 1", "detailed con point 2", ...],\n'
+            '    "summary": "natural language summary"\n'
+            "}\n\n"
+            "Make the analysis sound conversational and personalized, avoiding repetitive patterns."
+        )
+
+        # Get detailed analysis first
+        detailed_response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "You are a helpful hiring analyst providing insights about potential candidates. Focus on providing detailed, personalized analysis."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=500
+        )
+
+        # Parse the detailed response
+        detailed_analysis = json.loads(detailed_response.choices[0].message.content.strip())
+
+        # Create a summarization prompt
+        summary_prompt = f"""
+        Create concise, natural-sounding summaries (maximum 150 characters each) of the following pros and cons for a candidate match:
+
+        PROS:
+        {'; '.join(detailed_analysis['pros'])}
+
+        CONS:
+        {'; '.join(detailed_analysis['cons'])}
+
+        Please provide the response in JSON format:
+        {{
+            "pros_summary": "brief natural summary of pros",
+            "cons_summary": "brief natural summary of cons"
+        }}
+
+        Each summary should capture the key points while maintaining a natural, flowing tone.
+        """
+
+        # Get condensed summaries
+        summary_response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a concise summarizer. Create natural-sounding summaries that maintain key information while staying under 150 characters."
+                },
+                {
+                    "role": "user",
+                    "content": summary_prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=200
+        )
+
+        # Parse the summary response
+        summaries = json.loads(summary_response.choices[0].message.content.strip())
+        
+        analysis = {
+            "condensed": {
+                "pros": summaries["pros_summary"],
+                "cons": summaries["cons_summary"],
+                "summary": detailed_analysis["summary"]
+            },
+            "full": detailed_analysis
+        }
+        
+        return jsonify({
+            "success": True,
+            "analysis": analysis
+        })
+
+    except Exception as e:
+        print(f"Error in analyze_employee_fit: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True) 

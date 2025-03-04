@@ -7,13 +7,14 @@ import {
   StyleSheet,
   FlatList,
   Alert,
-  ScrollView
+  ScrollView,
+  Platform,
+  TouchableWithoutFeedback
 } from 'react-native';
 import { useSetup } from '../../contexts/SetupContext';
 import ProgressStepper from '../../components/ProgressStepper';
 import { Ionicons } from '@expo/vector-icons';
 import { debounce } from 'lodash';
-import { BACKEND_URL } from '../../config';
 import { fetchTrendingIndustries, fetchTrendingJobs, fetchTrendingSkills } from '../../services/trendsService';
 import { auth, db } from '../../firebase';
 import firebase from 'firebase/compat/app';
@@ -93,6 +94,30 @@ const availableSkills = [
   'UI/UX Design'
 ];
 
+const getBackendUrl = () => {
+  if (Platform.OS === 'ios') {
+    // Use your computer's local IP address when testing with physical iOS device
+    return 'http://192.168.0.100:5000';  // Replace with your actual IP address
+  } else if (Platform.OS === 'android') {
+    return 'http://10.0.2.2:5000';
+  }
+  return 'http://localhost:5000';
+};
+
+const BACKEND_URL = getBackendUrl();
+
+const normalizeJobTitle = async (jobTitle) => {
+  try {
+    const response = await axios.post(`${BACKEND_URL}/normalize-job-title`, {
+      jobTitle: jobTitle
+    });
+    return response.data.normalizedTitle;
+  } catch (error) {
+    console.error('Error normalizing job title:', error);
+    return jobTitle; // Return original title if normalization fails
+  }
+};
+
 export default function JobPreferencesScreen({ navigation }) {
   const { setupData, updateSetupData } = useSetup();
   const [userRole, setUserRole] = useState(null);
@@ -126,6 +151,10 @@ export default function JobPreferencesScreen({ navigation }) {
   const [showPreferences, setShowPreferences] = useState(false);
   const [preferredIndustry, setPreferredIndustry] = useState('');
   const [preferredJobType, setPreferredJobType] = useState('');
+  const [salarySuggestion, setSalarySuggestion] = useState(null);
+  const [isLoadingSalary, setIsLoadingSalary] = useState(false);
+  const [includesTips, setIncludesTips] = useState(false);
+  const [errors, setErrors] = useState({});
   console.log('Initial selectedJobs state:', selectedJobs);
 
   useEffect(() => {
@@ -269,14 +298,70 @@ export default function JobPreferencesScreen({ navigation }) {
         
         const locationString = cityName && stateCode ? `${cityName}, ${stateCode}` : '';
         console.log(`Fetching jobs for industry: ${industry} in ${locationString}`);
-        const jobs = await fetchTrendingJobs(industry, locationString);
+        console.log('Using backend URL:', BACKEND_URL);
+        
+        // First get raw job suggestions
+        const response = await axios.get(
+          `${BACKEND_URL}/suggest-jobs?industry=${encodeURIComponent(industry)}&searchTerm=${''}&location=${encodeURIComponent(locationString)}`
+        );
+        
+        console.log('Raw job suggestions:', response.data);
+        
+        if (!response.data.success || !response.data.jobs) {
+          throw new Error('Failed to fetch job suggestions');
+        }
+
+        // Normalize job titles
+        const rawJobs = response.data.jobs;
+        console.log('Starting job title normalization...');
+        
+        const normalizedJobs = [];
+        for (const jobTitle of rawJobs) {
+          try {
+            console.log(`Attempting to normalize: "${jobTitle}"`);
+            const normalizeResponse = await axios.post(
+              `${BACKEND_URL}/normalize-job-title`,
+              { jobTitle },
+              {
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Accept': 'application/json'
+                },
+                timeout: 10000 // 10 second timeout
+              }
+            );
+            
+            console.log('Normalization response:', normalizeResponse.data);
+            
+            if (normalizeResponse.data.normalizedTitle) {
+              console.log(`Successfully normalized: "${jobTitle}" → "${normalizeResponse.data.normalizedTitle}"`);
+              normalizedJobs.push(normalizeResponse.data.normalizedTitle);
+            } else {
+              console.log(`No normalized title returned for: "${jobTitle}"`);
+              normalizedJobs.push(jobTitle);
+            }
+          } catch (error) {
+            console.error(`Failed to normalize "${jobTitle}":`, error.message);
+            if (error.response) {
+              console.error('Error response:', error.response.data);
+            }
+            normalizedJobs.push(jobTitle);
+          }
+        }
+
+        // Remove duplicates
+        const uniqueJobs = [...new Set(normalizedJobs)];
+        console.log('Final normalized unique jobs:', uniqueJobs);
         
         setSuggestions(prev => ({ 
           ...prev, 
-          jobTypes: jobs 
+          jobTypes: uniqueJobs 
         }));
       } catch (error) {
-        console.error('Error updating job suggestions:', error);
+        console.error('Error in updateJobTypeSuggestions:', error.message);
+        if (error.response) {
+          console.error('Error response:', error.response.data);
+        }
         setSuggestions(prev => ({ 
           ...prev, 
           jobTypes: [] 
@@ -293,15 +378,25 @@ export default function JobPreferencesScreen({ navigation }) {
         
         const locationString = cityName && stateCode ? `${cityName}, ${stateCode}` : '';
         console.log(`Fetching skills for ${jobType} in ${attributes.industryPrefs[0]} in ${locationString}`);
-        const skills = await fetchTrendingSkills(jobType, attributes.industryPrefs[0], locationString);
         
-        if (Array.isArray(skills) && skills.length > 0) {
+        const response = await axios.get(
+          `${BACKEND_URL}/suggest-skills`, {
+            params: {
+              jobTitle: jobType,
+              industry: attributes.industryPrefs[0],
+              location: locationString
+            }
+          }
+        );
+
+        if (response.data.success) {
+          console.log('Received skills:', response.data.skills);
           setSuggestions(prev => ({
             ...prev,
-            skills: skills
+            skills: response.data.skills
           }));
         } else {
-          // Set default skills if none returned
+          // Set default skills if API returns error
           setSuggestions(prev => ({
             ...prev,
             skills: [
@@ -319,7 +414,7 @@ export default function JobPreferencesScreen({ navigation }) {
           }));
         }
       } catch (error) {
-        console.error('Error updating skill suggestions:', error);
+        console.error('Error fetching trending skills:', error);
         // Set default skills on error
         setSuggestions(prev => ({
           ...prev,
@@ -363,9 +458,28 @@ export default function JobPreferencesScreen({ navigation }) {
         );
         const data = await response.json();
         if (data.success) {
+          // Normalize the suggestions
+          const normalizedJobs = await Promise.all(
+            data.jobs.map(async (jobTitle) => {
+              try {
+                const normalizeResponse = await axios.post(`${BACKEND_URL}/normalize-job-title`, {
+                  jobTitle: jobTitle
+                });
+                return normalizeResponse.data.normalizedTitle;
+              } catch (error) {
+                console.error('Error normalizing job title:', error);
+                return jobTitle;
+              }
+            })
+          );
+          
+          // Remove duplicates
+          const uniqueJobs = [...new Set(normalizedJobs)];
+          console.log('Normalized job suggestions:', uniqueJobs);
+          
           setSuggestions(prev => ({
             ...prev,
-            jobTypes: data.jobs
+            jobTypes: uniqueJobs
           }));
         }
       } catch (error) {
@@ -411,33 +525,19 @@ export default function JobPreferencesScreen({ navigation }) {
   };
 
   const handleJobTypeSelect = (jobType) => {
-    console.log('handleJobTypeSelect called with:', jobType);
-    
-    // Update local state first
+    console.log('Job type selected:', jobType);
+    setSelectedJobType(jobType);
     setAttributes(prev => ({
       ...prev,
-      jobTypePrefs: jobType
-    }));
-
-    // Clear any existing skills when job type changes
-    setAttributes(prev => ({
-      ...prev,
+      jobTypePrefs: jobType,
       skills: []
     }));
-
-    // Update parent state if needed
-    if (setupData && updateSetupData) {
-      console.log('Updating setupData:', {
-        ...setupData,
-        jobTypePrefs: jobType,
-        skills: []
-      });
-      updateSetupData({
-        ...setupData,
-        jobTypePrefs: jobType,
-        skills: []
-      });
-    }
+    updateSetupData(prev => ({
+      ...prev,
+      jobTypePrefs: jobType,
+      skills: []
+    }));
+    setShowJobTypeDropdown(false);
 
     // Fetch new skills for the selected job type
     if (jobType) {
@@ -537,100 +637,99 @@ export default function JobPreferencesScreen({ navigation }) {
   };
 
   const handleNext = async () => {
-    console.log('handleNext called with current state:', {
-      userRole,
-      setupData,
-      attributes
-    });
+    const newErrors = {};
+    
+    if (userRole === 'employer') {
+      // Validate pay range if skills are selected
+      if (attributes.skills?.length > 0) {
+        if (!setupData.estPayRangeMin) {
+          newErrors.estPayRangeMin = 'Minimum pay is required';
+        }
+        if (!setupData.estPayRangeMax) {
+          newErrors.estPayRangeMax = 'Maximum pay is required';
+        }
+        if (setupData.estPayRangeMin && setupData.estPayRangeMax && 
+            Number(setupData.estPayRangeMin) >= Number(setupData.estPayRangeMax)) {
+          newErrors.estPayRangeMax = 'Maximum pay must be greater than minimum pay';
+        }
+        
+        // Add validation for tips if included
+        if (includesTips) {
+          if (!setupData.estTipRangeMin) {
+            newErrors.estTipRangeMin = 'Minimum tip estimate is required';
+          }
+          if (!setupData.estTipRangeMax) {
+            newErrors.estTipRangeMax = 'Maximum tip estimate is required';
+          }
+          if (setupData.estTipRangeMin && setupData.estTipRangeMax && 
+              Number(setupData.estTipRangeMin) >= Number(setupData.estTipRangeMax)) {
+            newErrors.estTipRangeMax = 'Maximum tip must be greater than minimum tip';
+          }
+        }
+      }
+    }
+
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      return;
+    }
 
     try {
-      // Ensure we have a valid role
-      const currentRole = userRole || setupData?.userRole || 'employer';
-      console.log('Using role for navigation:', currentRole);
+      // Prepare the data to update
+      const updatedData = {
+        ...setupData,
+        industryPrefs: attributes.industryPrefs,
+        jobTypePrefs: attributes.jobTypePrefs,
+        skills: attributes.skills,
+        // Include pay range and tips data for employers
+        ...(userRole === 'employer' && attributes.skills?.length > 0 && {
+          estPayRangeMin: setupData.estPayRangeMin,
+          estPayRangeMax: setupData.estPayRangeMax,
+          includesTips: includesTips,
+          ...(includesTips && {
+            estTipRangeMin: setupData.estTipRangeMin,
+            estTipRangeMax: setupData.estTipRangeMax,
+          }),
+        }),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      };
 
-      if (currentRole === 'employer') {
-        // Validate employer data
-        if (!attributes.industryPrefs?.[0] || !attributes.jobTypePrefs || !attributes.skills?.length) {
-          Alert.alert('Missing Information', 'Please select industry, job title, and required skills.');
-          return;
-        }
+      // Update setupData context
+      updateSetupData(updatedData);
 
-        // Update all necessary collections
-        await Promise.all([
-          // Update job attributes
-          db.collection('job_attributes').doc(auth.currentUser.uid).set({
-            industry: attributes.industryPrefs[0],
-            jobTitle: attributes.jobTypePrefs,
-            requiredSkills: attributes.skills,
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-          }, { merge: true }),
+      // Update Firebase
+      const collection = userRole === 'employer' ? 'job_attributes' : 'user_attributes';
+      await db.collection(collection).doc(auth.currentUser.uid).update(updatedData);
 
-          // Update user document
-          db.collection('users').doc(auth.currentUser.uid).set({
-            role: currentRole,
-            setupComplete: true,
-            setupStep: 'completed',
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-          }, { merge: true })
-        ]);
-
-        // Update setup context
-        updateSetupData({
-          ...setupData,
-          userRole: currentRole,
-          jobPreferencesCompleted: true,
-          setupComplete: true
-        });
-
-        console.log('Successfully updated all documents, navigating to UserOverview');
-        navigation.reset({
-          index: 0,
-          routes: [{ name: 'UserOverview' }],
-        });
-      } else {
-        // Existing worker logic remains unchanged
-        if (!setupData.selectedJobs?.length) {
-          Alert.alert('No Jobs Selected', 'Please add at least one job before continuing.');
-          return;
-        }
-
-        await db.collection('user_attributes').doc(auth.currentUser.uid).set({
-          selectedJobs: setupData.selectedJobs,
-          preferredIndustry: preferredIndustry.trim() || null,
-          preferredJobType: preferredJobType.trim() || null,
-          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
-
-        navigation.navigate('UserOverview');
-      }
+      // Navigate to UserOverview instead of Availability
+      navigation.navigate('UserOverview');
     } catch (error) {
-      console.error('Error in handleNext:', error);
-      Alert.alert('Error', `Failed to save job information: ${error.message}`);
+      console.error('Error updating preferences:', error);
+      Alert.alert('Error', 'Failed to save your preferences. Please try again.');
     }
   };
 
   const handleIndustrySelect = (industry) => {
-    console.log('handleIndustrySelect called with:', industry);
-    
-    // Update all states
+    console.log('Industry selected:', industry);
+    setSelectedIndustry(industry);
     setAttributes(prev => ({
       ...prev,
       industryPrefs: [industry]
     }));
-    
-    setInputValues(prev => ({
-      ...prev,
-      industryPrefs: industry
-    }));
-    
     updateSetupData(prev => ({
       ...prev,
       industryPrefs: [industry]
     }));
-
+    setShowIndustryDropdown(false);
+    
     // Clear job type when industry changes
     setSelectedJobType('');
     setJobTypeSearchText('');
+    
+    // Close the dropdown after selection
+    setTimeout(() => {
+      setShowIndustryDropdown(false);
+    }, 100);
     
     console.log('Updated states:', {
       attributes: { industryPrefs: [industry] },
@@ -939,26 +1038,28 @@ export default function JobPreferencesScreen({ navigation }) {
               setShowIndustryDropdown(true);
               updateIndustrySuggestions('');
             }}
-            onBlur={() => {
-              console.log('Input blurred');
-              setTimeout(() => setShowIndustryDropdown(false), 200);
-            }}
           />
           {showIndustryDropdown && (
-            <View style={styles.suggestionsContainer}>
-              {industries.map((industry, index) => (
+            <ScrollView 
+              style={styles.dropdown}
+              horizontal={false}
+              nestedScrollEnabled={true}
+            >
+              {suggestions.industries.map((item) => (
                 <TouchableOpacity
-                  key={index}
-                  style={styles.suggestionItem}
+                  key={item}
+                  style={styles.dropdownItem}
                   onPress={() => {
-                    handleIndustrySelect(industry);
+                    console.log('Industry selected:', item);
+                    handleIndustrySelect(item);
+                    setSelectedIndustry(item);
                     setShowIndustryDropdown(false);
                   }}
                 >
-                  <Text style={styles.suggestionText}>{industry}</Text>
+                  <Text>{item}</Text>
                 </TouchableOpacity>
               ))}
-            </View>
+            </ScrollView>
           )}
         </View>
 
@@ -1005,19 +1106,13 @@ export default function JobPreferencesScreen({ navigation }) {
                     fetchJobSuggestions(attributes.industryPrefs[0]);
                   }
                 }}
-                onBlur={() => {
-                  console.log('Job Type input blurred');
-                  // If there's text but no selection was made, use the typed text
-                  if (jobTypeSearchText && !selectedJobType) {
-                    setSelectedJobType(jobTypeSearchText);
-                    handleJobTypeSelect(jobTypeSearchText);
-                  }
-                  setTimeout(() => setShowJobTypeDropdown(false), 200);
-                }}
               />
               {showJobTypeDropdown && (
-                <View style={styles.dropdown}>
-                  {/* Show typed text as first option if it doesn't match any suggestions */}
+                <ScrollView 
+                  style={styles.dropdown}
+                  horizontal={false}
+                  nestedScrollEnabled={true}
+                >
                   {jobTypeSearchText && 
                    !suggestions.jobTypes.some(job => 
                      job.toLowerCase() === jobTypeSearchText.toLowerCase()
@@ -1025,8 +1120,9 @@ export default function JobPreferencesScreen({ navigation }) {
                     <TouchableOpacity
                       style={[styles.dropdownItem, styles.customDropdownItem]}
                       onPress={() => {
-                        setSelectedJobType(jobTypeSearchText);
+                        console.log('Custom job type selected:', jobTypeSearchText);
                         handleJobTypeSelect(jobTypeSearchText);
+                        setSelectedJobType(jobTypeSearchText);
                         setShowJobTypeDropdown(false);
                       }}
                     >
@@ -1034,7 +1130,6 @@ export default function JobPreferencesScreen({ navigation }) {
                     </TouchableOpacity>
                   )}
                   
-                  {/* Show filtered suggestions */}
                   {suggestions.jobTypes
                     .filter(jobType => 
                       !jobTypeSearchText || 
@@ -1045,16 +1140,16 @@ export default function JobPreferencesScreen({ navigation }) {
                         key={jobType}
                         style={styles.dropdownItem}
                         onPress={() => {
-                          setSelectedJobType(jobType);
-                          setJobTypeSearchText('');
+                          console.log('Job type selected:', jobType);
                           handleJobTypeSelect(jobType);
+                          setSelectedJobType(jobType);
                           setShowJobTypeDropdown(false);
                         }}
                       >
                         <Text>{jobType}</Text>
                       </TouchableOpacity>
                     ))}
-                </View>
+                </ScrollView>
               )}
             </View>
 
@@ -1062,22 +1157,217 @@ export default function JobPreferencesScreen({ navigation }) {
             {attributes.jobTypePrefs && renderSkills()}
           </>
         )}
+
+        {userRole === 'employer' && attributes.skills?.length > 0 && (
+          <>
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Pay Range Estimate ($/hr)</Text>
+              <View style={styles.payRangeContainer}>
+                <View style={styles.payRangeInput}>
+                  <TextInput
+                    style={[
+                      styles.input,
+                      styles.payInput,
+                      errors.estPayRangeMin && styles.inputError
+                    ]}
+                    value={setupData.estPayRangeMin}
+                    onChangeText={(text) => {
+                      updateSetupData({ estPayRangeMin: text });
+                      setErrors(prev => ({ ...prev, estPayRangeMin: null }));
+                    }}
+                    placeholder="Min"
+                    placeholderTextColor="#64748b"
+                    keyboardType="numeric"
+                  />
+                  {errors.estPayRangeMin && <Text style={styles.errorText}>{errors.estPayRangeMin}</Text>}
+                </View>
+                
+                <Text style={styles.payRangeSeparator}>to</Text>
+                
+                <View style={styles.payRangeInput}>
+                  <TextInput
+                    style={[
+                      styles.input,
+                      styles.payInput,
+                      errors.estPayRangeMax && styles.inputError
+                    ]}
+                    value={setupData.estPayRangeMax}
+                    onChangeText={(text) => {
+                      updateSetupData({ estPayRangeMax: text });
+                      setErrors(prev => ({ ...prev, estPayRangeMax: null }));
+                    }}
+                    placeholder="Max"
+                    placeholderTextColor="#64748b"
+                    keyboardType="numeric"
+                  />
+                  {errors.estPayRangeMax && <Text style={styles.errorText}>{errors.estPayRangeMax}</Text>}
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Does this job include tips?</Text>
+              <View style={styles.tipsButtonContainer}>
+                {['Yes', 'No'].map((option) => (
+                  <TouchableOpacity
+                    key={option}
+                    style={[
+                      styles.tipsButton,
+                      includesTips === (option === 'Yes') && styles.tipsButtonActive
+                    ]}
+                    onPress={() => {
+                      setIncludesTips(option === 'Yes');
+                      if (option === 'No') {
+                        updateSetupData({ 
+                          estTipRangeMin: '', 
+                          estTipRangeMax: '' 
+                        });
+                      }
+                    }}
+                  >
+                    <Text style={[
+                      styles.tipsButtonText,
+                      includesTips === (option === 'Yes') && styles.tipsButtonTextActive
+                    ]}>
+                      {option}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            {includesTips && (
+              <View style={styles.inputContainer}>
+                <Text style={styles.label}>Estimated Tips Range ($/hr)</Text>
+                <View style={styles.payRangeContainer}>
+                  <View style={styles.payRangeInput}>
+                    <TextInput
+                      style={[
+                        styles.input,
+                        styles.payInput,
+                        errors.estTipRangeMin && styles.inputError
+                      ]}
+                      value={setupData.estTipRangeMin}
+                      onChangeText={(text) => {
+                        updateSetupData({ estTipRangeMin: text });
+                        setErrors(prev => ({ ...prev, estTipRangeMin: null }));
+                      }}
+                      placeholder="Min"
+                      placeholderTextColor="#64748b"
+                      keyboardType="numeric"
+                    />
+                    {errors.estTipRangeMin && <Text style={styles.errorText}>{errors.estTipRangeMin}</Text>}
+                  </View>
+                  
+                  <Text style={styles.payRangeSeparator}>to</Text>
+                  
+                  <View style={styles.payRangeInput}>
+                    <TextInput
+                      style={[
+                        styles.input,
+                        styles.payInput,
+                        errors.estTipRangeMax && styles.inputError
+                      ]}
+                      value={setupData.estTipRangeMax}
+                      onChangeText={(text) => {
+                        updateSetupData({ estTipRangeMax: text });
+                        setErrors(prev => ({ ...prev, estTipRangeMax: null }));
+                      }}
+                      placeholder="Max"
+                      placeholderTextColor="#64748b"
+                      keyboardType="numeric"
+                    />
+                    {errors.estTipRangeMax && <Text style={styles.errorText}>{errors.estTipRangeMax}</Text>}
+                  </View>
+                </View>
+              </View>
+            )}
+          </>
+        )}
       </View>
     </>
   );
 
-  // Add or modify the isFormValid function
-  const isFormValid = () => {
+  // Add this function to check if minimum requirements are met
+  const hasMinimumRequirements = () => {
     if (userRole === 'employer') {
+      // Employers need industry, job type, and at least one skill
       return (
-        setupData.industryPrefs?.length > 0 &&
-        setupData.selectedJobs?.length > 0 &&
-        setupData.skills?.length > 0
+        attributes.industryPrefs?.length > 0 &&
+        attributes.jobTypePrefs &&
+        attributes.skills?.length > 0
       );
     } else {
-      // Worker validation logic
-      return setupData.selectedJobs?.length > 0; // Only check if they've added at least one job
+      // Workers need at least one selected job
+      return selectedJobs.length > 0;
     }
+  };
+
+  // Add this function to fetch salary suggestions
+  const fetchSalarySuggestion = async () => {
+    if (!attributes.jobTypePrefs || !attributes.industryPrefs[0] || !cityName || attributes.skills.length === 0) {
+      return;
+    }
+
+    setIsLoadingSalary(true);
+    try {
+      const locationString = `${cityName}, ${stateCode}`;
+      const skillsString = attributes.skills.map(s => s.name).join(',');
+      
+      const response = await axios.get(
+        `${BACKEND_URL}/suggest-salary`, {
+          params: {
+            jobTitle: attributes.jobTypePrefs,
+            industry: attributes.industryPrefs[0],
+            location: locationString,
+            skills: skillsString
+          }
+        }
+      );
+
+      if (response.data.success) {
+        setSalarySuggestion(response.data.salary);
+      }
+    } catch (error) {
+      console.error('Error fetching salary suggestion:', error);
+    } finally {
+      setIsLoadingSalary(false);
+    }
+  };
+
+  // Add this useEffect to trigger salary suggestion
+  useEffect(() => {
+    if (userRole === 'employer' && 
+        attributes.jobTypePrefs && 
+        attributes.industryPrefs[0] && 
+        cityName && 
+        attributes.skills.length > 0) {
+      fetchSalarySuggestion();
+    }
+  }, [attributes.jobTypePrefs, attributes.industryPrefs, cityName, attributes.skills]);
+
+  // Add this component to render the salary suggestion
+  const renderSalarySuggestion = () => {
+    if (!salarySuggestion) return null;
+
+    return (
+      <View style={styles.salaryContainer}>
+        <Text style={styles.salaryTitle}>Suggested Pay Range</Text>
+        <View style={styles.salaryContent}>
+          <Text style={styles.salaryRange}>
+            ${salarySuggestion.minPay.toFixed(2)} - ${salarySuggestion.maxPay.toFixed(2)} /hr
+          </Text>
+          {salarySuggestion.marketData && (
+            <Text style={styles.marketData}>
+              Market Average: ${salarySuggestion.marketData.avgMin.toFixed(2)} - ${salarySuggestion.marketData.avgMax.toFixed(2)} /hr
+            </Text>
+          )}
+          <Text style={styles.salaryExplanation}>
+            {salarySuggestion.explanation}
+          </Text>
+        </View>
+      </View>
+    );
   };
 
   return (
@@ -1086,155 +1376,7 @@ export default function JobPreferencesScreen({ navigation }) {
       
       <ScrollView keyboardShouldPersistTaps="handled">
         <View style={styles.content}>
-          <View style={styles.header}>
-            <Text style={styles.title}>
-              {userRole === 'employer' 
-                ? "Tell us about the position"
-                : "Select your job preferences"}
-            </Text>
-            <Text style={styles.subtitle}>
-              {userRole === 'employer'
-                ? "Define the role you're hiring for"
-                : "Choose industries and roles you're interested in"}
-            </Text>
-          </View>
-
-          <View style={styles.form}>
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Industry</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Select Industry"
-                value={selectedIndustry || inputValues.industryPrefs}
-                onFocus={() => {
-                  console.log('Industry input focused');
-                  setShowIndustryDropdown(true);
-                  updateIndustrySuggestions('');
-                }}
-                onBlur={() => {
-                  console.log('Input blurred');
-                  setTimeout(() => setShowIndustryDropdown(false), 200);
-                }}
-              />
-              {showIndustryDropdown && (
-                <View style={styles.suggestionsContainer}>
-                  {industries.map((industry, index) => (
-                    <TouchableOpacity
-                      key={index}
-                      style={styles.suggestionItem}
-                      onPress={() => {
-                        handleIndustrySelect(industry);
-                        setShowIndustryDropdown(false);
-                      }}
-                    >
-                      <Text style={styles.suggestionText}>{industry}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-            </View>
-
-            {/* Display selected industries */}
-            <View style={styles.selectedItemsContainer}>
-              {setupData.industryPrefs?.map((industry, index) => (
-                <View key={index} style={styles.selectedItem}>
-                  <Text>{industry}</Text>
-                  <TouchableOpacity
-                    onPress={() => {
-                      const updatedPrefs = setupData.industryPrefs.filter((_, i) => i !== index);
-                      updateSetupData({
-                        ...setupData,
-                        industryPrefs: updatedPrefs
-                      });
-                    }}
-                  >
-                    <Ionicons name="close-circle" size={20} color="red" />
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </View>
-
-            {attributes.industryPrefs?.[0] && (
-              <>
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>Job Type</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Select or Type Job Title"
-                    value={selectedJobType || jobTypeSearchText}
-                    editable={true}
-                    onChangeText={(text) => {
-                      setJobTypeSearchText(text);
-                      setSelectedJobType(''); // Clear selected job when typing
-                      if (attributes.industryPrefs?.[0]) {
-                        fetchJobSuggestions(attributes.industryPrefs[0]);
-                      }
-                    }}
-                    onFocus={() => {
-                      console.log('Job Type input focused');
-                      setShowJobTypeDropdown(true);
-                      if (attributes.industryPrefs?.[0]) {
-                        fetchJobSuggestions(attributes.industryPrefs[0]);
-                      }
-                    }}
-                    onBlur={() => {
-                      console.log('Job Type input blurred');
-                      // If there's text but no selection was made, use the typed text
-                      if (jobTypeSearchText && !selectedJobType) {
-                        setSelectedJobType(jobTypeSearchText);
-                        handleJobTypeSelect(jobTypeSearchText);
-                      }
-                      setTimeout(() => setShowJobTypeDropdown(false), 200);
-                    }}
-                  />
-                  {showJobTypeDropdown && (
-                    <View style={styles.dropdown}>
-                      {/* Show typed text as first option if it doesn't match any suggestions */}
-                      {jobTypeSearchText && 
-                       !suggestions.jobTypes.some(job => 
-                         job.toLowerCase() === jobTypeSearchText.toLowerCase()
-                       ) && (
-                        <TouchableOpacity
-                          style={[styles.dropdownItem, styles.customDropdownItem]}
-                          onPress={() => {
-                            setSelectedJobType(jobTypeSearchText);
-                            handleJobTypeSelect(jobTypeSearchText);
-                            setShowJobTypeDropdown(false);
-                          }}
-                        >
-                          <Text>Use: "{jobTypeSearchText}"</Text>
-                        </TouchableOpacity>
-                      )}
-                      
-                      {/* Show filtered suggestions */}
-                      {suggestions.jobTypes
-                        .filter(jobType => 
-                          !jobTypeSearchText || 
-                          jobType.toLowerCase().includes(jobTypeSearchText.toLowerCase())
-                        )
-                        .map((jobType) => (
-                          <TouchableOpacity
-                            key={jobType}
-                            style={styles.dropdownItem}
-                            onPress={() => {
-                              setSelectedJobType(jobType);
-                              setJobTypeSearchText('');
-                              handleJobTypeSelect(jobType);
-                              setShowJobTypeDropdown(false);
-                            }}
-                          >
-                            <Text>{jobType}</Text>
-                          </TouchableOpacity>
-                        ))}
-                    </View>
-                  )}
-                </View>
-
-                {/* Skills Selection - Show when job type is selected */}
-                {attributes.jobTypePrefs && renderSkills()}
-              </>
-            )}
-          </View>
+          {renderContent()}
 
           {/* Add Job button and Selected Jobs section for workers */}
           {userRole === 'worker' && (
@@ -1283,7 +1425,7 @@ export default function JobPreferencesScreen({ navigation }) {
                     onPress={() => setShowPreferences(!showPreferences)}
                   >
                     <Text style={styles.preferencesTitle}>
-                      🎯 Tell us about your dream job (Optional)
+                      Tell us about your optimal job (Optional)
                     </Text>
                     <Text style={styles.preferencesSubtitle}>
                       This helps us find positions that better match your career goals
@@ -1322,25 +1464,35 @@ export default function JobPreferencesScreen({ navigation }) {
               )}
             </>
           )}
+
+          {/* Salary Suggestion */}
+          {userRole === 'employer' && renderSalarySuggestion()}
         </View>
       </ScrollView>
 
       <View style={styles.buttonContainer}>
         <TouchableOpacity
-          style={styles.backButton}
+          style={[styles.backButton, styles.buttonBase]}
           onPress={() => navigation.goBack()}
         >
           <Text style={styles.backButtonText}>Back</Text>
         </TouchableOpacity>
+
         <TouchableOpacity
           style={[
             styles.nextButton,
-            isFormValid() ? styles.nextButtonEnabled : styles.nextButtonDisabled
+            styles.buttonBase,
+            !hasMinimumRequirements() && styles.nextButtonDisabled
           ]}
           onPress={handleNext}
-          disabled={!isFormValid()}
+          disabled={!hasMinimumRequirements()}
         >
-          <Text style={styles.nextButtonText}>Next</Text>
+          <Text style={[
+            styles.nextButtonText,
+            !hasMinimumRequirements() && styles.nextButtonTextDisabled
+          ]}>
+            Next
+          </Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -1514,12 +1666,14 @@ const styles = StyleSheet.create({
     borderTopColor: '#e2e8f0',
     backgroundColor: '#ffffff',
   },
-  backButton: {
+  buttonBase: {
     flex: 1,
-    backgroundColor: '#ffffff',
     padding: 12,
     borderRadius: 8,
     alignItems: 'center',
+  },
+  backButton: {
+    backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#cbd5e1',
   },
@@ -1529,21 +1683,18 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   nextButton: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  nextButtonEnabled: {
-    backgroundColor: '#2563eb', // Blue color when enabled
+    backgroundColor: '#2563eb',
   },
   nextButtonDisabled: {
-    backgroundColor: '#94a3b8', // Grey color when disabled
+    backgroundColor: '#94a3b8',
   },
   nextButtonText: {
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '500',
+  },
+  nextButtonTextDisabled: {
+    opacity: 0.8,
   },
   bubbleContainer: {
     flexDirection: 'row',
@@ -1649,28 +1800,31 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   dropdown: {
-    flex: 1,
+    position: 'absolute',
+    top: '100%',
+    left: 0,
+    right: 0,
     backgroundColor: 'white',
-  },
-  dropdownContent: {
-    flexGrow: 0,
+    borderColor: '#ccc',
+    borderWidth: 1,
+    borderRadius: 4,
+    marginTop: 2,
+    maxHeight: 200,
+    zIndex: 1000,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
   },
   dropdownItem: {
-    padding: 15,
+    padding: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
     backgroundColor: 'white',
   },
-  debugInfo: {
-    padding: 10,
-    margin: 10,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 5,
-  },
   customDropdownItem: {
-    backgroundColor: '#f0f9ff', // Light blue background
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
+    backgroundColor: '#f0f9ff',
   },
   customSkillContainer: {
     marginBottom: 12,
@@ -1714,24 +1868,6 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     paddingHorizontal: 10,
     backgroundColor: 'white',
-  },
-  dropdown: {
-    position: 'absolute',
-    top: '100%',
-    left: 0,
-    right: 0,
-    backgroundColor: 'white',
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 5,
-    maxHeight: 200,
-    zIndex: 1000,
-    elevation: 5,
-  },
-  dropdownItem: {
-    padding: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
   },
   selectedItemsContainer: {
     flexDirection: 'row',
@@ -1792,5 +1928,84 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 14,
     backgroundColor: '#fff',
+  },
+  salaryContainer: {
+    backgroundColor: '#f0f9ff',
+    borderRadius: 8,
+    padding: 16,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#bae6fd',
+  },
+  salaryTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#0369a1',
+    marginBottom: 8,
+  },
+  salaryContent: {
+    gap: 8,
+  },
+  salaryRange: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#0284c7',
+  },
+  salaryExplanation: {
+    fontSize: 14,
+    color: '#0369a1',
+    lineHeight: 20,
+  },
+  marketData: {
+    fontSize: 14,
+    color: '#0369a1',
+    fontStyle: 'italic',
+    marginTop: 4,
+  },
+  payRangeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  payRangeInput: {
+    flex: 1,
+  },
+  payInput: {
+    textAlign: 'center',
+  },
+  payRangeSeparator: {
+    marginHorizontal: 10,
+    color: '#64748b',
+    fontWeight: '500',
+  },
+  tipsButtonContainer: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  tipsButton: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    alignItems: 'center',
+  },
+  tipsButtonActive: {
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb',
+  },
+  tipsButtonText: {
+    color: '#1e3a8a',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  tipsButtonTextActive: {
+    color: '#ffffff',
+  },
+  errorText: {
+    color: '#ef4444',
+    fontSize: 12,
+    marginTop: 4,
   },
 }); 

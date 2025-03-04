@@ -41,6 +41,7 @@ import UserOverviewScreen from './src/screens/setup/UserOverviewScreen';
 
 import AppNavigator from './src/navigation/AppNavigator';
 import JobHomeScreen from './src/screens/JobHomeScreen';
+import NotificationService from './src/services/NotificationService';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -161,49 +162,66 @@ export default function App() {
   const [initializing, setInitializing] = useState(true);
   const [user, setUser] = useState(null);
   const [isSetupComplete, setIsSetupComplete] = useState(false);
+  const [isCheckingSetup, setIsCheckingSetup] = useState(true);
 
   // Handle user state changes
   async function onAuthStateChanged(user) {
+    console.log('[NAV] Auth state changed:', user ? `User logged in: ${user.uid}` : 'No user');
+    
     try {
       if (user) {
         setUser(user);
+        setIsCheckingSetup(true); // Start checking setup status
+        
         console.log('Checking setup status for user:', user.uid);
         
+        // First get the user document to determine role
         const userDoc = await db.collection('users').doc(user.uid).get();
+        
         if (!userDoc.exists) {
           console.log('User document does not exist');
           setIsSetupComplete(false);
+          setIsCheckingSetup(false); // Done checking
           return;
         }
 
         const userData = userDoc.data();
+        console.log('User role:', userData.role);
+        
+        // Determine which attributes collection to check based on role
         const attributesCollection = userData.role === 'employer' ? 'job_attributes' : 'user_attributes';
         const attributesDoc = await db.collection(attributesCollection).doc(user.uid).get();
 
-        // Simplified setup check
-        const setupComplete = Boolean(
-          userDoc.exists &&
-          attributesDoc.exists &&
-          userData.setupComplete === true
-        );
+        const isComplete = userDoc.exists && 
+                          attributesDoc.exists && 
+                          userData.setupComplete === true;
 
-        console.log('Setup status:', {
-          uid: user.uid,
-          setupComplete,
-          role: userData.role,
+        console.log('Setup complete check:', {
+          userDocExists: userDoc.exists,
+          attributesDocExists: attributesDoc.exists,
           setupCompleteFlag: userData.setupComplete,
-          hasAttributes: attributesDoc.exists
+          finalStatus: isComplete
         });
 
-        setIsSetupComplete(setupComplete);
+        setIsSetupComplete(isComplete);
+        setIsCheckingSetup(false); // Done checking
+
+        // Initialize notifications
+        NotificationService.init().then(success => {
+          if (success) {
+            NotificationService.setupMessageListeners();
+          }
+        });
       } else {
         setUser(null);
         setIsSetupComplete(false);
+        setIsCheckingSetup(false); // Done checking
       }
     } catch (error) {
-      console.error('Error in onAuthStateChanged:', error);
+      console.error('Error checking setup status:', error);
       console.error('Error details:', error.message);
       setIsSetupComplete(false);
+      setIsCheckingSetup(false); // Done checking on error too
     } finally {
       if (initializing) {
         setInitializing(false);
@@ -213,10 +231,14 @@ export default function App() {
 
   useEffect(() => {
     const subscriber = auth.onAuthStateChanged(onAuthStateChanged);
-    return subscriber;
+    
+    return () => {
+      subscriber(); // Existing cleanup
+      NotificationService.removeListeners(); // Add this for notification cleanup
+    };
   }, []);
 
-  if (initializing) {
+  if (initializing || isCheckingSetup) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#0000ff" />
@@ -232,7 +254,7 @@ export default function App() {
         ) : !isSetupComplete ? (
           <SetupStack />
         ) : (
-          <AppNavigator initialRouteName="Main" />
+          <AppNavigator />
         )}
       </NavigationContainer>
     </SetupProvider>

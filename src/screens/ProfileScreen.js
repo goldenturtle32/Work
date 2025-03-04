@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Platform, TextInput, Modal, FlatList } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Platform, TextInput, Modal, FlatList, KeyboardAvoidingView, Keyboard } from 'react-native';
 import { db, auth, firebase } from '../firebase';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -115,6 +115,8 @@ export default function ProfileScreen({ navigation }) {
   // so scrolling on iOS doesn't re-render the entire screen each time
   const timeRef = useRef(new Date());
 
+  const [isJobOverview, setIsJobOverview] = useState(false);
+
   useEffect(() => {
     const fetchUserData = async () => {
       try {
@@ -130,7 +132,8 @@ export default function ProfileScreen({ navigation }) {
         if (userData.exists && attributesDoc.exists) {
           const combinedData = {
             ...userData.data(),
-            ...attributesDoc.data()
+            ...attributesDoc.data(),
+            skills: userRole === 'employer' ? attributesDoc.data().skills : attributesDoc.data().skills
           };
           
           setProfileData(combinedData);
@@ -300,29 +303,50 @@ export default function ProfileScreen({ navigation }) {
 
   const handleUpdateOverview = async () => {
     try {
-      const userRole = profileData.role;
-      const collectionName = userRole === 'employer'
-        ? 'job_attributes'
-        : 'user_attributes';
+      console.log('Updating overview:', { // Debug logs
+        isJobOverview,
+        role: profileData.role,
+        docId: selectedJobId || currentUser.uid,
+        newOverview: editedOverview
+      });
 
-      await Promise.all([
-        db.collection('users').doc(currentUser.uid).update({
-          user_overview: editedOverview
-        }),
-        db.collection(collectionName).doc(currentUser.uid).update({
-          user_overview: editedOverview
-        })
-      ]);
+      if (isJobOverview && profileData.role === 'employer') {
+        const docId = selectedJobId || currentUser.uid;
+        await db.collection('job_attributes').doc(docId).update({
+          job_overview: editedOverview
+        });
+        
+        setProfileData(prev => ({
+          ...prev,
+          job_overview: editedOverview
+        }));
+        Alert.alert('Success', 'Job Overview updated successfully');
+        setIsEditingOverview(false);
+        setIsJobOverview(false);
+      } else if (!isJobOverview) {
+        // Existing About Me update code
+        const userRole = profileData.role;
+        const collectionName = userRole === 'employer' ? 'job_attributes' : 'user_attributes';
 
-      setProfileData(prev => ({
-        ...prev,
-        user_overview: editedOverview
-      }));
-      setIsEditingOverview(false);
-      Alert.alert('Success', 'About Me updated successfully');
+        await Promise.all([
+          db.collection('users').doc(currentUser.uid).update({
+            user_overview: editedOverview
+          }),
+          db.collection(collectionName).doc(currentUser.uid).update({
+            user_overview: editedOverview
+          })
+        ]);
+        
+        setProfileData(prev => ({
+          ...prev,
+          user_overview: editedOverview
+        }));
+        Alert.alert('Success', 'About Me updated successfully');
+        setIsEditingOverview(false);
+      }
     } catch (error) {
       console.error('Error updating overview:', error);
-      Alert.alert('Error', 'Failed to update About Me');
+      Alert.alert('Error', 'Failed to update overview');
     }
   };
 
@@ -633,7 +657,26 @@ export default function ProfileScreen({ navigation }) {
    * We embed the iOS time picker as a sub-modal if needed.
    */
   const AvailabilityEditModal = () => {
+    // Add local state for availability data
+    const [localAvailabilityData, setLocalAvailabilityData] = useState({
+      day: '',
+      repeatType: 'weekly',
+      slots: []
+    });
+
+    // Initialize local state when modal opens
+    useEffect(() => {
+      if (isEditingAvailability) {
+        setLocalAvailabilityData({
+          day: editingAvailabilityData.day || '',
+          repeatType: editingAvailabilityData.repeatType || 'weekly',
+          slots: editingAvailabilityData.slots || []
+        });
+      }
+    }, [isEditingAvailability, editingAvailabilityData]);
+
     if (!isEditingAvailability) return null;
+    
     return (
       <Modal
         visible={isEditingAvailability}
@@ -658,7 +701,14 @@ export default function ProfileScreen({ navigation }) {
                         styles.dayButton,
                         profileData.availability[day]?.slots && styles.availableDayButton
                       ]}
-                      onPress={() => setSelectedDay(day)}
+                      onPress={() => {
+                        setSelectedDay(day);
+                        setLocalAvailabilityData(prev => ({
+                          ...prev,
+                          day: day,
+                          slots: profileData.availability[day]?.slots || []
+                        }));
+                      }}
                     >
                       <Text style={styles.dayButtonText}>{day}</Text>
                     </TouchableOpacity>
@@ -704,7 +754,36 @@ export default function ProfileScreen({ navigation }) {
 
               <TouchableOpacity
                 style={[styles.modalButton, styles.saveButton]}
-                onPress={handleSaveAvailability}
+                onPress={async () => {
+                  if (!newTimeSlot.startTime || !newTimeSlot.endTime) {
+                    Alert.alert('Error', 'Please select both start and end times first');
+                    return;
+                  }
+
+                  try {
+                    // Update local state first
+                    const updatedSlots = [...localAvailabilityData.slots, newTimeSlot];
+                    setLocalAvailabilityData(prev => ({
+                      ...prev,
+                      slots: updatedSlots
+                    }));
+
+                    // Then update Firebase and parent state
+                    await handleEditAvailability({
+                      day: selectedDay,
+                      repeatType: 'weekly',
+                      slots: updatedSlots
+                    });
+
+                    // Reset form
+                    setIsEditingAvailability(false);
+                    setSelectedDay(null);
+                    setNewTimeSlot({ startTime: '', endTime: '' });
+                  } catch (error) {
+                    console.error('Error saving new availability slot:', error);
+                    Alert.alert('Error', 'Failed to save new time slot');
+                  }
+                }}
               >
                 <Text style={styles.saveButtonText}>Save</Text>
               </TouchableOpacity>
@@ -860,6 +939,7 @@ export default function ProfileScreen({ navigation }) {
               <Text style={styles.sectionTitle}>About Me</Text>
               <TouchableOpacity
                 onPress={() => {
+                  setIsJobOverview(false);
                   setEditedOverview(profileData?.user_overview || '');
                   setIsEditingOverview(true);
                 }}
@@ -871,41 +951,6 @@ export default function ProfileScreen({ navigation }) {
             <Text style={styles.overviewText}>
               {profileData?.user_overview || 'No overview provided'}
             </Text>
-
-            {/* Edit Overview Modal */}
-            <Modal
-              visible={isEditingOverview}
-              animationType="slide"
-              transparent={true}
-            >
-              <View style={styles.modalContainer}>
-                <View style={styles.modalContent}>
-                  <Text style={styles.modalTitle}>Edit About Me</Text>
-                  <TextInput
-                    style={styles.overviewInput}
-                    multiline
-                    value={editedOverview}
-                    onChangeText={setEditedOverview}
-                    placeholder="Write something about yourself..."
-                    textAlignVertical="top"
-                  />
-                  <View style={styles.modalButtons}>
-                    <TouchableOpacity
-                      style={[styles.modalButton, styles.cancelButton]}
-                      onPress={() => setIsEditingOverview(false)}
-                    >
-                      <Text style={styles.cancelButtonText}>Cancel</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.modalButton, styles.saveButton]}
-                      onPress={handleUpdateOverview}
-                    >
-                      <Text style={styles.saveButtonText}>Save</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </View>
-            </Modal>
           </View>
 
           {/* LOCATION PREFERENCES (ONLY FOR WORKERS) */}
@@ -1093,7 +1138,7 @@ export default function ProfileScreen({ navigation }) {
         </View>
       )}
 
-      <View style={styles.actionButtonsContainer}>
+      <View style={[styles.actionButtonsContainer, { paddingHorizontal: 20, paddingVertical: 4 }]}>
         <TouchableOpacity
           style={styles.postJobButton}
           onPress={handlePostNewJob}
@@ -1190,18 +1235,24 @@ export default function ProfileScreen({ navigation }) {
         <View style={styles.section}>
           <View style={styles.sectionHeaderRow}>
             <Text style={styles.sectionTitle}>Job Overview</Text>
-            <TouchableOpacity
-              onPress={() => {
-                setEditedOverview(profileData?.job_overview || '');
-                setIsEditingOverview(true);
-              }}
-              style={styles.editButton}
-            >
-              <Ionicons name="pencil" size={20} color="#2563eb" />
-            </TouchableOpacity>
+            {profileData.role === 'employer' && (
+              <TouchableOpacity
+                onPress={() => {
+                  console.log('Edit button pressed'); // Debug log
+                  console.log('Current role:', profileData.role); // Debug log
+                  console.log('Current overview:', profileData.job_overview); // Debug log
+                  setIsJobOverview(true);
+                  setEditedOverview(profileData.job_overview || '');
+                  setIsEditingOverview(true);
+                }}
+                style={styles.editButton}
+              >
+                <Ionicons name="pencil" size={20} color="#2563eb" />
+              </TouchableOpacity>
+            )}
           </View>
           <Text style={styles.overviewText}>
-            {profileData?.job_overview || 'No job overview provided'}
+            {profileData.job_overview || 'No job overview provided'}
           </Text>
         </View>
 
@@ -1307,282 +1358,363 @@ export default function ProfileScreen({ navigation }) {
   /**
    * Modal to edit job details (shared for worker/employer, but mostly used by employer)
    */
-  const JobEditModal = () => (
-    <Modal visible={isEditingJob} animationType="slide" transparent={true}>
-      <View style={styles.modalContainer}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Edit Job Details</Text>
-          
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Industry</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Select Industry"
-              value={editingJobData.industry}
-              onFocus={() => setShowIndustryDropdown(true)}
-            />
-            {showIndustryDropdown && (
-              <View style={styles.dropdown}>
-                {Job.industries?.map((industry) => (
-                  <TouchableOpacity
-                    key={industry}
-                    style={styles.dropdownItem}
-                    onPress={() => {
-                      setEditingJobData(prev => ({ ...prev, industry }));
-                      setShowIndustryDropdown(false);
+  const JobEditModal = () => {
+    // Add local state for job data, similar to PayRangeEditModal
+    const [localJobData, setLocalJobData] = useState({
+      industry: '',
+      jobTitle: '',
+      companyName: '',
+      requiredSkills: []
+    });
+
+    // Initialize local state when modal opens
+    useEffect(() => {
+      if (isEditingJob) {
+        setLocalJobData({
+          industry: editingJobData.industry || '',
+          jobTitle: editingJobData.jobTitle || '',
+          companyName: editingJobData.companyName || '',
+          requiredSkills: editingJobData.requiredSkills || []
+        });
+      }
+    }, [isEditingJob, editingJobData]);
+
+    return (
+      <Modal visible={isEditingJob} animationType="slide" transparent={true}>
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Edit Job Details</Text>
+            
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Industry</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Select Industry"
+                value={localJobData.industry}
+                onFocus={() => setShowIndustryDropdown(true)}
+                onChangeText={(text) => setLocalJobData(prev => ({ ...prev, industry: text }))}
+              />
+              {showIndustryDropdown && (
+                <View style={styles.dropdown}>
+                  {Job.industries?.map((industry) => (
+                    <TouchableOpacity
+                      key={industry}
+                      style={styles.dropdownItem}
+                      onPress={() => {
+                        setLocalJobData(prev => ({ ...prev, industry }));
+                        setShowIndustryDropdown(false);
+                      }}
+                    >
+                      <Text>{industry}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+            </View>
+
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Job Title</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Job Title"
+                value={localJobData.jobTitle}
+                onChangeText={(text) => setLocalJobData(prev => ({ ...prev, jobTitle: text }))}
+              />
+            </View>
+
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Company Name</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Company Name"
+                value={localJobData.companyName}
+                onChangeText={(text) => setLocalJobData(prev => ({ ...prev, companyName: text }))}
+              />
+            </View>
+
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Required Skills</Text>
+              {localJobData.requiredSkills?.map((skill, index) => (
+                <View key={index} style={styles.skillInputRow}>
+                  <TextInput
+                    style={styles.skillInput}
+                    placeholder="Skill name"
+                    value={skill.name}
+                    onChangeText={(text) => {
+                      const newSkills = [...localJobData.requiredSkills];
+                      newSkills[index] = { ...skill, name: text };
+                      setLocalJobData(prev => ({ ...prev, requiredSkills: newSkills }));
                     }}
+                  />
+                  <TextInput
+                    style={styles.yearsInput}
+                    placeholder="Years"
+                    keyboardType="numeric"
+                    value={skill.yearsOfExperience?.toString()}
+                    onChangeText={(text) => {
+                      const newSkills = [...localJobData.requiredSkills];
+                      newSkills[index] = {
+                        ...skill,
+                        yearsOfExperience: parseInt(text) || 0
+                      };
+                      setLocalJobData(prev => ({ ...prev, requiredSkills: newSkills }));
+                    }}
+                  />
+                  <TouchableOpacity
+                    onPress={() => {
+                      const newSkills = [...localJobData.requiredSkills];
+                      newSkills.splice(index, 1);
+                      setLocalJobData(prev => ({ ...prev, requiredSkills: newSkills }));
+                    }}
+                    style={styles.deleteButton}
                   >
-                    <Text>{industry}</Text>
+                    <Ionicons name="trash-outline" size={20} color="#ef4444" />
                   </TouchableOpacity>
-                ))}
-              </View>
-            )}
-          </View>
-
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Job Title</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Job Title"
-              value={editingJobData.jobTitle}
-              onChangeText={(text) => setEditingJobData(prev => ({ ...prev, jobTitle: text }))}
-            />
-          </View>
-
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Company Name</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Company Name"
-              value={editingJobData.companyName}
-              onChangeText={(text) => setEditingJobData(prev => ({ ...prev, companyName: text }))}
-            />
-          </View>
-
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Required Skills</Text>
-            {editingJobData.requiredSkills?.map((skill, index) => (
-              <View key={index} style={styles.skillInputRow}>
-                <TextInput
-                  style={styles.skillInput}
-                  placeholder="Skill name"
-                  value={skill.name}
-                  onChangeText={(text) => {
-                    const newSkills = [...editingJobData.requiredSkills];
-                    newSkills[index] = { ...skill, name: text };
-                    setEditingJobData(prev => ({ ...prev, requiredSkills: newSkills }));
-                  }}
-                />
-                <TextInput
-                  style={styles.yearsInput}
-                  placeholder="Years"
-                  keyboardType="numeric"
-                  value={skill.yearsOfExperience?.toString()}
-                  onChangeText={(text) => {
-                    const newSkills = [...editingJobData.requiredSkills];
-                    newSkills[index] = {
-                      ...skill,
-                      yearsOfExperience: parseInt(text) || 0
-                    };
-                    setEditingJobData(prev => ({ ...prev, requiredSkills: newSkills }));
-                  }}
-                />
+                </View>
+              ))}
+              {localJobData.requiredSkills?.length < 5 && (
                 <TouchableOpacity
+                  style={styles.addSkillButton}
                   onPress={() => {
-                    const newSkills = [...editingJobData.requiredSkills];
-                    newSkills.splice(index, 1);
-                    setEditingJobData(prev => ({ ...prev, requiredSkills: newSkills }));
+                    setLocalJobData(prev => ({
+                      ...prev,
+                      requiredSkills: [
+                        ...(prev.requiredSkills || []),
+                        { name: '', yearsOfExperience: 0 }
+                      ]
+                    }));
                   }}
-                  style={styles.deleteButton}
                 >
-                  <Ionicons name="trash-outline" size={20} color="#ef4444" />
+                  <Text style={styles.addSkillButtonText}>Add Skill</Text>
                 </TouchableOpacity>
-              </View>
-            ))}
-            {editingJobData.requiredSkills?.length < 5 && (
-              <TouchableOpacity
-                style={styles.addSkillButton}
-                onPress={() => {
-                  setEditingJobData(prev => ({
-                    ...prev,
-                    requiredSkills: [
-                      ...(prev.requiredSkills || []),
-                      { name: '', yearsOfExperience: 0 }
-                    ]
-                  }));
+              )}
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setIsEditingJob(false)}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.saveButton]}
+                onPress={async () => {
+                  try {
+                    await db
+                      .collection('job_attributes')
+                      .doc(auth.currentUser.uid)
+                      .update({
+                        industry: localJobData.industry,
+                        jobTitle: localJobData.jobTitle,
+                        companyName: localJobData.companyName,
+                        requiredSkills: localJobData.requiredSkills,
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                      });
+                    
+                    setJobAttributes(prev => ({
+                      ...prev,
+                      ...localJobData
+                    }));
+                    setIsEditingJob(false);
+                  } catch (error) {
+                    console.error('Error updating job:', error);
+                    Alert.alert('Error', 'Failed to update job details. Please try again.');
+                  }
                 }}
               >
-                <Text style={styles.addSkillButtonText}>Add Skill</Text>
+                <Text style={styles.saveButtonText}>Save</Text>
               </TouchableOpacity>
-            )}
-          </View>
-
-          <View style={styles.modalButtons}>
-            <TouchableOpacity 
-              style={[styles.modalButton, styles.cancelButton]}
-              onPress={() => setIsEditingJob(false)}
-            >
-              <Text style={styles.cancelButtonText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.modalButton, styles.saveButton]}
-              onPress={async () => {
-                try {
-                  await db
-                    .collection('job_attributes')
-                    .doc(auth.currentUser.uid)
-                    .update({
-                      industry: editingJobData.industry,
-                      jobTitle: editingJobData.jobTitle,
-                      companyName: editingJobData.companyName,
-                      requiredSkills: editingJobData.requiredSkills,
-                      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                    });
-                  
-                  setJobAttributes(prev => ({
-                    ...prev,
-                    ...editingJobData
-                  }));
-                  setIsEditingJob(false);
-                } catch (error) {
-                  console.error('Error updating job:', error);
-                  Alert.alert('Error', 'Failed to update job details. Please try again.');
-                }
-              }}
-            >
-              <Text style={styles.saveButtonText}>Save</Text>
-            </TouchableOpacity>
+            </View>
           </View>
         </View>
-      </View>
-    </Modal>
-  );
+      </Modal>
+    );
+  };
 
   /**
    * Modal to edit pay range (employer only)
    */
-  const PayRangeEditModal = () => (
-    <Modal visible={isEditingPayRange} animationType="slide" transparent={true}>
-      <View style={styles.modalContainer}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Edit Pay Range</Text>
+  const PayRangeEditModal = () => {
+    const [localPayData, setLocalPayData] = useState({
+      estPayRangeMin: '',
+      estPayRangeMax: '',
+      includesTips: false,
+      estTipRangeMin: '',
+      estTipRangeMax: ''
+    });
 
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Base Pay Range ($/hr)</Text>
-            <View style={styles.payRangeInputContainer}>
-              <TextInput
-                style={[styles.input, styles.payInput]}
-                placeholder="Min"
-                value={editingPayData.estPayRangeMin}
-                onChangeText={(text) => setEditingPayData(prev => ({ ...prev, estPayRangeMin: text }))}
-                keyboardType="numeric"
-              />
-              <Text style={styles.payRangeSeparator}>to</Text>
-              <TextInput
-                style={[styles.input, styles.payInput]}
-                placeholder="Max"
-                value={editingPayData.estPayRangeMax}
-                onChangeText={(text) => setEditingPayData(prev => ({ ...prev, estPayRangeMax: text }))}
-                keyboardType="numeric"
-              />
-            </View>
-          </View>
+    useEffect(() => {
+      if (isEditingPayRange) {
+        setLocalPayData({
+          estPayRangeMin: profileData.estPayRangeMin || '',
+          estPayRangeMax: profileData.estPayRangeMax || '',
+          includesTips: profileData.includesTips || false,
+          estTipRangeMin: profileData.estTipRangeMin || '',
+          estTipRangeMax: profileData.estTipRangeMax || ''
+        });
+      }
+    }, [isEditingPayRange]);
 
-          <View style={styles.inputContainer}>
-            <Text style={styles.label}>Include Tips?</Text>
-            <View style={styles.tipsButtonContainer}>
-              {['Yes', 'No'].map((option) => (
-                <TouchableOpacity
-                  key={option}
-                  style={[
-                    styles.tipsButton,
-                    editingPayData.includesTips === (option === 'Yes') && styles.tipsButtonActive
-                  ]}
-                  onPress={() => {
-                    setEditingPayData(prev => ({
-                      ...prev,
-                      includesTips: option === 'Yes'
-                    }));
-                  }}
-                >
-                  <Text style={[
-                    styles.tipsButtonText,
-                    editingPayData.includesTips === (option === 'Yes') && styles.tipsButtonTextActive
-                  ]}>
-                    {option}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-
-          {editingPayData.includesTips && (
+    return (
+      <Modal
+        visible={isEditingPayRange}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => setIsEditingPayRange(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalContainer}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
+        >
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Edit Pay Range</Text>
+            
+            {/* Base Pay */}
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Estimated Tips Range ($/hr)</Text>
+              <Text style={styles.label}>Base Pay Range ($/hr)</Text>
               <View style={styles.payRangeInputContainer}>
                 <TextInput
                   style={[styles.input, styles.payInput]}
                   placeholder="Min"
-                  value={editingPayData.estTipRangeMin}
-                  onChangeText={(text) => setEditingPayData(prev => ({ ...prev, estTipRangeMin: text }))}
-                  keyboardType="numeric"
+                  keyboardType="decimal-pad"
+                  value={localPayData.estPayRangeMin}
+                  onChangeText={text => setLocalPayData(prev => ({
+                    ...prev,
+                    estPayRangeMin: text
+                  }))}
                 />
                 <Text style={styles.payRangeSeparator}>to</Text>
                 <TextInput
                   style={[styles.input, styles.payInput]}
                   placeholder="Max"
-                  value={editingPayData.estTipRangeMax}
-                  onChangeText={(text) => setEditingPayData(prev => ({ ...prev, estTipRangeMax: text }))}
-                  keyboardType="numeric"
+                  keyboardType="decimal-pad"
+                  value={localPayData.estPayRangeMax}
+                  onChangeText={text => setLocalPayData(prev => ({
+                    ...prev,
+                    estPayRangeMax: text
+                  }))}
                 />
               </View>
             </View>
-          )}
 
-          <View style={styles.modalButtons}>
-            <TouchableOpacity 
-              style={[styles.modalButton, styles.cancelButton]}
-              onPress={() => setIsEditingPayRange(false)}
-            >
-              <Text style={styles.cancelButtonText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.modalButton, styles.saveButton]}
-              onPress={async () => {
-                try {
-                  await db
-                    .collection('job_attributes')
-                    .doc(auth.currentUser.uid)
-                    .update({
-                      estPayRangeMin: editingPayData.estPayRangeMin,
-                      estPayRangeMax: editingPayData.estPayRangeMax,
-                      includesTips: editingPayData.includesTips,
-                      estTipRangeMin: editingPayData.includesTips
-                        ? editingPayData.estTipRangeMin
-                        : '',
-                      estTipRangeMax: editingPayData.includesTips
-                        ? editingPayData.estTipRangeMax
-                        : ''
-                    });
-                  
-                  setProfileData(prev => ({
-                    ...prev,
-                    ...editingPayData
-                  }));
-                  setIsEditingPayRange(false);
-                } catch (error) {
-                  console.error('Error updating pay range:', error);
-                  Alert.alert('Error', 'Failed to update pay range. Please try again.');
-                }
-              }}
-            >
-              <Text style={styles.saveButtonText}>Save</Text>
-            </TouchableOpacity>
+            {/* Include Tips */}
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Include Tips?</Text>
+              <View style={styles.tipsButtonContainer}>
+                {['Yes', 'No'].map(option => {
+                  const isActive = (option === 'Yes') === localPayData.includesTips;
+                  return (
+                    <TouchableOpacity
+                      key={option}
+                      style={[
+                        styles.tipsButton,
+                        isActive && styles.tipsButtonActive
+                      ]}
+                      onPress={() => {
+                        setLocalPayData(prev => ({
+                          ...prev,
+                          includesTips: option === 'Yes'
+                        }));
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.tipsButtonText,
+                          isActive && styles.tipsButtonTextActive
+                        ]}
+                      >
+                        {option}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
+            {/* Tip Range */}
+            {localPayData.includesTips && (
+              <View style={styles.inputContainer}>
+                <Text style={styles.label}>Tip Range ($/hr)</Text>
+                <View style={styles.payRangeInputContainer}>
+                  <TextInput
+                    style={[styles.input, styles.payInput]}
+                    placeholder="Min"
+                    keyboardType="decimal-pad"
+                    value={localPayData.estTipRangeMin}
+                    onChangeText={text => setLocalPayData(prev => ({
+                      ...prev,
+                      estTipRangeMin: text
+                    }))}
+                  />
+                  <Text style={styles.payRangeSeparator}>to</Text>
+                  <TextInput
+                    style={[styles.input, styles.payInput]}
+                    placeholder="Max"
+                    keyboardType="decimal-pad"
+                    value={localPayData.estTipRangeMax}
+                    onChangeText={text => setLocalPayData(prev => ({
+                      ...prev,
+                      estTipRangeMax: text
+                    }))}
+                  />
+                </View>
+              </View>
+            )}
+
+            {/* Buttons */}
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setIsEditingPayRange(false)}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modalButton, styles.saveButton]}
+                onPress={async () => {
+                  try {
+                    await db
+                      .collection('job_attributes')
+                      .doc(auth.currentUser.uid)
+                      .update({
+                        estPayRangeMin: localPayData.estPayRangeMin,
+                        estPayRangeMax: localPayData.estPayRangeMax,
+                        includesTips: localPayData.includesTips,
+                        estTipRangeMin: localPayData.includesTips
+                          ? localPayData.estTipRangeMin
+                          : '',
+                        estTipRangeMax: localPayData.includesTips
+                          ? localPayData.estTipRangeMax
+                          : ''
+                      });
+
+                    // Update parent's profileData just once
+                    setProfileData(prev => ({
+                      ...prev,
+                      ...localPayData
+                    }));
+                    setIsEditingPayRange(false);
+
+                  } catch (error) {
+                    console.log('Error updating pay range:', error);
+                    Alert.alert(
+                      'Error',
+                      'Failed to update pay range. Please try again.'
+                    );
+                  }
+                }}
+              >
+                <Text style={styles.saveButtonText}>Save</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
-      </View>
-    </Modal>
-  );
+        </KeyboardAvoidingView>
+      </Modal>
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -1603,6 +1735,51 @@ export default function ProfileScreen({ navigation }) {
       <JobEditModal />
       <PayRangeEditModal />
       <AvailabilityEditModal />
+
+      {/* Job Overview Modal */}
+      <Modal
+        visible={isEditingOverview}
+        animationType="slide"
+        transparent={true}
+      >
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalContainer}
+        >
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>
+              {isJobOverview ? 'Edit Job Overview' : 'Edit About Me'}
+            </Text>
+            <TextInput
+              style={styles.overviewInput}
+              multiline
+              value={editedOverview}
+              onChangeText={setEditedOverview}
+              placeholder={isJobOverview ? 
+                "Describe the job position..." : 
+                "Write something about yourself..."}
+              textAlignVertical="top"
+            />
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => {
+                  setIsEditingOverview(false);
+                  setIsJobOverview(false);
+                }}
+              >
+                <Text style={styles.buttonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.saveButton]}
+                onPress={handleUpdateOverview}
+              >
+                <Text style={styles.buttonText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -1718,58 +1895,54 @@ const styles = StyleSheet.create({
   },
   modalContainer: {
     flex: 1,
-    backgroundColor: '#ffffff' // no transparency
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    padding: 20,
   },
   modalContent: {
-    marginTop: 60,
-    margin: 20,
+    backgroundColor: 'white',
+    borderRadius: 15,
     padding: 20,
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    elevation: 3
+    width: '100%',
+    maxWidth: 500,
   },
   modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 16,
-    color: '#1e3a8a'
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 15,
+    textAlign: 'center',
   },
   overviewInput: {
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#ddd',
     borderRadius: 8,
     padding: 12,
-    minHeight: 120,
-    fontSize: 14,
-    color: '#1e293b',
-    backgroundColor: '#f8fafc',
-    marginBottom: 16
+    height: 150,
+    marginBottom: 15,
+    fontSize: 16,
   },
   modalButtons: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 12
+    justifyContent: 'space-between',
+    gap: 10,
   },
   modalButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 6,
-    minWidth: 80,
-    alignItems: 'center'
+    flex: 1,
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
   },
   cancelButton: {
-    backgroundColor: '#f1f5f9'
+    backgroundColor: '#f3f4f6',
   },
   saveButton: {
-    backgroundColor: '#2563eb'
+    backgroundColor: '#2563eb',
   },
-  cancelButtonText: {
-    color: '#64748b',
-    fontWeight: '500'
-  },
-  saveButtonText: {
-    color: '#ffffff',
-    fontWeight: '500'
+  buttonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
   },
   jobCard: {
     backgroundColor: '#ffffff',
@@ -1837,6 +2010,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 4
+  },
+  timeSlot: {
+    fontSize: 14,
+    color: '#1e293b',
+    fontWeight: '500'
   },
   removeButton: {
     padding: 4
@@ -2186,5 +2364,33 @@ const styles = StyleSheet.create({
   },
   slider: {
     width: '100%'
-  }
+  },
+  actionButtonsContainer: {
+    width: '100%',  // Make container full width
+  },
+  postJobButton: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2
+  },
+  postJobButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12
+  },
+  postJobButtonText: {
+    fontSize: 16,
+    color: '#1e3a8a',
+    fontWeight: '500'
+  },
 });

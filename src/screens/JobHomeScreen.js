@@ -326,6 +326,180 @@ const calculateMatchScore = async (employerData, workerData) => {
   }
 };
 
+const JobCard = ({ item, currentUser }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [jobAnalysis, setJobAnalysis] = useState(null);
+  const [isLoadingAnalysis, setIsLoadingAnalysis] = useState(false);
+  const [showFullAnalysis, setShowFullAnalysis] = useState(false);
+  const analysisRef = useRef(null);
+
+  const capitalizeFirstLetter = (string) => {
+    if (!string) return '';
+    return string.charAt(0).toUpperCase() + string.slice(1);
+  };
+
+  const toggleExpanded = () => {
+    setIsExpanded(!isExpanded);
+  };
+
+  const fetchAnalysis = async () => {
+    if (analysisRef.current) {
+      setJobAnalysis(analysisRef.current);
+      return;
+    }
+
+    setIsLoadingAnalysis(true);
+    try {
+      const response = await fetch(`${BACKEND_URL}/analyze-employee-fit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          job: item,  // employee data
+          user: currentUser  // employer data
+        })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        analysisRef.current = data.analysis;
+        setJobAnalysis(data.analysis);
+      } else {
+        console.error('Error fetching analysis:', data.error);
+      }
+    } catch (error) {
+      console.error('Error fetching analysis:', error);
+    } finally {
+      setIsLoadingAnalysis(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isExpanded && !analysisRef.current) {
+      fetchAnalysis();
+    }
+  }, [isExpanded]);
+
+  return (
+    <TouchableOpacity 
+      style={[styles.card, { marginTop: SCREEN_HEIGHT * 0.12 }]}
+      onPress={toggleExpanded}
+      activeOpacity={0.95}
+    >
+      <LinearGradient
+        colors={['#1e3a8a', '#1e40af']}
+        style={styles.cardGradient}
+      >
+        <View style={styles.contentCard}>
+          {!isExpanded ? (
+            // Front of card
+            <>
+              <View style={styles.titleContainer}>
+                <Text style={[styles.name, { textAlign: 'center' }]}>
+                  {capitalizeFirstLetter(item.name) || 'No Name'}
+                </Text>
+              </View>
+              
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Overview</Text>
+                <Text style={styles.overviewText}>
+                  {item.user_overview || 'No overview available'}
+                </Text>
+              </View>
+
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Experience</Text>
+                {item.selectedJobs?.map((job, jobIndex) => (
+                  <View key={jobIndex} style={styles.jobContainer}>
+                    <View style={styles.jobHeader}>
+                      <Text style={styles.jobExperienceTitle}>{job.title}</Text>
+                      <Text style={styles.industryText}>{job.industry}</Text>
+                    </View>
+                    <View style={styles.skillsContainer}>
+                      {job.skills?.map((skill, skillIndex) => (
+                        <View key={skillIndex} style={styles.skillBubble}>
+                          <Text style={styles.skillExperienceText}>
+                            {skill.name} • {skill.yearsOfExperience}yr
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </>
+          ) : (
+            // Back of card
+            <>
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Availability</Text>
+                <View style={styles.availabilityContainer}>
+                  {Object.entries(item.availability || {}).map(([day, dayData]) => {
+                    if (!dayData?.slots?.length) return null;
+                    return (
+                      <View key={day} style={styles.scheduleRow}>
+                        {dayData.slots.map((slot, slotIndex) => (
+                          <View 
+                            key={`${day}-${slotIndex}`} 
+                            style={[
+                              styles.availabilityBubble,
+                              checkDayAvailabilityMatch(currentUser?.availability, dayData, day) && 
+                                styles.availabilityBubbleMatch
+                            ]}
+                          >
+                            <Text style={[
+                              styles.value, 
+                              styles.scheduleText,
+                              { color: '#ffffff' },
+                              checkDayAvailabilityMatch(currentUser?.availability, dayData, day) && 
+                                styles.scheduleTextMatch
+                            ]}>
+                              {day}: {slot.startTime} - {slot.endTime}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Job Match Analysis</Text>
+                {isLoadingAnalysis ? (
+                  <ActivityIndicator size="small" color="#4f46e5" />
+                ) : jobAnalysis ? (
+                  <View style={styles.analysisContainer}>
+                    {/* Analysis content */}
+                    <View style={styles.prosContainer}>
+                      <Text style={styles.categoryTitle}>Pros</Text>
+                      <View style={styles.proBubble}>
+                        <Ionicons name="checkmark-circle" size={16} color="#166534" />
+                        <Text style={styles.proText}>{jobAnalysis.condensed.pros}</Text>
+                      </View>
+                    </View>
+                    
+                    <View style={styles.consContainer}>
+                      <Text style={styles.categoryTitle}>Cons</Text>
+                      <View style={styles.conBubble}>
+                        <Ionicons name="alert-circle" size={16} color="#991b1b" />
+                        <Text style={styles.conText}>{jobAnalysis.condensed.cons}</Text>
+                      </View>
+                    </View>
+                  </View>
+                ) : (
+                  <Text style={styles.noAnalysisText}>Unable to load analysis</Text>
+                )}
+              </View>
+            </>
+          )}
+        </View>
+      </LinearGradient>
+    </TouchableOpacity>
+  );
+};
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -336,6 +510,7 @@ const styles = StyleSheet.create({
     height: SCREEN_HEIGHT * 0.7,
     borderRadius: 20,
     overflow: 'hidden',
+    alignSelf: 'center', // Center card horizontally
   },
   cardGradient: {
     flex: 1,
@@ -348,15 +523,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   titleContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 20,
   },
-  jobTitle: {
-    fontSize: 24,
+  name: {
+    fontSize: 24, // Larger font for name
     fontWeight: '600',
     color: '#1f2937',
+    textAlign: 'center',
   },
   section: {
     marginBottom: 20,
@@ -550,6 +724,84 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#ffffff',
   },
+  analysisContainer: {
+    // Add appropriate styles for the analysis container
+  },
+  noAnalysisText: {
+    // Add appropriate styles for the no analysis text
+  },
+  prosContainer: {
+    marginBottom: 16,
+  },
+  proBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 8,
+    borderRadius: 12,
+    backgroundColor: '#dcfce7',
+  },
+  proText: {
+    marginLeft: 8,
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#166534',
+  },
+  consContainer: {
+    marginBottom: 16,
+  },
+  conBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 8,
+    borderRadius: 12,
+    backgroundColor: '#fee2e2',
+  },
+  conText: {
+    marginLeft: 8,
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#991b1b',
+  },
+  categoryTitle: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#4b5563',
+    marginBottom: 8,
+  },
+  jobExperienceTitle: {
+    fontSize: 14, // Smaller font for job titles in experience
+    fontWeight: '500',
+    color: '#1f2937',
+  },
+  skillExperienceText: {
+    fontSize: 12, // Smaller font for skills in experience
+    color: '#1f2937',
+  },
+  emptyStateText: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+    marginTop: 20,
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  emptyStateSubText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  refreshButton: {
+    backgroundColor: '#1e3a8a',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  refreshButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '500',
+  },
 });
 
 export default function JobHomeScreen({ navigation }) {
@@ -562,6 +814,9 @@ export default function JobHomeScreen({ navigation }) {
   const [showMatchModal, setShowMatchModal] = useState(false);
   const [matchedJob, setMatchedJob] = useState(null);
   const [matchData, setMatchData] = useState(null);
+  const [cardsRemaining, setCardsRemaining] = useState(0);
+  const [noMoreCards, setNoMoreCards] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   let [fontsLoaded] = useFonts({
     LibreBodoni_400Regular,
@@ -572,6 +827,14 @@ export default function JobHomeScreen({ navigation }) {
   useEffect(() => {
     if (items.length > 0) {
       setIsLoading(false);
+    }
+  }, [items]);
+
+  useEffect(() => {
+    if (items && items.length >= 0) {
+      console.log(`[JOB_CARDS] Items array updated, length: ${items.length}`);
+      setCardsRemaining(items.length);
+      setNoMoreCards(items.length === 0);
     }
   }, [items]);
 
@@ -586,100 +849,7 @@ export default function JobHomeScreen({ navigation }) {
 
   const renderCard = (item) => {
     if (!item) return null;
-    
-    // Define the order of days
-    const dayOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    
-    // Sort the availability entries based on the day order
-    const sortedAvailability = Object.entries(item.availability || {})
-      .sort(([dayA], [dayB]) => {
-        return dayOrder.indexOf(dayA) - dayOrder.indexOf(dayB);
-      });
-    
-    return (
-      <TouchableOpacity 
-        style={styles.card}
-        // onPress={() => handleJobPress(item)}
-        activeOpacity={0.8}
-      >
-        <LinearGradient
-          colors={['#1e3a8a', '#1e40af']}
-          style={styles.cardGradient}
-        >
-          <View style={styles.contentCard}>
-            {/* Title Section */}
-            <View style={styles.titleContainer}>
-              <Text style={styles.jobTitle}>{item.name || 'No Name'}</Text>
-            </View>
-
-            {/* Overview */}
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Overview</Text>
-              <Text style={styles.overviewText}>
-                {item.user_overview || 'No overview available'}
-              </Text>
-            </View>
-
-            {/* Experience */}
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Experience</Text>
-              {item.selectedJobs?.map((job, jobIndex) => (
-                <View key={jobIndex} style={styles.jobContainer}>
-                  <View style={styles.jobHeader}>
-                    <Text style={styles.jobTitle}>{job.title}</Text>
-                    <Text style={styles.industryText}>{job.industry}</Text>
-                  </View>
-                  <View style={styles.skillsContainer}>
-                    {job.skills?.map((skill, skillIndex) => (
-                      <View key={skillIndex} style={styles.skillBubble}>
-                        <Text style={styles.skillText}>
-                          {skill.name} • {skill.yearsOfExperience}yr
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                </View>
-              ))}
-            </View>
-
-            {/* Availability */}
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Availability</Text>
-              <View style={styles.availabilityContainer}>
-                {sortedAvailability.map(([day, dayData]) => {
-                  if (!dayData.slots || dayData.slots.length === 0) return null;
-                  
-                  return (
-                    <View key={day} style={styles.dayContainer}>
-                      <View style={[styles.dayChip, styles.dayChipAvailable]}>
-                        <Text style={[styles.dayText, styles.dayTextAvailable]}>
-                          {day}
-                        </Text>
-                      </View>
-                      <View style={styles.timeSlotsContainer}>
-                        {dayData.slots.map((slot, slotIndex) => (
-                          <Text key={slotIndex} style={styles.timeSlot}>
-                            {slot.startTime} - {slot.endTime}
-                          </Text>
-                        ))}
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
-            </View>
-
-            {/* Distance */}
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Distance</Text>
-              <Text style={styles.distanceText}>
-                {item.distance != null ? `${item.distance} miles away` : 'Distance unavailable'}
-              </Text>
-            </View>
-          </View>
-        </LinearGradient>
-      </TouchableOpacity>
-    );
+    return <JobCard item={item} currentUser={currentUser} />;
   };
 
   useEffect(() => {
@@ -838,12 +1008,39 @@ export default function JobHomeScreen({ navigation }) {
     }
   };
 
-  const onSwipedRight = (cardIndex) => handleSwipe(cardIndex, true);
-  const onSwipedLeft = (cardIndex) => handleSwipe(cardIndex, false);
+  const onSwipedLeft = (cardIndex) => {
+    console.log(`[JOB_CARDS] Card swiped LEFT, index: ${cardIndex}`);
+    const currentRemaining = items.length - (cardIndex + 1);
+    console.log(`[JOB_CARDS] Cards remaining: ${currentRemaining}`);
+    setCardsRemaining(currentRemaining);
+    
+    if (currentRemaining === 0) {
+      console.log('[JOB_CARDS] No more cards remaining!');
+      setNoMoreCards(true);
+    }
+    
+    handleSwipe(cardIndex, false);
+  };
+
+  const onSwipedRight = (cardIndex) => {
+    console.log(`[JOB_CARDS] Card swiped RIGHT, index: ${cardIndex}`);
+    const currentRemaining = items.length - (cardIndex + 1);
+    console.log(`[JOB_CARDS] Cards remaining: ${currentRemaining}`);
+    setCardsRemaining(currentRemaining);
+    
+    if (currentRemaining === 0) {
+      console.log('[JOB_CARDS] No more cards remaining!');
+      setNoMoreCards(true);
+    }
+    
+    handleSwipe(cardIndex, true);
+  };
 
   const onSwipedAll = () => {
+    console.log('[JOB_CARDS] onSwipedAll triggered!');
+    setNoMoreCards(true);
+    setCardsRemaining(0);
     setItems([]); 
-    Alert.alert('End of List', 'You have swiped through all available items.');
   };
 
   if (!fontsLoaded) {
@@ -876,10 +1073,23 @@ export default function JobHomeScreen({ navigation }) {
     );
   }
 
-  if (!items.length) {
+  if (!items.length || noMoreCards) {
     return (
       <View style={styles.noItemsContainer}>
         <EmptyStateLoader />
+        <Text style={styles.emptyStateText}>No more profiles to show</Text>
+        <Text style={styles.emptyStateSubText}>Check back later for new matches</Text>
+        <TouchableOpacity 
+          style={styles.refreshButton}
+          onPress={() => {
+            console.log('[JOB_CARDS] Refresh button pressed');
+            setIsLoading(true);
+            setNoMoreCards(false);
+            fetchUserData();
+          }}
+        >
+          <Text style={styles.refreshButtonText}>Refresh</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -888,15 +1098,38 @@ export default function JobHomeScreen({ navigation }) {
     <View style={styles.container}>
       {isLoading ? (
         <View style={styles.loaderContainer}>
-          <ActivityIndicator size="large" color="#0000ff" />
+          <ActivityIndicator 
+            color="#0000ff" 
+            style={{ transform: [{ scale: 1.4 }] }}
+          />
+          <Text style={styles.loadingText}>Loading...</Text>
         </View>
       ) : error ? (
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={() => {
+            setIsLoading(true);
+            setError(null);
+          }}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
         </View>
-      ) : items.length === 0 ? (
+      ) : !items.length || noMoreCards ? (
         <View style={styles.noItemsContainer}>
           <EmptyStateLoader />
+          <Text style={styles.emptyStateText}>No more profiles to show</Text>
+          <Text style={styles.emptyStateSubText}>Check back later for new matches</Text>
+          <TouchableOpacity 
+            style={styles.refreshButton}
+            onPress={() => {
+              console.log('[JOB_CARDS] Refresh button pressed');
+              setIsLoading(true);
+              setNoMoreCards(false);
+              fetchUserData();
+            }}
+          >
+            <Text style={styles.refreshButtonText}>Refresh</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <Swiper
@@ -905,6 +1138,7 @@ export default function JobHomeScreen({ navigation }) {
           renderCard={renderCard}
           onSwipedLeft={onSwipedLeft}
           onSwipedRight={onSwipedRight}
+          onSwipedAll={onSwipedAll}
           cardIndex={0}
           backgroundColor={'#f1f5f9'}
           stackSize={3}

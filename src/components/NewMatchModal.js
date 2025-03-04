@@ -65,11 +65,16 @@ const NewMatchModal = ({ visible, onClose, jobData, matchData }) => {
             </TouchableOpacity>
           </View>
           
-          <View style={styles.contentContainer}>
+          <View style={[
+            styles.contentContainer,
+            currentScreen === 1 && styles.chatContainer
+          ]}>
             {currentScreen === 0 ? (
               <MiniJobDetails jobData={jobData} />
             ) : (
-              <MiniChatScreen matchData={matchData} />
+              <View style={styles.chatWrapper}>
+                <MiniChatScreen matchData={matchData} />
+              </View>
             )}
           </View>
         </View>
@@ -138,6 +143,14 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     flex: 1,
+  },
+  chatContainer: {
+    flex: 1,
+    flexDirection: 'column',
+  },
+  chatWrapper: {
+    flex: 1,
+    transform: [{ scaleY: 1 }], // Ensure correct orientation
   },
 });
 

@@ -12,12 +12,14 @@ import {
   StyleSheet,
   FlatList,
   TouchableWithoutFeedback,
+  DatePickerIOS,
+  Clipboard,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePickerModal from "react-native-modal-datetime-picker";
 import { db, auth, firebase } from '../firebase';
 import { createInterview } from '../services/firestoreService';
-import { Calendar } from 'react-native-calendars';
+import { Calendar as RNCalendar } from 'react-native-calendars';
 import * as ExpoCalendar from 'expo-calendar';
 import { 
   collection, 
@@ -30,6 +32,9 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { formatPhoneNumber } from '../utils/phoneFormatter';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import * as Calendar from 'expo-calendar';
+
 
 const BACKEND_URL = 'http://127.0.0.1:5000';
 
@@ -75,9 +80,39 @@ export default function ChatScreen({ route, navigation }) {
   const [jobOfferStep, setJobOfferStep] = useState('offer'); // 'offer' or 'datetime'
   const [jobStartDate, setJobStartDate] = useState(new Date());
   const [jobStartTime, setJobStartTime] = useState(new Date());
+  const [showPhoneNumberModal, setShowPhoneNumberModal] = useState(false);
+  const [phoneNumberForInterview, setPhoneNumberForInterview] = useState('');
+  const [selectedInterviewId, setSelectedInterviewId] = useState(null);
+  // Add these debug state variables at the top
+  const [debugMessages, setDebugMessages] = useState([]);
+  // Add this near the top of your component - a simpler approach without listeners
+  const [isLoading, setIsLoading] = useState(false);
+  // Add this at the top of your component
+  const [shouldRenderBanner, setShouldRenderBanner] = useState(true);
+  // Add these state variables at the top of your component
+  const [showDeclineModal, setShowDeclineModal] = useState(false);
+  const [declineWithAlternative, setDeclineWithAlternative] = useState(false);
+  const [declineInterviewId, setDeclineInterviewId] = useState(null);
+  const [alternativeTimeSlots, setAlternativeTimeSlots] = useState([]);
+  const [jobOffer, setJobOffer] = useState(null);
+  const [workDays, setWorkDays] = useState({
+    monday: false, tuesday: false, wednesday: false, thursday: false,
+    friday: false, saturday: false, sunday: false
+  });
+  const [payRate, setPayRate] = useState('');
+  const [payPeriod, setPayPeriod] = useState('hourly');
+  const [workStartTime, setWorkStartTime] = useState('9:00 AM');
+  const [workEndTime, setWorkEndTime] = useState('5:00 PM');
+  const [jobDescription, setJobDescription] = useState('');
 
   const isEmployer = role === 'employer';
   const otherUserId = matchId?.split('_')[isEmployer ? 1 : 0];
+
+  // Add a debug function
+  const addDebugMessage = (message) => {
+    console.log('DEBUG:', message);
+    setDebugMessages(prev => [...prev, { id: Date.now(), message }]);
+  };
 
   useEffect(() => {
     const unsubscribe = db.collection('chats')
@@ -111,70 +146,105 @@ export default function ChatScreen({ route, navigation }) {
   }, [messages]);
 
   useEffect(() => {
-    // Listen for interview updates
-    const unsubscribe = db.collection('interviews')
-      .where('matchId', '==', matchId)
-      .onSnapshot(snapshot => {
-        const interview = snapshot.docs[0]?.data();
-        if (interview) {
-          // Update UI based on interview status
-          if (interview.status === 'scheduled' && !interview.calendarEventId) {
-            createCalendarEvent(interview).then(eventId => {
-              if (eventId) {
-                db.collection('interviews')
-                  .doc(snapshot.docs[0].id)
-                  .update({ calendarEventId: eventId });
-              }
-            });
-          }
+    // Just do a one-time fetch on mount, no listeners
+    const fetchInterviews = async () => {
+      console.log('Initial interview fetch');
+      setIsLoading(true);
+      try {
+        const currentUserId = auth.currentUser.uid;
+        let query;
+        
+        if (role === 'worker') {
+          query = db.collection('interviews')
+            .where('workerId', '==', currentUserId)
+            .where('status', '==', 'pending');
+        } else {
+          query = db.collection('interviews')
+            .where('matchId', '==', matchId)
+            .where('status', '==', 'pending');
         }
-      });
-
-    return () => unsubscribe();
-  }, [matchId]);
+        
+        const snapshot = await query.get();
+        console.log(`Found ${snapshot.docs.length} pending interviews`);
+        
+        if (snapshot.docs.length > 0) {
+          const interviews = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }));
+          setPendingInterview(interviews[0]);
+        }
+      } catch (error) {
+        console.error('Error fetching interviews:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    fetchInterviews();
+  }, [matchId, role]);
 
   useEffect(() => {
-    if (!matchId || role !== 'worker') {
-      console.log('Skipping interview fetch:', { matchId, role });
-      return;
+    // Only set up listeners when component mounts, not on every render
+    console.log('Setting up interview listeners');
+    
+    let interviewQuery;
+    const currentUserId = auth.currentUser.uid;
+    
+    if (role === 'worker') {
+      // For workers - look for interviews where they are the worker
+      interviewQuery = db.collection('interviews')
+        .where('workerId', '==', currentUserId)
+        .where('status', '==', 'pending');
+      console.log(`Setting up worker interview listener for workerId: ${currentUserId}`);
+    } else {
+      // For employers - look for interviews in this match
+      interviewQuery = db.collection('interviews')
+        .where('matchId', '==', matchId)
+        .where('status', '==', 'pending');
+      console.log(`Setting up employer interview listener for matchId: ${matchId}`);
     }
-
-    console.log('Fetching interviews with params:', {
-      matchId,
-      role,
-      userId: auth.currentUser?.uid
+    
+    // Set up the listener
+    const unsubscribeInterviews = interviewQuery.onSnapshot(snapshot => {
+      console.log(`Interview listener received ${snapshot.docs.length} interviews`);
+      
+      if (snapshot.docs.length > 0) {
+        // Get the most recent interview
+        const interviews = snapshot.docs
+          .map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }))
+          .sort((a, b) => {
+            // Sort by creation time descending (newest first)
+            const aTime = a.createdAt?.seconds || 0;
+            const bTime = b.createdAt?.seconds || 0;
+            return bTime - aTime;
+          });
+        
+        const mostRecentInterview = interviews[0];
+        console.log('Found most recent interview:', JSON.stringify(mostRecentInterview));
+        
+        // Check if this is a new interview (different from current state)
+        if (!pendingInterview || pendingInterview.id !== mostRecentInterview.id) {
+          console.log('Setting new pending interview state');
+          setPendingInterview(mostRecentInterview);
+        }
+      } else {
+        console.log('No pending interviews found, clearing state');
+        setPendingInterview(null);
+      }
+    }, error => {
+      console.error('Error in interview listener:', error);
     });
     
-    const unsubscribe = db.collection('interviews')
-      .where('workerId', '==', matchId)
-      .where('status', '==', 'pending')
-      .onSnapshot(snapshot => {
-        console.log('Raw snapshot data:', snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })));
-        
-        const interviews = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        
-        console.log('Processed interviews:', interviews);
-        
-        const pending = interviews[0];
-        if (pending) {
-          console.log('Setting pending interview:', pending);
-          setPendingInterview(pending);
-        } else {
-          console.log('No pending interviews found');
-          setPendingInterview(null);
-        }
-      }, error => {
-        console.error('Error in interview snapshot:', error);
-      });
-
-    return () => unsubscribe();
-  }, [matchId, role]);
+    // Clean up listener on unmount
+    return () => {
+      console.log('Cleaning up interview listener');
+      unsubscribeInterviews();
+    };
+  }, [matchId, role]); // Only re-run if matchId or role changes
 
   useEffect(() => {
     if (!isEmployer && matchId) {
@@ -191,38 +261,60 @@ export default function ChatScreen({ route, navigation }) {
     }
   }, [matchId, isEmployer]);
 
+  // Modify the generateSuggestions function to work without NetInfo
   const generateSuggestions = async () => {
+    console.log('Generating suggestions...');
+    setIsRefreshing(true);
+    
     try {
-      const lastMessages = messages.slice(0, 3).map(msg => ({
-        text: msg.text,
-        sender: msg.sender
-      }));
-
-      const response = await fetch(`${BACKEND_URL}/generate-chat-suggestions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          role: role,
-          jobTitle: jobTitle,
-          company: company,
-          recentMessages: lastMessages,
-          context: {
-            isWorker: role === 'worker',
-            jobTitle: jobTitle,
-            company: company
-          }
-        }),
-      });
-
-      if (!response.ok) throw new Error('Failed to get suggestions');
+      // Skip network check since NetInfo is not available
+      // Just try the fetch directly with error handling
       
-      const data = await response.json();
-      setSuggestions(data.suggestions);
+      // Try to fetch suggestions from API with a timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
+      try {
+        const response = await fetch('https://YOUR_API_URL/suggestions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            matchId: matchId,
+            role: role,
+            messages: messages.map(msg => ({
+              text: msg.text,
+              sender: msg.sender
+            })).slice(-10) // Send last 10 messages for context
+          }),
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          throw new Error(`API returned status ${response.status}`);
+        }
+        
+        const data = await response.json();
+        console.log('Suggestions received:', data);
+        setSuggestions(data.suggestions || []);
+      } catch (fetchError) {
+        console.error('Fetch error:', fetchError);
+        throw fetchError; // Re-throw to be caught by outer catch
+      }
     } catch (error) {
       console.error('Error getting suggestions:', error);
-      setSuggestions(getStaticSuggestions());
+      // Use fallback suggestions
+      setSuggestions([
+        "What experience do you have in this field?",
+        "Could you tell me about your availability?",
+        "What are your salary expectations?",
+        "Do you have any questions about the role?"
+      ]);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -408,143 +500,294 @@ export default function ChatScreen({ route, navigation }) {
     setDatePickerVisible(false);
   };
 
-  const handleSubmitTimeSlots = async () => {
-    if (selectedTimeSlots.length === 0) {
-      Alert.alert('Error', 'Please add at least one time slot');
-      return;
+  // Add this function at the top level of your component to properly extract worker ID
+  const getWorkerIdFromMatchId = (matchId, employerId) => {
+    console.log('Extracting worker ID from matchId:', matchId, 'employerId:', employerId);
+    
+    if (!matchId || !matchId.includes('_')) {
+      console.error('Invalid matchId format:', matchId);
+      return null;
     }
-
-    try {
-      await createInterview({
-        matchId,
-        employerId: auth.currentUser.uid,
-        workerId: otherUserId,
-        timeSlots: selectedTimeSlots.map(slot => ({
-          datetime: slot,
-          selected: false
-        }))
-      });
-      
-      await sendSystemMessage('Interview time slots have been shared. Please select a preferred time.');
-      setShowTimeSlotModal(false);
-      setSelectedTimeSlots([]);
-    } catch (error) {
-      console.error('Error submitting time slots:', error);
-      Alert.alert('Error', 'Failed to submit time slots');
+    
+    const parts = matchId.split('_');
+    if (parts.length !== 2) {
+      console.error('Unexpected matchId format:', matchId);
+      return null;
     }
+    
+    // The workerId is the ID that is NOT the employerId
+    const workerId = parts[0] === employerId ? parts[1] : parts[0];
+    console.log('Extracted workerId:', workerId);
+    return workerId;
   };
 
-  const sendSystemMessage = async (text) => {
-    try {
-      await db.collection('chats')
-        .doc(matchId)
-        .collection('messages')
-        .add({
-          text,
-          sender: 'system',
-          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-          read: false
-        });
-    } catch (error) {
-      console.error('Error sending system message:', error);
-    }
-  };
-
-  const onDateSelect = (event, selectedDate) => {
-    setShowDatePicker(false);
-    if (selectedDate) {
-      setSelectedDate(selectedDate);
-    }
-  };
-
+  // Simplified TimeSlotModal component with better state handling
   const TimeSlotModal = () => {
-    const [selectedStartTime, setSelectedStartTime] = useState('');
-    const [selectedEndTime, setSelectedEndTime] = useState('');
-    const [selectedDate, setSelectedDate] = useState('');
-    const [showCalendar, setShowCalendar] = useState(false);
-
-    const handleTimeSlotSelection = async () => {
-      if (!selectedStartTime || !selectedEndTime || !selectedDate) {
-        Alert.alert('Please select both start time, end time and date');
+    const [modalTimeSlots, setModalTimeSlots] = useState([]);
+    const [selectedDate, setSelectedDate] = useState(new Date());
+    const [selectedStartTime, setSelectedStartTime] = useState(new Date());
+    const [selectedEndTime, setSelectedEndTime] = useState(
+      new Date(new Date().setHours(new Date().getHours() + 1))
+    );
+    const [error, setError] = useState('');
+    const [showDatePicker, setShowDatePicker] = useState(false);
+    const [showStartTimePicker, setShowStartTimePicker] = useState(false);
+    const [showEndTimePicker, setShowEndTimePicker] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    
+    // Format functions
+    const formatDate = (date) => date.toISOString().split('T')[0];
+    
+    const formatTime = (date) => {
+      return date.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      });
+    };
+    
+    // Add time slot
+    const addTimeSlot = () => {
+      console.log('Add time slot button pressed');
+      setError('');
+      
+      if (selectedStartTime >= selectedEndTime) {
+        setError('End time must be after start time');
         return;
       }
-
+      
+      const newSlot = {
+        date: formatDate(selectedDate),
+        startTime: formatTime(selectedStartTime),
+        endTime: formatTime(selectedEndTime)
+      };
+      
+      console.log('Adding new time slot:', newSlot);
+      setModalTimeSlots([...modalTimeSlots, newSlot]);
+    };
+    
+    // Remove time slot
+    const removeTimeSlot = (index) => {
+      const updatedSlots = [...modalTimeSlots];
+      updatedSlots.splice(index, 1);
+      setModalTimeSlots(updatedSlots);
+    };
+    
+    // Handle confirm with separate state handling
+    const handleConfirm = async () => {
+      console.log('Confirm button pressed. Current time slots:', modalTimeSlots);
+      
+      if (modalTimeSlots.length === 0) {
+        setError('Please add at least one time slot');
+        return;
+      }
+      
+      setIsSubmitting(true);
+      
       try {
-        const currentUser = auth.currentUser;
-        if (!currentUser) {
-          Alert.alert('Error', 'You must be logged in to schedule interviews');
-          return;
-        }
-
-        await addDoc(collection(db, 'interviews'), {
-          employerId: currentUser.uid,
-          workerId: otherUserId,
-          matchId: matchId,
-          startTime: selectedStartTime,
-          endTime: selectedEndTime,
-          date: selectedDate,
+        const employerId = auth.currentUser.uid;
+        const workerId = matchId.split('_').filter(id => id !== employerId)[0];
+        
+        // Create a unique ID for the interview
+        const interviewId = `interview_${Date.now()}`;
+        
+        // Create the interview document
+        await db.collection('interviews').doc(interviewId).set({
+          matchId,
+          employerId,
+          workerId,
           status: 'pending',
-          createdAt: serverTimestamp()
+          timeSlots: modalTimeSlots,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
-
-        Alert.alert('Success', 'Interview scheduled successfully');
+        
+        // Add system message to chat
+        await db.collection('chats')
+          .doc(matchId)
+          .collection('messages')
+          .add({
+            text: `Interview request sent: ${modalTimeSlots[0].date} at ${modalTimeSlots[0].startTime}`,
+            sender: 'system',
+            timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+            isNotification: true
+          });
+        
+        // First close the modal to prevent UI freeze
         setShowTimeSlotModal(false);
+        
+        // Use setTimeout to delay the state update and alert
+        setTimeout(() => {
+          // Manually fetch the interview data
+          db.collection('interviews').doc(interviewId).get()
+            .then(doc => {
+              if (doc.exists) {
+                setPendingInterview({
+                  id: doc.id,
+                  ...doc.data()
+                });
+                
+                // Show success message after state is updated
+                Alert.alert(
+                  'Success', 
+                  'Interview request sent successfully!'
+                );
+              }
+            })
+            .catch(error => {
+              console.error('Error fetching new interview:', error);
+            });
+        }, 500);
       } catch (error) {
-        console.error('Error scheduling interview:', error);
-        Alert.alert('Error', 'Failed to schedule interview');
+        console.error('Error creating interview:', error);
+        Alert.alert('Error', 'Failed to schedule interview: ' + error.message);
+        setIsSubmitting(false);
       }
     };
-
+    
     return (
       <Modal
+        visible={showTimeSlotModal}
         animationType="slide"
         transparent={true}
-        visible={showTimeSlotModal}
-        onRequestClose={() => setShowTimeSlotModal(false)}
       >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <Calendar
-              onDayPress={(day) => setSelectedDate(day.dateString)}
-              markedDates={{
-                [selectedDate]: { selected: true }
-              }}
-            />
-            
-            {selectedDate && (
-              <View style={styles.timeInputContainer}>
-                <TextInput
-                  style={styles.timeInput}
-                  placeholder="Start Time (HH:MM)"
-                  value={selectedStartTime}
-                  onChangeText={setSelectedStartTime}
-                />
-                <TextInput
-                  style={styles.timeInput}
-                  placeholder="End Time (HH:MM)"
-                  value={selectedEndTime}
-                  onChangeText={setSelectedEndTime}
-                />
-              </View>
-            )}
-
-            <View style={styles.buttonContainer}>
-              <TouchableOpacity 
-                style={styles.confirmButton}
-                onPress={handleTimeSlotSelection}
+        <TouchableWithoutFeedback onPress={() => {}}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Schedule Interview</Text>
+              {error ? <Text style={styles.errorText}>{error}</Text> : null}
+              
+              <Text style={styles.sectionTitle}>Add Interview Time Slot</Text>
+              
+              <TouchableOpacity
+                style={styles.datePickerButton}
+                onPress={() => setShowDatePicker(true)}
               >
-                <Text style={styles.buttonText}>Confirm</Text>
+                <Text style={styles.datePickerButtonText}>
+                  Date: {formatDate(selectedDate)}
+                </Text>
               </TouchableOpacity>
               
-              <TouchableOpacity 
-                style={[styles.button, styles.cancelButton]}
-                onPress={() => setShowTimeSlotModal(false)}
+              {showDatePicker && (
+                <DateTimePicker
+                  value={selectedDate}
+                  mode="date"
+                  display="default"
+                  minimumDate={new Date()}
+                  onChange={(event, date) => {
+                    setShowDatePicker(false);
+                    if (date) setSelectedDate(date);
+                  }}
+                />
+              )}
+              
+              <View style={styles.timePickersContainer}>
+                <View style={styles.timePicker}>
+                  <Text>Start Time</Text>
+                  <TouchableOpacity
+                    style={styles.timePickerButton}
+                    onPress={() => setShowStartTimePicker(true)}
+                  >
+                    <Text style={styles.timePickerButtonText}>
+                      {formatTime(selectedStartTime)}
+                    </Text>
+                  </TouchableOpacity>
+                  
+                  {showStartTimePicker && (
+                    <DateTimePicker
+                      value={selectedStartTime}
+                      mode="time"
+                      display="default"
+                      onChange={(event, time) => {
+                        setShowStartTimePicker(false);
+                        if (time) setSelectedStartTime(time);
+                      }}
+                    />
+                  )}
+                </View>
+                
+                <View style={styles.timePicker}>
+                  <Text>End Time</Text>
+                  <TouchableOpacity
+                    style={styles.timePickerButton}
+                    onPress={() => setShowEndTimePicker(true)}
+                  >
+                    <Text style={styles.timePickerButtonText}>
+                      {formatTime(selectedEndTime)}
+                    </Text>
+                  </TouchableOpacity>
+                  
+                  {showEndTimePicker && (
+                    <DateTimePicker
+                      value={selectedEndTime}
+                      mode="time"
+                      display="default"
+                      onChange={(event, time) => {
+                        setShowEndTimePicker(false);
+                        if (time) setSelectedEndTime(time);
+                      }}
+                    />
+                  )}
+                </View>
+              </View>
+              
+              <TouchableOpacity
+                style={styles.addButton}
+                onPress={addTimeSlot}
               >
-                <Text style={styles.buttonText}>Cancel</Text>
+                <Text style={styles.addButtonText}>Add Time Slot</Text>
               </TouchableOpacity>
+              
+              <Text style={styles.sectionTitle}>Selected Time Slots</Text>
+              
+              {modalTimeSlots.length === 0 && (
+                <Text style={styles.noSlotsText}>No time slots added yet</Text>
+              )}
+              
+              <ScrollView style={styles.slotsList}>
+                {modalTimeSlots.map((slot, index) => (
+                  <View key={index} style={styles.timeSlotItem}>
+                    <Text style={styles.timeSlotText}>
+                      {slot.date} from {slot.startTime} to {slot.endTime}
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.removeButton}
+                      onPress={() => removeTimeSlot(index)}
+                    >
+                      <Text style={styles.removeButtonText}>×</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </ScrollView>
+              
+              <View style={styles.buttonContainer}>
+                <TouchableOpacity
+                  style={[styles.button, styles.cancelButton]}
+                  onPress={() => {
+                    setShowTimeSlotModal(false);
+                    setModalTimeSlots([]);
+                    setError('');
+                  }}
+                >
+                  <Text style={styles.buttonText}>Cancel</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[
+                    styles.button, 
+                    styles.confirmButton,
+                    (isSubmitting || modalTimeSlots.length === 0) ? styles.disabledButton : null
+                  ]}
+                  onPress={handleConfirm}
+                  disabled={isSubmitting || modalTimeSlots.length === 0}
+                >
+                  <Text style={styles.buttonText}>
+                    {isSubmitting ? 'Sending...' : 'Confirm'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        </View>
+        </TouchableWithoutFeedback>
       </Modal>
     );
   };
@@ -720,114 +963,474 @@ export default function ChatScreen({ route, navigation }) {
     // You can then call your sendMessage function
   };
 
-  const handleAcceptInterview = () => {
-    setShowPhoneModal(true);
-  };
-
-  const handlePhoneSubmit = async () => {
-    if (!phoneNumber || phoneNumber.length < 10) {
-      Alert.alert('Invalid Phone Number', 'Please enter a valid phone number');
-      return;
-    }
-
+  const handleAcceptInterview = async (interviewId) => {
     try {
-      if (!pendingInterview?.id) return;
-
-      await db.collection('interviews')
-        .doc(pendingInterview.id)
-        .update({
-          status: 'accepted',
-          acceptedAt: serverTimestamp(),
-          workerPhone: phoneNumber
-        });
-
-      setShowPhoneModal(false);
-      Alert.alert('Success', 'Interview accepted successfully');
+      console.log('Accepting interview:', interviewId);
+      
+      // First, check if we have the worker's phone number
+      const userDoc = await db.collection('users').doc(auth.currentUser.uid).get();
+      const userPhone = userDoc.data()?.phoneNumber;
+      
+      if (!userPhone) {
+        // If no phone number is found, prompt the user for it
+        Alert.prompt(
+          'Phone Number Required',
+          'Please provide your phone number so the employer can contact you',
+          [
+            {
+              text: 'Cancel',
+              style: 'cancel'
+            },
+            {
+              text: 'Submit',
+              onPress: async (phoneNumber) => {
+                if (!phoneNumber || phoneNumber.trim().length < 10) {
+                  Alert.alert('Invalid Phone Number', 'Please enter a valid phone number');
+                  return;
+                }
+                
+                // Update user record with phone number
+                await db.collection('users').doc(auth.currentUser.uid).update({
+                  phoneNumber: phoneNumber.trim()
+                });
+                
+                // Continue with acceptance
+                completeInterviewAcceptance(interviewId, phoneNumber.trim());
+              }
+            }
+          ],
+          'plain-text'
+        );
+      } else {
+        // If we already have the phone number, continue with acceptance
+        completeInterviewAcceptance(interviewId, userPhone);
+      }
     } catch (error) {
       console.error('Error accepting interview:', error);
-      Alert.alert('Error', 'Failed to accept interview');
+      Alert.alert('Error', 'Failed to accept interview: ' + error.message);
     }
   };
 
-  const PhoneNumberModal = () => (
-    <Modal
-      animationType="slide"
-      transparent={true}
-      visible={showPhoneModal}
-      onRequestClose={() => setShowPhoneModal(false)}
-    >
-      <View style={styles.modalContainer}>
+  // Helper function to complete the interview acceptance process
+  const completeInterviewAcceptance = async (interviewId, phoneNumber) => {
+    try {
+      // Update interview status
+      await db.collection('interviews').doc(interviewId).update({
+        status: 'accepted',
+        acceptedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        workerPhone: phoneNumber
+      });
+      
+      // Get interview data for the notification
+      const interviewDoc = await db.collection('interviews').doc(interviewId).get();
+      const interviewData = interviewDoc.data();
+      
+      // Add a system message to the chat
+      await db.collection('chats')
+        .doc(interviewData.matchId)
+        .collection('messages')
+        .add({
+          text: `Interview accepted for ${interviewData.timeSlots[0].date} at ${interviewData.timeSlots[0].startTime}. Worker's phone: ${phoneNumber}`,
+          sender: 'system',
+          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          isNotification: true
+        });
+      
+      // Update local state
+      setPendingInterview({
+        ...interviewData,
+        id: interviewId,
+        status: 'accepted'
+      });
+      
+      Alert.alert('Success', 'Interview accepted. The employer has been notified.');
+    } catch (error) {
+      console.error('Error completing interview acceptance:', error);
+      Alert.alert('Error', 'Failed to complete interview acceptance: ' + error.message);
+    }
+  };
+
+  const handleDeclineInterview = (interviewId) => {
+    setDeclineInterviewId(interviewId);
+    setShowDeclineModal(true);
+  };
+
+  // Create a function to complete the decline process
+  const confirmDeclineInterview = async (suggestAlternative = false) => {
+    try {
+      if (!declineInterviewId) return;
+      
+      // Get the interview data
+      const interviewDoc = await db.collection('interviews').doc(declineInterviewId).get();
+      const interviewData = interviewDoc.data();
+      
+      // Update the interview status to declined
+      await db.collection('interviews').doc(declineInterviewId).update({
+        status: 'declined',
+        declinedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        alternativeSuggested: suggestAlternative
+      });
+      
+      // Add system message about the decline
+      const messageText = suggestAlternative 
+        ? `Interview request declined with alternative times suggested.` 
+        : `Interview request declined.`;
+      
+      await db.collection('chats')
+        .doc(interviewData.matchId)
+        .collection('messages')
+        .add({
+          text: messageText,
+          sender: 'system',
+          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          isNotification: true
+        });
+      
+      // If suggesting alternative times, send those as a separate message
+      if (suggestAlternative && alternativeTimeSlots.length > 0) {
+        let alternativesText = "I can't make the suggested time, but here are some alternatives that work for me:\n";
+        
+        alternativeTimeSlots.forEach((slot, index) => {
+          alternativesText += `\n- ${slot.date} from ${slot.startTime} to ${slot.endTime}`;
+        });
+        
+        // Send the alternatives as a regular chat message from the worker
+        await db.collection('chats')
+          .doc(interviewData.matchId)
+          .collection('messages')
+          .add({
+            text: alternativesText,
+            sender: auth.currentUser.uid,
+            timestamp: firebase.firestore.FieldValue.serverTimestamp()
+          });
+      }
+      
+      // Reset state
+      setDeclineInterviewId(null);
+      setAlternativeTimeSlots([]);
+      setDeclineWithAlternative(false);
+      setShowDeclineModal(false);
+      setPendingInterview(null); // Remove the banner
+      
+      Alert.alert('Success', 'Interview request declined');
+    } catch (error) {
+      console.error('Error declining interview:', error);
+      Alert.alert('Error', 'Failed to decline interview: ' + error.message);
+    }
+  };
+
+  // Add the DeclineInterviewModal component
+  const DeclineInterviewModal = () => {
+    // Date/time selection state
+    const [selectedDate, setSelectedDate] = useState(new Date());
+    const [selectedStartTime, setSelectedStartTime] = useState(new Date());
+    const [selectedEndTime, setSelectedEndTime] = useState(
+      new Date(new Date().setHours(new Date().getHours() + 1))
+    );
+    const [showDatePicker, setShowDatePicker] = useState(false);
+    const [showStartTimePicker, setShowStartTimePicker] = useState(false);
+    const [showEndTimePicker, setShowEndTimePicker] = useState(false);
+    
+    // Format functions
+    const formatDate = (date) => date.toISOString().split('T')[0];
+    
+    const formatTime = (date) => {
+      return date.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      });
+    };
+    
+    // Add time slot
+    const addAlternativeSlot = () => {
+      if (selectedStartTime >= selectedEndTime) {
+        Alert.alert('Invalid Time', 'End time must be after start time');
+        return;
+      }
+      
+      const newSlot = {
+        date: formatDate(selectedDate),
+        startTime: formatTime(selectedStartTime),
+        endTime: formatTime(selectedEndTime)
+      };
+      
+      setAlternativeTimeSlots([...alternativeTimeSlots, newSlot]);
+    };
+    
+    // Remove time slot
+    const removeAlternativeSlot = (index) => {
+      const updatedSlots = [...alternativeTimeSlots];
+      updatedSlots.splice(index, 1);
+      setAlternativeTimeSlots(updatedSlots);
+    };
+    
+    // Main modal content based on the state
+    const renderModalContent = () => {
+      if (!declineWithAlternative) {
+        return (
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Decline Interview?</Text>
+            <Text style={styles.modalText}>
+              Would you like to suggest alternative times that work better for you?
+            </Text>
+            
+            <View style={styles.buttonContainer}>
+              <TouchableOpacity
+                style={[styles.button, styles.declineButton]}
+                onPress={() => confirmDeclineInterview(false)}
+              >
+                <Text style={styles.buttonText}>Just Decline</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[styles.button, styles.alternativeButton]}
+                onPress={() => setDeclineWithAlternative(true)}
+              >
+                <Text style={styles.buttonText}>Suggest Alternatives</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        );
+      }
+      
+      // Alternative time selection UI
+      return (
         <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Enter Your Phone Number</Text>
-          <TextInput
-            style={styles.phoneInput}
-            placeholder="Phone Number"
-            value={phoneNumber}
-            onChangeText={setPhoneNumber}
-            keyboardType="phone-pad"
-          />
+          <Text style={styles.modalTitle}>Suggest Alternative Times</Text>
+          
           <TouchableOpacity
-            style={styles.confirmButton}
-            onPress={handlePhoneSubmit}
+            style={styles.datePickerButton}
+            onPress={() => setShowDatePicker(true)}
           >
-            <Text style={styles.buttonText}>Submit</Text>
+            <Text style={styles.datePickerButtonText}>
+              Date: {formatDate(selectedDate)}
+            </Text>
           </TouchableOpacity>
+          
+          {showDatePicker && (
+            <DateTimePicker
+              value={selectedDate}
+              mode="date"
+              display="default"
+              minimumDate={new Date()}
+              onChange={(event, date) => {
+                setShowDatePicker(false);
+                if (date) setSelectedDate(date);
+              }}
+            />
+          )}
+          
+          <View style={styles.timePickersContainer}>
+            <View style={styles.timePicker}>
+              <Text>Start Time</Text>
+              <TouchableOpacity
+                style={styles.timePickerButton}
+                onPress={() => setShowStartTimePicker(true)}
+              >
+                <Text style={styles.timePickerButtonText}>
+                  {formatTime(selectedStartTime)}
+                </Text>
+              </TouchableOpacity>
+              
+              {showStartTimePicker && (
+                <DateTimePicker
+                  value={selectedStartTime}
+                  mode="time"
+                  display="default"
+                  onChange={(event, time) => {
+                    setShowStartTimePicker(false);
+                    if (time) setSelectedStartTime(time);
+                  }}
+                />
+              )}
+            </View>
+            
+            <View style={styles.timePicker}>
+              <Text>End Time</Text>
+              <TouchableOpacity
+                style={styles.timePickerButton}
+                onPress={() => setShowEndTimePicker(true)}
+              >
+                <Text style={styles.timePickerButtonText}>
+                  {formatTime(selectedEndTime)}
+                </Text>
+              </TouchableOpacity>
+              
+              {showEndTimePicker && (
+                <DateTimePicker
+                  value={selectedEndTime}
+                  mode="time"
+                  display="default"
+                  onChange={(event, time) => {
+                    setShowEndTimePicker(false);
+                    if (time) setSelectedEndTime(time);
+                  }}
+                />
+              )}
+            </View>
+          </View>
+          
           <TouchableOpacity
-            style={[styles.button, styles.cancelButton]}
-            onPress={() => setShowPhoneModal(false)}
+            style={styles.addButton}
+            onPress={addAlternativeSlot}
           >
-            <Text style={styles.buttonText}>Cancel</Text>
+            <Text style={styles.addButtonText}>Add Time Slot</Text>
           </TouchableOpacity>
+          
+          <Text style={styles.sectionTitle}>Your Suggested Times</Text>
+          
+          {alternativeTimeSlots.length === 0 && (
+            <Text style={styles.noSlotsText}>No alternatives added yet</Text>
+          )}
+          
+          <ScrollView style={styles.slotsList}>
+            {alternativeTimeSlots.map((slot, index) => (
+              <View key={index} style={styles.timeSlotItem}>
+                <Text style={styles.timeSlotText}>
+                  {slot.date} from {slot.startTime} to {slot.endTime}
+                </Text>
+                <TouchableOpacity
+                  style={styles.removeButton}
+                  onPress={() => removeAlternativeSlot(index)}
+                >
+                  <Text style={styles.removeButtonText}>×</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </ScrollView>
+          
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity
+              style={[styles.button, styles.cancelButton]}
+              onPress={() => {
+                setDeclineWithAlternative(false);
+                setAlternativeTimeSlots([]);
+              }}
+            >
+              <Text style={styles.buttonText}>Back</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[
+                styles.button, 
+                styles.confirmButton,
+                alternativeTimeSlots.length === 0 ? styles.disabledButton : null
+              ]}
+              onPress={() => confirmDeclineInterview(true)}
+              disabled={alternativeTimeSlots.length === 0}
+            >
+              <Text style={styles.buttonText}>Confirm</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
-    </Modal>
-  );
-
-  const InterviewBanner = () => {
-    if (!acceptedInterview) return null;
-
-    const interviewDate = new Date(acceptedInterview.date);
-    const now = new Date();
-    if (interviewDate < now) return null;
-
+      );
+    };
+    
     return (
-      <View style={styles.bannerContainer}>
-        <Text style={styles.bannerText}>
-          Interview scheduled for {interviewDate.toLocaleDateString()} at {acceptedInterview.startTime}
-        </Text>
-      </View>
+      <Modal
+        visible={showDeclineModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowDeclineModal(false)}
+      >
+        <TouchableWithoutFeedback onPress={() => setShowDeclineModal(false)}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.modalContentWrapper}>
+                {renderModalContent()}
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
     );
   };
 
-  const PendingInterviewCard = () => {
-    console.log('Rendering PendingInterviewCard:', { 
-      pendingInterview, 
-      role,
-      userId: auth.currentUser?.uid 
-    });
+  // Modify the PendingInterviewCard component to properly handle worker view
+  const PendingInterviewCard = React.memo(({ pendingInterview }) => {
+    console.log('Rendering PendingInterviewCard component');
     
-    if (!pendingInterview || role !== 'worker') {
-      console.log('Not showing card because:', {
-        hasPendingInterview: !!pendingInterview,
-        isWorker: role === 'worker'
-      });
+    if (!pendingInterview) {
+      console.log('No pending interview, not showing card');
       return null;
     }
-
+    
+    console.log(`Showing interview card with status: ${pendingInterview.status}`);
+    
+    // Render time slots
+    const renderTimeSlots = () => {
+      if (pendingInterview.timeSlots && pendingInterview.timeSlots.length > 0) {
+        return (
+          <View>
+            <Text style={styles.interviewBannerTitle}>
+              {pendingInterview.status === 'pending' 
+                ? 'Interview Request:' 
+                : 'Scheduled Interview:'}
+            </Text>
+            {pendingInterview.timeSlots.map((slot, index) => (
+              <Text key={index} style={styles.interviewBannerDetails}>
+                {slot.date} from {slot.startTime} to {slot.endTime}
+              </Text>
+            ))}
+          </View>
+        );
+      } else {
+        return (
+          <Text style={styles.interviewBannerDetails}>
+            Interview details not available
+          </Text>
+        );
+      }
+    };
+    
     return (
-      <View style={styles.interviewCard}>
-        <Text style={styles.interviewTitle}>Pending Interview Request</Text>
-        <Text>Date: {pendingInterview.date}</Text>
-        <Text>Time: {pendingInterview.startTime} - {pendingInterview.endTime}</Text>
-        <TouchableOpacity
-          style={styles.acceptButton}
-          onPress={handleAcceptInterview}
-        >
-          <Text style={styles.buttonText}>Accept Interview</Text>
-        </TouchableOpacity>
+      <View style={styles.interviewContainer}>
+        <View style={styles.interviewBanner}>
+          <View style={styles.interviewBannerContent}>
+            <Ionicons 
+              name={pendingInterview.status === 'pending' ? "time-outline" : "checkmark-circle-outline"} 
+              size={24} 
+              color={pendingInterview.status === 'pending' ? "#1e3a8a" : "#10b981"} 
+            />
+            <View style={styles.interviewBannerTextContainer}>
+              {renderTimeSlots()}
+            </View>
+          </View>
+          
+          {/* Buttons for different statuses and roles */}
+          <View style={styles.interviewButtonContainer}>
+            {pendingInterview.status === 'pending' && role === 'worker' && (
+              <>
+                <TouchableOpacity
+                  style={[styles.interviewButton, styles.acceptButton]}
+                  onPress={() => handleAcceptInterview(pendingInterview.id)}
+                >
+                  <Text style={styles.interviewButtonText}>Accept</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[styles.interviewButton, styles.rejectButton]}
+                  onPress={() => handleDeclineInterview(pendingInterview.id)}
+                >
+                  <Text style={styles.interviewButtonText}>Decline</Text>
+                </TouchableOpacity>
+              </>
+            )}
+            
+            {pendingInterview.status === 'accepted' && (
+              <TouchableOpacity
+                style={[styles.interviewButton, styles.calendarButton]}
+                onPress={() => addToCalendar(pendingInterview)}
+              >
+                <Text style={styles.interviewButtonText}>Add to Calendar</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
       </View>
     );
-  };
+  });
 
   const handlePhoneChange = (text) => {
     // Store raw input (digits only)
@@ -887,7 +1490,7 @@ export default function ChatScreen({ route, navigation }) {
         <View style={styles.modalContent}>
           <Text style={styles.modalTitle}>Set Work Schedule</Text>
           
-          <Calendar
+          <RNCalendar
             onDayPress={day => {
               const selected = selectedDays.includes(day.dateString)
                 ? selectedDays.filter(d => d !== day.dateString)
@@ -1404,15 +2007,642 @@ export default function ChatScreen({ route, navigation }) {
     );
   };
 
+  // Update the render section of your component to handle this banner display
+  // Add this where you want the banner to appear (just once)
+  const renderInterviewBanner = () => {
+    if (!shouldRenderBanner || !pendingInterview) return null;
+    
+    return (
+      <View style={styles.interviewContainer}>
+        <View style={styles.interviewBanner}>
+          <View style={styles.interviewBannerContent}>
+            <Ionicons 
+              name={pendingInterview.status === 'pending' ? "time-outline" : "checkmark-circle-outline"} 
+              size={24} 
+              color={pendingInterview.status === 'pending' ? "#1e3a8a" : "#10b981"} 
+            />
+            <View style={styles.interviewBannerTextContainer}>
+              {pendingInterview.timeSlots && pendingInterview.timeSlots.length > 0 ? (
+                <View>
+                  <Text style={styles.interviewBannerTitle}>
+                    {pendingInterview.status === 'pending' 
+                      ? 'Interview Request:' 
+                      : 'Scheduled Interview:'}
+                  </Text>
+                  {pendingInterview.timeSlots.map((slot, index) => (
+                    <Text key={index} style={styles.interviewBannerDetails}>
+                      {slot.date} from {slot.startTime} to {slot.endTime}
+                    </Text>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.interviewBannerDetails}>
+                  Interview details not available
+                </Text>
+              )}
+            </View>
+          </View>
+          
+          {/* Buttons for different statuses and roles */}
+          <View style={styles.interviewButtonContainer}>
+            {pendingInterview.status === 'pending' && role === 'worker' && (
+              <>
+                <TouchableOpacity
+                  style={[styles.interviewButton, styles.acceptButton]}
+                  onPress={() => handleAcceptInterview(pendingInterview.id)}
+                >
+                  <Text style={styles.interviewButtonText}>Accept</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[styles.interviewButton, styles.rejectButton]}
+                  onPress={() => handleDeclineInterview(pendingInterview.id)}
+                >
+                  <Text style={styles.interviewButtonText}>Decline</Text>
+                </TouchableOpacity>
+              </>
+            )}
+            
+            {pendingInterview.status === 'accepted' && (
+              <TouchableOpacity
+                style={[styles.interviewButton, styles.calendarButton]}
+                onPress={() => addToCalendar(pendingInterview)}
+              >
+                <Text style={styles.interviewButtonText}>Add to Calendar</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </View>
+    );
+  };
+
+  const addToCalendar = async (interview) => {
+    try {
+      const eventId = await createCalendarEvent(interview);
+      if (eventId) {
+        Alert.alert('Success', 'Interview added to your calendar');
+      } else {
+        Alert.alert('Error', 'Failed to add interview to calendar');
+      }
+    } catch (error) {
+      console.error('Error adding to calendar:', error);
+      Alert.alert('Error', 'Failed to add interview to calendar');
+    }
+  };
+
+  const PhoneNumberModal = () => {
+    return (
+      <Modal
+        visible={showPhoneNumberModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowPhoneNumberModal(false)}
+      >
+        <TouchableWithoutFeedback onPress={() => setShowPhoneNumberModal(false)}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.modalContent}>
+                <Text style={styles.modalTitle}>Enter Your Phone Number</Text>
+                <Text style={styles.modalText}>
+                  Please provide your phone number for the interview contact.
+                </Text>
+                
+                <TextInput
+                  style={styles.phoneNumberInput}
+                  placeholder="Your phone number"
+                  value={phoneNumberForInterview}
+                  onChangeText={setPhoneNumberForInterview}
+                  keyboardType="phone-pad"
+                  autoFocus
+                />
+                
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.cancelButton]}
+                    onPress={() => setShowPhoneNumberModal(false)}
+                  >
+                    <Text style={styles.cancelButtonText}>Cancel</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.confirmButton]}
+                    onPress={handlePhoneNumberSubmit}
+                  >
+                    <Text style={styles.confirmButtonText}>Confirm</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+    );
+  };
+
+  const handlePhoneNumberSubmit = async () => {
+    if (!phoneNumberForInterview.trim()) {
+      Alert.alert('Error', 'Please enter a valid phone number');
+      return;
+    }
+    
+    try {
+      // Format the phone number
+      const formattedPhoneNumber = formatPhoneNumber(phoneNumberForInterview);
+      
+      // Update the interview with the phone number
+      await db.collection('interviews').doc(selectedInterviewId).update({
+        phoneNumber: formattedPhoneNumber,
+        status: 'accepted',
+        acceptedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      
+      // Get the updated interview data
+      const interviewDoc = await db.collection('interviews').doc(selectedInterviewId).get();
+      const interviewData = interviewDoc.data();
+      
+      // Create calendar event
+      const eventId = await createCalendarEvent(interviewData);
+      
+      // Update interview with calendar event ID if created
+      if (eventId) {
+        await db.collection('interviews').doc(selectedInterviewId).update({
+          calendarEventId: eventId
+        });
+      }
+      
+      // Update match status
+      await db.collection('matches').doc(matchId).update({
+        interviewStatus: 'accepted'
+      });
+      
+      // Add system message
+      await db.collection('chats')
+        .doc(matchId)
+        .collection('messages')
+        .add({
+          text: 'Interview request accepted',
+          senderId: 'system',
+          sender: 'system',
+          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          type: 'interview_accepted',
+          interviewId: selectedInterviewId
+        });
+      
+      setShowPhoneNumberModal(false);
+      setPhoneNumberForInterview('');
+      setSelectedInterviewId(null);
+      
+      Alert.alert(
+        'Interview Accepted', 
+        eventId ? 'The interview has been added to your calendar.' : 'The interview has been accepted.'
+      );
+    } catch (error) {
+      console.error('Error accepting interview:', error);
+      Alert.alert('Error', 'Failed to accept interview');
+    }
+  };
+
+  // Add this simple refresh function
+  const refreshInterviews = async () => {
+    setIsLoading(true);
+    try {
+      const currentUserId = auth.currentUser.uid;
+      let query;
+      
+      if (role === 'worker') {
+        query = db.collection('interviews')
+          .where('workerId', '==', currentUserId)
+          .where('status', '==', 'pending');
+      } else {
+        query = db.collection('interviews')
+          .where('matchId', '==', matchId)
+          .where('status', '==', 'pending');
+      }
+      
+      const snapshot = await query.get();
+      console.log(`Refresh found ${snapshot.docs.length} pending interviews`);
+      
+      if (snapshot.docs.length > 0) {
+        const interviews = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setPendingInterview(interviews[0]);
+      } else {
+        setPendingInterview(null);
+      }
+    } catch (error) {
+      console.error('Error refreshing interviews:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Fix the duplicate banner issue and improve the worker acceptance flow
+  // Add this function to deduplicate interviews
+  const removeDuplicateInterviews = (interviews) => {
+    const uniqueIds = new Set();
+    return interviews.filter(interview => {
+      if (uniqueIds.has(interview.id)) {
+        return false;
+      }
+      uniqueIds.add(interview.id);
+      return true;
+    });
+  };
+
+  // Update the useEffect for fetching interviews
+  useEffect(() => {
+    console.log('Setting up interview listener with matchId:', matchId);
+    
+    // Get user ID for queries
+    const currentUserId = auth.currentUser.uid;
+    
+    // Create appropriate query based on user role
+    let interviewQuery;
+    if (role === 'worker') {
+      interviewQuery = db.collection('interviews')
+        .where('workerId', '==', currentUserId)
+        .where('status', 'in', ['pending', 'accepted'])
+        .orderBy('createdAt', 'desc');
+    } else {
+      interviewQuery = db.collection('interviews')
+        .where('matchId', '==', matchId)
+        .where('status', 'in', ['pending', 'accepted'])
+        .orderBy('createdAt', 'desc');
+    }
+    
+    // Set up listener
+    const unsubscribeInterviews = interviewQuery.onSnapshot(snapshot => {
+      console.log(`Interview listener received ${snapshot.docs.length} interviews`);
+      
+      if (snapshot.docs.length > 0) {
+        // Get all interviews and deduplicate them
+        const interviews = removeDuplicateInterviews(
+          snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }))
+        );
+        
+        // Sort by status (pending first, then accepted)
+        interviews.sort((a, b) => {
+          if (a.status === 'pending' && b.status !== 'pending') return -1;
+          if (a.status !== 'pending' && b.status === 'pending') return 1;
+          return 0;
+        });
+        
+        console.log('Setting pending interview state with:', interviews[0]);
+        setPendingInterview(interviews[0]);
+      } else {
+        console.log('No interviews found, clearing state');
+        setPendingInterview(null);
+      }
+    });
+    
+    return () => {
+      console.log('Cleaning up interview listener');
+      unsubscribeInterviews();
+    };
+  }, [matchId, role]);
+
+  // Add this function to check if an interview has completed
+  const isInterviewCompleted = (interview) => {
+    if (!interview || !interview.timeSlots || interview.timeSlots.length === 0) {
+      return false;
+    }
+    
+    const latestSlot = interview.timeSlots[interview.timeSlots.length - 1];
+    const endDateTime = new Date(`${latestSlot.date} ${latestSlot.endTime}`);
+    
+    return new Date() > endDateTime;
+  };
+
+  // Add these functions for job offer handling
+  const handleCreateJobOffer = async () => {
+    try {
+      if (!payRate || payRate <= 0) {
+        Alert.alert('Invalid Pay', 'Please enter a valid pay rate');
+        return;
+      }
+      
+      const anyDaySelected = Object.values(workDays).some(day => day);
+      if (!anyDaySelected) {
+        Alert.alert('Schedule Required', 'Please select at least one work day');
+        return;
+      }
+      
+      const employerId = auth.currentUser.uid;
+      const workerId = matchId.split('_').filter(id => id !== employerId)[0];
+      
+      const jobOfferData = {
+        matchId,
+        employerId,
+        workerId,
+        workDays,
+        workHours: {
+          start: workStartTime,
+          end: workEndTime
+        },
+        pay: {
+          rate: parseFloat(payRate),
+          period: payPeriod
+        },
+        description: jobDescription.trim(),
+        status: 'pending',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      };
+      
+      const jobOfferId = `jobOffer_${matchId}_${Date.now()}`;
+      await db.collection('jobOffers').doc(jobOfferId).set(jobOfferData);
+      
+      await db.collection('chats')
+        .doc(matchId)
+        .collection('messages')
+        .add({
+          text: `Job offer sent: $${payRate} ${payPeriod}`,
+          sender: 'system',
+          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          isNotification: true
+        });
+      
+      setShowJobOfferModal(false);
+      resetJobOfferForm();
+      
+      Alert.alert('Success', 'Job offer sent successfully');
+    } catch (error) {
+      console.error('Error sending job offer:', error);
+      Alert.alert('Error', 'Failed to send job offer: ' + error.message);
+    }
+  };
+
+  const handleAcceptJobOffer = async (offerId) => {
+    try {
+      await db.collection('jobOffers').doc(offerId).update({
+        status: 'accepted',
+        acceptedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      
+      await db.collection('chats')
+        .doc(matchId)
+        .collection('messages')
+        .add({
+          text: 'Job offer accepted! 🎉',
+          sender: 'system',
+          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          isNotification: true
+        });
+      
+      Alert.alert('Success', 'You have accepted the job offer');
+    } catch (error) {
+      console.error('Error accepting job offer:', error);
+      Alert.alert('Error', 'Failed to accept job offer: ' + error.message);
+    }
+  };
+
+  const handleDeclineJobOffer = async (offerId) => {
+    try {
+      await db.collection('jobOffers').doc(offerId).update({
+        status: 'declined',
+        declinedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      
+      await db.collection('chats')
+        .doc(matchId)
+        .collection('messages')
+        .add({
+          text: 'Job offer declined.',
+          sender: 'system',
+          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          isNotification: true
+        });
+      
+      Alert.alert('Declined', 'You have declined the job offer');
+    } catch (error) {
+      console.error('Error declining job offer:', error);
+      Alert.alert('Error', 'Failed to decline job offer: ' + error.message);
+    }
+  };
+
+  const resetJobOfferForm = () => {
+    setWorkDays({
+      monday: false, tuesday: false, wednesday: false, thursday: false,
+      friday: false, saturday: false, sunday: false
+    });
+    setPayRate('');
+    setPayPeriod('hourly');
+    setJobDescription('');
+  };
+
+  // Add job offer listener to an existing useEffect or create a new one
+  useEffect(() => {
+    let jobOffersQuery;
+    
+    if (role === 'worker') {
+      jobOffersQuery = db.collection('jobOffers')
+        .where('workerId', '==', auth.currentUser.uid)
+        .where('matchId', '==', matchId);
+    } else {
+      jobOffersQuery = db.collection('jobOffers')
+        .where('matchId', '==', matchId);
+    }
+    
+    const unsubscribeJobOffers = jobOffersQuery.onSnapshot(snapshot => {
+      if (snapshot.docs.length > 0) {
+        // Get the most recent offer
+        const offers = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        
+        // Sort by most recent
+        offers.sort((a, b) => b.createdAt?.seconds - a.createdAt?.seconds);
+        setJobOffer(offers[0]);
+      }
+    });
+    
+    return () => {
+      if (unsubscribeJobOffers) unsubscribeJobOffers();
+    };
+  }, [matchId, role]);
+
+  // Add this right before your existing return statement
+  // Create a simple Job Offer Modal
+  const JobOfferModal = () => (
+    <Modal
+      visible={showJobOfferModal}
+      transparent={true}
+      animationType="slide"
+      onRequestClose={() => setShowJobOfferModal(false)}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.pickerContainer}>
+          <Text style={styles.modalTitle}>Create Job Offer</Text>
+          
+          <Text style={styles.sectionTitle}>Work Days</Text>
+          <View style={styles.workDaysContainer}>
+            {Object.keys(workDays).map(day => (
+              <TouchableOpacity
+                key={day}
+                style={[
+                  styles.workDayButton,
+                  workDays[day] && styles.workDaySelected
+                ]}
+                onPress={() => setWorkDays({...workDays, [day]: !workDays[day]})}
+              >
+                <Text style={workDays[day] ? styles.dayTextSelected : styles.dayText}>
+                  {day.charAt(0).toUpperCase()}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          
+          <Text style={styles.sectionTitle}>Work Hours</Text>
+          <View style={styles.hoursContainer}>
+            <TextInput
+              style={styles.timeInput}
+              value={workStartTime}
+              onChangeText={setWorkStartTime}
+              placeholder="Start Time"
+            />
+            <Text style={styles.timeSeperator}>to</Text>
+            <TextInput
+              style={styles.timeInput}
+              value={workEndTime}
+              onChangeText={setWorkEndTime}
+              placeholder="End Time"
+            />
+          </View>
+          
+          <Text style={styles.sectionTitle}>Pay</Text>
+          <View style={styles.payContainer}>
+            <TextInput
+              style={styles.payInput}
+              placeholder="Amount"
+              value={payRate}
+              onChangeText={setPayRate}
+              keyboardType="numeric"
+            />
+            
+            <View style={styles.payPeriodContainer}>
+              {['hourly', 'daily', 'weekly'].map(period => (
+                <TouchableOpacity
+                  key={period}
+                  style={[
+                    styles.payPeriodButton,
+                    payPeriod === period && styles.payPeriodSelected
+                  ]}
+                  onPress={() => setPayPeriod(period)}
+                >
+                  <Text style={payPeriod === period ? styles.periodTextSelected : styles.periodText}>
+                    {period.charAt(0).toUpperCase() + period.slice(1)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+          
+          <TextInput
+            style={styles.descriptionInput}
+            placeholder="Job Description (Optional)"
+            value={jobDescription}
+            onChangeText={setJobDescription}
+            multiline
+            numberOfLines={3}
+          />
+          
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity 
+              style={styles.cancelButton}
+              onPress={() => setShowJobOfferModal(false)}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={styles.confirmButton}
+              onPress={handleCreateJobOffer}
+            >
+              <Text style={styles.confirmButtonText}>Send Offer</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  // Create Job Offer Banner for workers to see offers
+  const renderJobOfferBanner = () => {
+    if (!jobOffer || jobOffer.status !== 'pending' || role !== 'worker') return null;
+    
+    // Format work days
+    const workDaysText = Object.entries(jobOffer.workDays)
+      .filter(([_, isSelected]) => isSelected)
+      .map(([day]) => day.charAt(0).toUpperCase() + day.slice(1))
+      .join(', ');
+    
+    return (
+      <View style={styles.offerContainer}>
+        <View style={styles.offerContent}>
+          <Ionicons name="briefcase-outline" size={24} color="#1e3a8a" />
+          <View style={styles.offerTextContainer}>
+            <Text style={styles.offerTitle}>Job Offer</Text>
+            <Text style={styles.offerDetail}>Days: {workDaysText}</Text>
+            <Text style={styles.offerDetail}>
+              Hours: {jobOffer.workHours.start} to {jobOffer.workHours.end}
+            </Text>
+            <Text style={styles.offerDetail}>
+              Pay: ${jobOffer.pay.rate} {jobOffer.pay.period}
+            </Text>
+            {jobOffer.description ? (
+              <Text style={styles.offerDetail}>{jobOffer.description}</Text>
+            ) : null}
+          </View>
+        </View>
+        
+        <View style={styles.offerButtons}>
+          <TouchableOpacity
+            style={styles.rejectButton}
+            onPress={() => handleDeclineJobOffer(jobOffer.id)}
+          >
+            <Text style={styles.buttonText}>Decline</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.acceptButton}
+            onPress={() => handleAcceptJobOffer(jobOffer.id)}
+          >
+            <Text style={styles.buttonText}>Accept</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
+  // Add a button for employer to send job offer (after interview)
+  const renderSendJobOfferButton = () => {
+    if (role !== 'employer' || !pendingInterview || !isInterviewCompleted(pendingInterview)) {
+      return null;
+    }
+    
+    return (
+      <TouchableOpacity
+        style={styles.sendOfferButton}
+        onPress={() => setShowJobOfferModal(true)}
+      >
+        <Text style={styles.sendOfferButtonText}>Send Job Offer</Text>
+      </TouchableOpacity>
+    );
+  };
+
   return (
     <KeyboardAvoidingView 
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       <View style={styles.interviewContainer}>
-        <PendingInterviewCard />
+        {renderInterviewBanner()}
       </View>
-      <InterviewBanner />
       {renderMessages()}
       
       <View style={styles.suggestionsWrapper}>
@@ -1436,7 +2666,7 @@ export default function ChatScreen({ route, navigation }) {
             styles.refreshButton,
             { opacity: isRefreshing ? 0.6 : 1 }
           ]}
-          onPress={refreshSuggestions}
+          onPress={refreshInterviews}
           disabled={isRefreshing}
         >
           <Ionicons name="refresh" size={20} color="#1976D2" />
@@ -1444,20 +2674,36 @@ export default function ChatScreen({ route, navigation }) {
       </View>
 
       {/* Message Input */}
-      <View style={styles.inputContainer}>
-        <TextInput
-          style={styles.input}
-          value={message}
-          onChangeText={setMessage}
-          placeholder="Type a message..."
-          multiline
-        />
-        <TouchableOpacity 
-          style={styles.sendButton} 
-          onPress={sendMessage}
-        >
-          <Ionicons name="send" size={24} color="#007AFF" />
-        </TouchableOpacity>
+      <View style={styles.inputOuterContainer}>
+        <View style={styles.inputContainer}>
+          <TouchableOpacity style={styles.attachButton}>
+            <Ionicons name="attach" size={22} color="#8e8e93" />
+          </TouchableOpacity>
+          
+          <View style={styles.inputWrapper}>
+            <TextInput
+              style={styles.input}
+              placeholder="Write your message"
+              placeholderTextColor="#8e8e93"
+              value={message}
+              onChangeText={setMessage}
+              multiline
+              maxLength={500}
+            />
+          </View>
+          
+          <TouchableOpacity 
+            style={[styles.sendButton, message.trim() ? styles.sendButtonActive : null]}
+            onPress={() => sendMessage()}
+            disabled={!message.trim()}
+          >
+            {message.trim() ? (
+              <Ionicons name="send" size={22} color="#ffffff" />
+            ) : (
+              <Ionicons name="mic" size={22} color="#8e8e93" />
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
       {isEmployer && (
@@ -1508,7 +2754,7 @@ export default function ChatScreen({ route, navigation }) {
         >
           <View style={styles.modalContainer}>
             <View style={styles.calendarContainer}>
-              <Calendar
+              <RNCalendar
                 onDayPress={handleDateSelect}
                 minDate={new Date().toISOString().split('T')[0]}
                 markedDates={{
@@ -1718,6 +2964,10 @@ export default function ChatScreen({ route, navigation }) {
         </View>
       )}
       {renderDateTimePickers()}
+      <DeclineInterviewModal />
+      <JobOfferModal />
+      {renderJobOfferBanner()}
+      {renderSendJobOfferButton()}
     </KeyboardAvoidingView>
   );
 }
@@ -1734,18 +2984,37 @@ const styles = StyleSheet.create({
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 25,
-    paddingHorizontal: 15,
-    marginTop: 10,
+    backgroundColor: '#f2f2f7',
+    borderRadius: 20,
+    paddingHorizontal: 10,
+  },
+  inputWrapper: {
+    flex: 1,
+    paddingVertical: 8,
   },
   input: {
-    flex: 1,
-    height: 50,
     fontSize: 16,
+    color: '#333333',
+    maxHeight: 100,
+  },
+  attachButton: {
+    padding: 8,
   },
   sendButton: {
-    padding: 10,
+    padding: 8,
+    borderRadius: 16,
+  },
+  sendButtonActive: {
+    backgroundColor: '#4CD964',
+  },
+  emojiButton: {
+    padding: 8,
+  },
+  cameraButton: {
+    padding: 8,
+  },
+  micButton: {
+    padding: 8,
   },
   messageContainer: {
     maxWidth: '80%',
@@ -1832,8 +3101,8 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     backgroundColor: 'white',
-    padding: 20,
     borderRadius: 10,
+    padding: 20,
     width: '90%',
     maxHeight: '80%',
   },
@@ -1850,49 +3119,78 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   timeInputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-    justifyContent: 'space-between',
+    marginTop: 15,
   },
   timeInput: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    padding: 8,
-    width: '70%',
+    borderColor: '#d1d5db',
     borderRadius: 5,
+    padding: 10,
+    marginBottom: 10,
+  },
+  addButton: {
+    backgroundColor: '#1e3a8a',
+    padding: 10,
+    borderRadius: 5,
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  addButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  timeSlotsContainer: {
+    marginTop: 10,
+    maxHeight: 150,
+  },
+  timeSlotsTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 5,
+  },
+  timeSlotItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#f3f4f6',
+    padding: 10,
+    borderRadius: 5,
+    marginBottom: 5,
+  },
+  timeSlotText: {
+    flex: 1,
+  },
+  removeButton: {
+    padding: 5,
   },
   buttonContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginTop: 15,
+    justifyContent: 'space-between',
+    marginTop: 20,
+  },
+  button: {
+    flex: 1,
+    padding: 10,
+    borderRadius: 5,
+    alignItems: 'center',
+    marginHorizontal: 5,
   },
   confirmButton: {
-    backgroundColor: '#2196F3',
-    padding: 10,
-    borderRadius: 5,
-    width: '45%',
+    backgroundColor: '#10b981',
   },
   cancelButton: {
-    backgroundColor: '#ff6b6b',
-    padding: 10,
-    borderRadius: 5,
-    width: '45%',
+    backgroundColor: '#ef4444',
   },
   buttonText: {
     color: 'white',
-    textAlign: 'center',
     fontWeight: 'bold',
   },
   phoneInput: {
-    height: 50,
-    borderWidth: 1,
-    borderColor: '#ccc',
+    backgroundColor: '#f0f0f0',
     borderRadius: 8,
-    paddingHorizontal: 15,
+    padding: 12,
+    marginBottom: 15,
     fontSize: 16,
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace', // Fixed-width font
-    minWidth: 200, // Set minimum width to prevent layout shifts
   },
   messagesContainer: {
     flexGrow: 1,
@@ -1911,59 +3209,6 @@ const styles = StyleSheet.create({
   },
   suggestionText: {
     color: '#007AFF',
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    padding: 10,
-    alignItems: 'center',
-    borderTopWidth: 1,
-    borderTopColor: '#ddd',
-    backgroundColor: 'white',
-  },
-  input: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 20,
-    paddingHorizontal: 15,
-    paddingVertical: 10,
-    marginRight: 10,
-    maxHeight: 100,
-  },
-  sendButton: {
-    padding: 10,
-  },
-  timeSlotContainer: {
-    maxHeight: 300,
-    marginVertical: 10,
-  },
-  timeSlot: {
-    padding: 15,
-    borderRadius: 8,
-    marginVertical: 5,
-    backgroundColor: '#f0f0f0',
-  },
-  selectedTimeSlot: {
-    backgroundColor: '#007AFF',
-  },
-  timeSlotText: {
-    fontSize: 16,
-    textAlign: 'center',
-  },
-  selectedTimeSlotText: {
-    color: 'white',
-  },
-  addButton: {
-    backgroundColor: '#007AFF',
-    padding: 15,
-    borderRadius: 8,
-    marginTop: 10,
-  },
-  buttonText: {
-    color: 'white',
-    textAlign: 'center',
-    fontSize: 16,
-    fontWeight: '600',
   },
   calendarContainer: {
     backgroundColor: 'white',
@@ -1993,8 +3238,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#007AFF',
     padding: 15,
     borderRadius: 5,
+    width: '100%',
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: 20,
   },
   scheduleButtonText: {
     color: 'white',
@@ -2013,175 +3259,50 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   interviewCard: {
-    backgroundColor: '#fff',
-    padding: 15,
+    backgroundColor: '#ffffff',
     margin: 10,
-    borderRadius: 8,
+    padding: 15,
+    borderRadius: 10,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.5,
+    elevation: 2,
   },
-  interviewTitle: {
+  interviewCardTitle: {
     fontSize: 18,
     fontWeight: 'bold',
     marginBottom: 10,
+    color: '#1e3a8a',
   },
-  acceptButton: {
-    backgroundColor: '#4CAF50',
-    padding: 10,
-    borderRadius: 5,
-    marginTop: 10,
-    alignItems: 'center',
+  interviewCardText: {
+    fontSize: 14,
+    color: '#4b5563',
+    marginBottom: 10,
   },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  bannerContainer: {
-    backgroundColor: '#4CAF50',
-    padding: 10,
-    width: '100%',
-  },
-  bannerText: {
-    color: 'white',
-    textAlign: 'center',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
+  timeSlotsList: {
     marginBottom: 15,
-    textAlign: 'center',
   },
-  phoneInput: {
-    borderWidth: 1,
-    borderColor: '#ccc',
+  timeSlotItem: {
+    backgroundColor: '#f09ff',
     padding: 10,
-    borderRadius: 5,
-    marginBottom: 15,
-    width: '100%',
-  },
-  modalContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-  },
-  modalContent: {
-    backgroundColor: 'white',
-    padding: 20,
-    borderRadius: 10,
-    width: '80%',
-    alignItems: 'center',
-  },
-  interviewContainer: {
-    width: '100%',
-    padding: 10,
-    zIndex: 1,
-  },
-  interviewCard: {
-    backgroundColor: '#fff',
-    padding: 15,
     borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
-    marginBottom: 10,
+    marginBottom: 5,
   },
-  acceptButton: {
-    backgroundColor: '#4CAF50',
-    padding: 10,
-    borderRadius: 5,
-    marginTop: 10,
-    alignItems: 'center',
-  },
-  buttonText: {
-    color: '#fff',
-    fontWeight: 'bold',
-  },
-  daysContainer: {
+  interviewCardActions: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    marginVertical: 10,
+    justifyContent: 'space-between',
   },
-  dayButton: {
-    padding: 10,
-    margin: 5,
-    borderWidth: 1,
-    borderRadius: 5,
-  },
-  selectedDay: {
-    backgroundColor: '#007AFF',
-  },
-  offerCard: {
-    backgroundColor: '#f0f0f0',
-    padding: 15,
-    margin: 10,
-    borderRadius: 10,
-  },
-  offerButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginTop: 10,
-  },
-  modalContainer: {
+  interviewCardButton: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-  },
-  modalContent: {
-    backgroundColor: 'white',
-    padding: 20,
-    borderRadius: 10,
-    width: '90%',
-    maxHeight: '80%',
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginTop: 15,
-    marginBottom: 10,
-  },
-  dayRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-    padding: 5,
-  },
-  dayText: {
-    marginLeft: 10,
-    width: 100,
-  },
-  timeContainer: {
-    flexDirection: 'row',
-    marginLeft: 10,
-  },
-  wageContainer: {
-    marginVertical: 20,
-  },
-  wageInput: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 5,
     padding: 10,
-    marginTop: 5,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginHorizontal: 5,
   },
-  button: {
-    backgroundColor: '#007AFF',
-    padding: 10,
-    borderRadius: 5,
-    marginTop: 10,
-  },
-  disabledButton: {
-    backgroundColor: '#cccccc',
+  interviewCardButtonText: {
+    color: '#ffffff',
+    fontWeight: '500',
   },
   modalOverlay: {
     flex: 1,
@@ -2201,10 +3322,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: '100%',
     marginBottom: 20,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
   },
   backButton: {
     padding: 10,
@@ -2265,5 +3382,463 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  interviewBanner: {
+    backgroundColor: '#e0f2fe',
+    padding: 15,
+    borderRadius: 10,
+    margin: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.5,
+    elevation: 2,
+  },
+  interviewBannerContent: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  interviewBannerTextContainer: {
+    marginLeft: 10,
+    flex: 1,
+  },
+  interviewBannerTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#1e3a8a',
+  },
+  interviewBannerDetails: {
+    fontSize: 14,
+    color: '#334155',
+    marginTop: 2,
+  },
+  interviewBannerPhone: {
+    fontSize: 14,
+    color: '#334155',
+    marginTop: 2,
+  },
+  calendarButton: {
+    backgroundColor: '#3b82f6',
+    padding: 8,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+    marginTop: 10,
+  },
+  calendarButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 20,
+    width: '85%',
+    maxWidth: 400,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    color: '#1e3a8a',
+  },
+  modalText: {
+    fontSize: 14,
+    color: '#4b5563',
+    marginBottom: 15,
+  },
+  phoneNumberInput: {
+    backgroundColor: '#f3f4f6',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 15,
+    fontSize: 16,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: 15,
+  },
+  modalButton: {
+    backgroundColor: '#2196F3',
+    padding: 10,
+    borderRadius: 5,
+    width: '45%',
+  },
+  cancelButton: {
+    backgroundColor: '#ff6b6b',
+    padding: 10,
+    borderRadius: 5,
+    width: '45%',
+  },
+  confirmButton: {
+    backgroundColor: '#2196F3',
+    padding: 10,
+    borderRadius: 5,
+    width: '45%',
+  },
+  confirmButtonText: {
+    color: 'white',
+    textAlign: 'center',
+    fontWeight: 'bold',
+  },
+  cancelButtonText: {
+    color: 'white',
+    textAlign: 'center',
+    fontWeight: 'bold',
+  },
+  offerContainer: {
+    backgroundColor: '#ffffff',
+    margin: 10,
+    padding: 15,
+    borderRadius: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.5,
+    elevation: 2,
+  },
+  offerTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    color: '#1e3a8a',
+  },
+  offerDetail: {
+    fontSize: 14,
+    color: '#4b5563',
+    marginBottom: 10,
+  },
+  scheduleText: {
+    fontSize: 14,
+    color: '#4b5563',
+    marginBottom: 5,
+  },
+  offerButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  rejectButton: {
+    backgroundColor: '#ef4444',
+    padding: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  acceptButton: {
+    backgroundColor: '#10b981',
+    padding: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  offerContainer: {
+    backgroundColor: '#ffffff',
+    margin: 10,
+    padding: 15,
+    borderRadius: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.5,
+    elevation: 2,
+  },
+  offerTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    color: '#1e3a8a',
+  },
+  offerDetail: {
+    fontSize: 14,
+    color: '#4b5563',
+    marginBottom: 10,
+  },
+  scheduleText: {
+    fontSize: 14,
+    color: '#4b5563',
+    marginBottom: 5,
+  },
+  offerButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  interviewContainer: {
+    marginBottom: 10,
+  },
+  interviewBanner: {
+    backgroundColor: '#e0f2fe',
+    padding: 15,
+    borderRadius: 10,
+    margin: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.5,
+    elevation: 2,
+  },
+  interviewBannerContent: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  interviewBannerTextContainer: {
+    marginLeft: 10,
+    flex: 1,
+  },
+  interviewBannerTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#1e3a8a',
+  },
+  interviewBannerDetails: {
+    fontSize: 14,
+    color: '#334155',
+    marginTop: 2,
+  },
+  interviewBannerPhone: {
+    fontSize: 14,
+    color: '#334155',
+    marginTop: 2,
+  },
+  calendarButton: {
+    backgroundColor: '#3b82f6',
+    padding: 8,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+    marginTop: 10,
+  },
+  calendarButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  errorText: {
+    color: '#e53e3e',
+    marginBottom: 10,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginTop: 10,
+    marginBottom: 5,
+  },
+  timePickersContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  timePicker: {
+    width: '48%',
+    alignItems: 'center',
+  },
+  slotsList: {
+    maxHeight: 150,
+  },
+  removeButtonText: {
+    color: '#e53e3e',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  datePickerButton: {
+    backgroundColor: '#f3f4f6',
+    padding: 12,
+    borderRadius: 8,
+    marginVertical: 10,
+  },
+  datePickerButtonText: {
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  timePickerButton: {
+    backgroundColor: '#f3f4f6',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 5,
+    width: '100%',
+  },
+  timePickerButtonText: {
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  addButton: {
+    backgroundColor: '#3498db',
+    padding: 12,
+    borderRadius: 8,
+    marginVertical: 10,
+    alignItems: 'center',
+  },
+  addButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
+  noSlotsText: {
+    fontStyle: 'italic',
+    color: '#9ca3af',
+    textAlign: 'center',
+    marginVertical: 10,
+  },
+  disabledButton: {
+    backgroundColor: '#a0aec0',
+    opacity: 0.7,
+  },
+  timeSlotItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 10,
+    backgroundColor: '#f3f4f6',
+    borderRadius: 8,
+    marginBottom: 5,
+  },
+  timeSlotText: {
+    flex: 1,
+  },
+  removeButton: {
+    padding: 5,
+  },
+  interviewButtonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  interviewButton: {
+    padding: 10,
+    borderRadius: 8,
+    flex: 1,
+    marginHorizontal: 5,
+    alignItems: 'center',
+  },
+  interviewButtonText: {
+    color: '#ffffff',
+    fontWeight: 'bold',
+  },
+  alternativeButton: {
+    backgroundColor: '#3b82f6', // blue
+  },
+  declineButton: {
+    backgroundColor: '#ef4444', // red
+  },
+  modalContentWrapper: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 20,
+    width: '90%',
+    maxHeight: '80%',
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginTop: 15,
+    marginBottom: 5,
+  },
+  noSlotsText: {
+    color: '#6b7280',
+    fontStyle: 'italic',
+    marginVertical: 10,
+  },
+  workDaysContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginVertical: 10,
+  },
+  workDayButton: {
+    width: 35,
+    height: 35,
+    borderRadius: 17.5,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+  },
+  dayText: {
+    color: '#4b5563',
+  },
+  dayTextSelected: {
+    color: 'white',
+  },
+  hoursContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 10,
+  },
+  timeSeperator: {
+    marginHorizontal: 10,
+  },
+  payContainer: {
+    marginVertical: 10,
+  },
+  payInput: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+  },
+  payPeriodContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  payPeriodButton: {
+    flex: 1,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    alignItems: 'center',
+    marginHorizontal: 5,
+  },
+  payPeriodSelected: {
+    backgroundColor: '#3b82f6',
+    borderColor: '#3b82f6',
+  },
+  periodText: {
+    color: '#4b5563',
+  },
+  periodTextSelected: {
+    color: 'white',
+  },
+  descriptionInput: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    padding: 10,
+    marginVertical: 10,
+    height: 80,
+    textAlignVertical: 'top',
+  },
+  sendOfferButton: {
+    backgroundColor: '#3b82f6',
+    padding: 12,
+    borderRadius: 8,
+    margin: 10,
+    alignItems: 'center',
+  },
+  sendOfferButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
+  offerContent: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  offerTextContainer: {
+    marginLeft: 10,
+    flex: 1,
+  },
+  inputOuterContainer: {
+    backgroundColor: '#ffffff',
+    borderTopWidth: 0.5,
+    borderTopColor: '#e0e0e0',
+    width: '100%',
+    paddingVertical: 10,
+    paddingHorizontal: 15,
   },
 });

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Dimensions, TouchableOpacity, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Modal, Pressable, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Dimensions, TouchableOpacity, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import Swiper from 'react-native-deck-swiper';
 import { db, auth, firebase } from '../firebase';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,7 +20,6 @@ import styled from 'styled-components/native';
 import DotLoader from '../components/Loader';
 import { getFirestore, collection, query, where, getDocs } from 'firebase/firestore';
 import EmptyStateLoader from '../components/loaders/EmptyStateLoader';
-import { getDistance } from 'geolib';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -343,420 +342,6 @@ const renderSkills = (skills) => {
   });
 };
 
-// Create a separate Card component for better state management
-const JobCard = ({ item, onSwipe, currentUser, getTravelTimes }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [locationInfo, setLocationInfo] = useState(null);
-  const [jobAnalysis, setJobAnalysis] = useState(null);
-  const [isLoadingAnalysis, setIsLoadingAnalysis] = useState(false);
-  const [showFullAnalysis, setShowFullAnalysis] = useState(false);
-  const analysisRef = useRef(null);
-
-  const weeklyHours = calculateWeeklyHours(item.availability);
-  const payRange = {
-    min: item.estPayRangeMin || 0,
-    max: item.estPayRangeMax || 0
-  };
-  const estimatedWeeklyPayMin = Math.round(weeklyHours * payRange.min);
-  const estimatedWeeklyPayMax = Math.round(weeklyHours * payRange.max);
-
-  const toggleExpanded = () => {
-    console.log('Toggling card expanded state:', !isExpanded);
-    setIsExpanded(!isExpanded);
-  };
-
-  useEffect(() => {
-    // Only fetch if we have both user and item location
-    (async () => {
-      if (!currentUser?.location || !item?.location) return;
-
-      // Calculate distance in miles
-      const distanceInMeters = getDistance(
-        { latitude: currentUser.location.latitude, longitude: currentUser.location.longitude },
-        { latitude: item.location.latitude, longitude: item.location.longitude }
-      );
-      const distanceInMiles = (distanceInMeters / 1609.34).toFixed(1);
-
-      // Get earliest start time (to estimate travel). This is optional, can be omitted if needed:
-      let earliestStartTime = null;
-      if (item.availability) {
-        const daysOfWeek = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-        for (const day of daysOfWeek) {
-          const dayData = item.availability[day];
-          if (dayData?.slots?.length > 0) {
-            const startTime = dayData.slots[0].startTime;
-            if (!earliestStartTime || startTime < earliestStartTime) {
-              earliestStartTime = startTime;
-            }
-          }
-        }
-      }
-      
-      // Fetch travel times
-      const times = await getTravelTimes(
-        currentUser.location.latitude,
-        currentUser.location.longitude,
-        item.location.latitude,
-        item.location.longitude,
-        earliestStartTime
-      );
-
-      setLocationInfo({ distanceInMiles, times });
-    })();
-  }, [item, currentUser, getTravelTimes]);
-
-  const fetchAnalysis = async () => {
-    if (analysisRef.current) {
-      setJobAnalysis(analysisRef.current);
-      return;
-    }
-
-    setIsLoadingAnalysis(true);
-    try {
-      const response = await fetch(`${BACKEND_URL}/analyze-job-fit`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          job: item,
-          user: currentUser
-        })
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        analysisRef.current = data.analysis; // Cache the analysis
-        setJobAnalysis(data.analysis);
-      } else {
-        console.error('Error fetching analysis:', data.error);
-      }
-    } catch (error) {
-      console.error('Error fetching analysis:', error);
-    } finally {
-      setIsLoadingAnalysis(false);
-    }
-  };
-
-  useEffect(() => {
-    if (isExpanded && !analysisRef.current) {
-      fetchAnalysis();
-    }
-  }, [isExpanded]);
-
-  const AnalysisModal = () => (
-    <Modal
-      animationType="fade"
-      transparent={true}
-      visible={showFullAnalysis}
-      onRequestClose={() => setShowFullAnalysis(false)}
-    >
-      <Pressable 
-        style={styles.modalOverlay}
-        onPress={() => setShowFullAnalysis(false)}
-      >
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Detailed Analysis</Text>
-            <TouchableOpacity onPress={() => setShowFullAnalysis(false)}>
-              <Ionicons name="close" size={24} color="#666" />
-            </TouchableOpacity>
-          </View>
-          
-          <ScrollView style={styles.modalScroll}>
-            <View style={styles.section}>
-              <Text style={styles.categoryTitle}>Pros</Text>
-              {jobAnalysis?.full.pros.map((pro, index) => (
-                <View key={`pro-${index}`} style={styles.proBubble}>
-                  <Ionicons name="checkmark-circle" size={16} color="#166534" />
-                  <Text style={styles.proText}>{pro}</Text>
-                </View>
-              ))}
-            </View>
-
-            <View style={styles.section}>
-              <Text style={styles.categoryTitle}>Cons</Text>
-              {jobAnalysis?.full.cons.map((con, index) => (
-                <View key={`con-${index}`} style={styles.conBubble}>
-                  <Ionicons name="alert-circle" size={16} color="#991b1b" />
-                  <Text style={styles.conText}>{con}</Text>
-                </View>
-              ))}
-            </View>
-
-            <Text style={styles.summaryText}>{jobAnalysis?.full.summary}</Text>
-          </ScrollView>
-        </View>
-      </Pressable>
-    </Modal>
-  );
-
-  return (
-    <>
-      <TouchableOpacity 
-        style={styles.card}
-        onPress={toggleExpanded}
-        onLongPress={() => jobAnalysis && setShowFullAnalysis(true)}
-        activeOpacity={0.95}
-        delayLongPress={200}
-      >
-        <LinearGradient
-          colors={['#1e3a8a', '#1e40af']}
-          style={styles.cardGradient}
-        >
-          <View style={styles.contentCard}>
-            {!isExpanded ? (
-              // Front of card
-              <>
-                <View style={styles.titleContainer}>
-                  <Text style={styles.jobTitle}>{item.jobTitle || 'No Title'}</Text>
-                  <View style={styles.companyBadge}>
-                    <Text style={styles.companyName}>{item.companyName || 'Company'}</Text>
-                  </View>
-                </View>
-
-                <View style={styles.section}>
-                  <Text style={styles.sectionTitle}>Overview</Text>
-                  <Text style={styles.overviewText}>
-                    {item.job_overview || 'No overview available'}
-                  </Text>
-                </View>
-
-                <View style={styles.gridContainer}>
-                  <View style={styles.gridItem}>
-                    <Text style={styles.gridLabel}>Pay Range</Text>
-                    <Text style={styles.gridValue}>
-                      ${payRange.min} - ${payRange.max}/hr
-                    </Text>
-                  </View>
-                  <View style={styles.gridItem}>
-                    <Text style={styles.gridLabel}>Est. Weekly Hours</Text>
-                    <Text style={styles.gridValue}>
-                      {weeklyHours} hours
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.weeklyPayContainer}>
-                  <Text style={styles.weeklyPayLabel}>Est. Weekly Pay</Text>
-                  <Text style={styles.weeklyPayValue}>
-                    ${estimatedWeeklyPayMin} - ${estimatedWeeklyPayMax}
-                  </Text>
-                </View>
-
-                <View style={styles.section}>
-                  <Text style={styles.sectionTitle}>Location & Travel Times</Text>
-                  {locationInfo && (
-                    <View style={styles.locationInfoContainer}>
-                      <Text style={styles.distanceText}>
-                        {locationInfo.distanceInMiles} miles away
-                      </Text>
-                      {locationInfo.times && (
-                        <View style={styles.travelTimesContainer}>
-                          <View style={styles.travelTimeItem}>
-                            <Ionicons name="car" size={16} color="#64748b" />
-                            <Text style={styles.travelTimeText}>
-                              {locationInfo.times.driving?.duration || 'N/A'}
-                            </Text>
-                          </View>
-                          <View style={styles.travelTimeItem}>
-                            <Ionicons name="bus" size={16} color="#64748b" />
-                            <Text style={styles.travelTimeText}>
-                              {locationInfo.times.transit?.duration || 'N/A'}
-                            </Text>
-                          </View>
-                          <View style={styles.travelTimeItem}>
-                            <Ionicons name="walk" size={16} color="#64748b" />
-                            <Text style={styles.travelTimeText}>
-                              {locationInfo.times.walking?.duration || 'N/A'}
-                            </Text>
-                          </View>
-                        </View>
-                      )}
-                    </View>
-                  )}
-                </View>
-              </>
-            ) : (
-              // Back of card
-              <>
-                <View style={styles.section}>
-                  <Text style={styles.sectionTitle}>Required Skills</Text>
-                  <View style={styles.skillsContainer}>
-                    {Array.isArray(item.skills) && item.skills.length > 0 ? (
-                      item.skills.map((skill, index) => (
-                        <View key={index} style={styles.skillBubble}>
-                          <Text style={styles.skillText}>
-                            {typeof skill === 'object'
-                              ? `${skill.name || ''} • ${skill.yearsOfExperience || 0}yr`
-                              : skill}
-                          </Text>
-                        </View>
-                      ))
-                    ) : (
-                      <Text style={styles.noSkillsText}>No required skills specified</Text>
-                    )}
-                  </View>
-                </View>
-
-                <View style={styles.section}>
-                  <Text style={styles.sectionTitle}>Required Availability</Text>
-                  <View style={styles.availabilityContainer}>
-                    {Object.entries(item.availability || {}).map(([day, dayData]) => {
-                      const slots = Array.isArray(dayData) ? dayData : dayData.slots || [];
-                      if (slots.length === 0) return null;
-                      return (
-                        <View key={day} style={styles.dayContainer}>
-                          <View style={[styles.dayChip, styles.dayChipAvailable]}>
-                            <Text style={[styles.dayText, styles.dayTextAvailable]}>
-                              {day}
-                            </Text>
-                          </View>
-                          <View style={styles.timeSlotsContainer}>
-                            {slots.map((slot, index) => (
-                              <Text key={index} style={styles.timeSlot}>
-                                {slot.startTime} - {slot.endTime}
-                              </Text>
-                            ))}
-                          </View>
-                        </View>
-                      );
-                    })}
-                  </View>
-                </View>
-
-                <View style={styles.section}>
-                  <Text style={styles.sectionTitle}>Job Match Analysis</Text>
-                  {isLoadingAnalysis ? (
-                    <ActivityIndicator size="small" color="#4f46e5" />
-                  ) : jobAnalysis ? (
-                    <View style={styles.analysisContainer}>
-                      <View style={styles.prosContainer}>
-                        <Text style={styles.categoryTitle}>Pros</Text>
-                        <View style={styles.proBubble}>
-                          <Ionicons name="checkmark-circle" size={16} color="#166534" />
-                          <Text style={styles.proText}>{jobAnalysis.condensed.pros}</Text>
-                        </View>
-                      </View>
-                      
-                      <View style={styles.consContainer}>
-                        <Text style={styles.categoryTitle}>Cons</Text>
-                        <View style={styles.conBubble}>
-                          <Ionicons name="alert-circle" size={16} color="#991b1b" />
-                          <Text style={styles.conText}>{jobAnalysis.condensed.cons}</Text>
-                        </View>
-                      </View>
-                      
-                      <Text style={styles.hintText}>Long press for full analysis</Text>
-                    </View>
-                  ) : (
-                    <Text style={styles.noAnalysisText}>Unable to load analysis</Text>
-                  )}
-                </View>
-              </>
-            )}
-          </View>
-        </LinearGradient>
-      </TouchableOpacity>
-      <AnalysisModal />
-    </>
-  );
-};
-
-// Add these utility functions after the BACKEND_URL constant
-const getTravelTimes = async (originLat, originLng, destLat, destLng, arrivalTime = null) => {
-  try {
-    let url = `${BACKEND_URL}/travel-times?` +
-      `origin_lat=${originLat}&` +
-      `origin_lng=${originLng}&` +
-      `dest_lat=${destLat}&` +
-      `dest_lng=${destLng}`;
-    
-    if (arrivalTime) {
-      url += `&arrival_time=${arrivalTime}`;
-    }
-    
-    const response = await fetch(url);
-    
-    if (!response.ok) throw new Error('Network response was not ok');
-    const data = await response.json();
-    
-    return data.success ? data.travel_times : null;
-  } catch (error) {
-    console.error('Error fetching travel times:', error);
-    return null;
-  }
-};
-
-const renderLocationInfo = async (jobLocation, jobAvailability) => {
-  // Skip if no job location
-  if (!jobLocation || !jobLocation.latitude || !jobLocation.longitude) {
-    return null;
-  }
-
-  // Get user's current location from the job data
-  const userLocation = currentUser?.location;
-  if (!userLocation || !userLocation.latitude || !userLocation.longitude) {
-    return null;
-  }
-
-  // Calculate straight-line distance
-  const distanceInMeters = getDistance(
-    { latitude: userLocation.latitude, longitude: userLocation.longitude },
-    { latitude: jobLocation.latitude, longitude: jobLocation.longitude }
-  );
-  
-  const distanceInMiles = (distanceInMeters / 1609.34).toFixed(1);
-
-  // Get earliest start time from availability if it exists
-  let earliestStartTime = null;
-  if (jobAvailability) {
-    const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    for (const day of daysOfWeek) {
-      const dayData = jobAvailability[day];
-      if (dayData?.slots?.length > 0) {
-        const startTime = dayData.slots[0].startTime;
-        if (!earliestStartTime || startTime < earliestStartTime) {
-          earliestStartTime = startTime;
-        }
-      }
-    }
-  }
-
-  // Get travel times
-  const times = await getTravelTimes(
-    userLocation.latitude,
-    userLocation.longitude,
-    jobLocation.latitude,
-    jobLocation.longitude,
-    earliestStartTime
-  );
-
-  return (
-    <View style={styles.locationInfoContainer}>
-      <Text style={styles.distanceText}>
-        {distanceInMiles} miles away
-      </Text>
-      {times && (
-        <View style={styles.travelTimesContainer}>
-          <View style={styles.travelTimeItem}>
-            <Ionicons name="car" size={16} color="#64748b" />
-            <Text style={styles.travelTimeText}>{times.driving?.duration || 'N/A'}</Text>
-          </View>
-          <View style={styles.travelTimeItem}>
-            <Ionicons name="bus" size={16} color="#64748b" />
-            <Text style={styles.travelTimeText}>{times.transit?.duration || 'N/A'}</Text>
-          </View>
-          <View style={styles.travelTimeItem}>
-            <Ionicons name="walk" size={16} color="#64748b" />
-            <Text style={styles.travelTimeText}>{times.walking?.duration || 'N/A'}</Text>
-          </View>
-        </View>
-      )}
-    </View>
-  );
-};
-
 export default function HomeScreen({ navigation }) {
   const [items, setItems] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
@@ -767,13 +352,6 @@ export default function HomeScreen({ navigation }) {
   const [showMatchModal, setShowMatchModal] = useState(false);
   const [matchedJob, setMatchedJob] = useState(null);
   const [matchData, setMatchData] = useState(null);
-  const [cardStates, setCardStates] = useState({
-    currentCard: 1,
-    isExpanded: false
-  });
-  const [cardsRemaining, setCardsRemaining] = useState(0);
-  const [noMoreCards, setNoMoreCards] = useState(false);
-  const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   let [fontsLoaded] = useFonts({
     LibreBodoni_400Regular,
@@ -822,41 +400,44 @@ export default function HomeScreen({ navigation }) {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        if (!auth.currentUser) {
+        if (!auth.currentUser) return;
+
+        // Get worker data
+        const workerDoc = await db.collection('user_attributes').doc(auth.currentUser.uid).get();
+        if (!workerDoc.exists) {
           setIsLoading(false);
           return;
         }
 
-        // Get current user data
-        const userDoc = await db.collection('user_attributes')
-          .doc(auth.currentUser.uid)
-          .get();
+        const workerData = workerDoc.data();
+        setCurrentUser(workerData);
 
-        if (!userDoc.exists) {
-          setIsLoading(false);
-          return;
-        }
-
-        const userData = userDoc.data();
-        setCurrentUser(userData); // Set the currentUser state
-
-        // Get all jobs
-        const jobsSnapshot = await db.collection('job_attributes').get();
+        // Get all employers
+        const employersSnapshot = await db.collection('job_attributes').get();
         
-        const jobsWithScores = await Promise.all(
-          jobsSnapshot.docs.map(async (doc) => {
-            const jobData = doc.data();
-            const matchScore = await calculateMatchScore(userData, jobData);
+        // Calculate match scores for each employer
+        const employersWithScores = await Promise.all(
+          employersSnapshot.docs.map(async (doc) => {
+            const employerData = doc.data();
+            
+            // Calculate match score
+            const matchScore = await calculateMatchScore(
+              workerData,
+              employerData
+            );
+
             return {
-              ...jobData,
+              ...employerData,
               id: doc.id,
               matchScore
             };
           })
         );
 
-        jobsWithScores.sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));
-        setItems(jobsWithScores);
+        // Sort by match score (highest first)
+        employersWithScores.sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));
+        
+        setItems(employersWithScores);
         setIsLoading(false);
       } catch (error) {
         console.error('Error fetching data:', error);
@@ -952,41 +533,14 @@ export default function HomeScreen({ navigation }) {
     }
   };
 
-  const onSwipedLeft = (cardIndex) => {
-    console.log(`[CARDS] Card swiped LEFT, index: ${cardIndex}`);
-    const currentRemaining = items.length - (cardIndex + 1);
-    console.log(`[CARDS] Cards remaining: ${currentRemaining}`);
-    setCardsRemaining(currentRemaining);
-    
-    if (currentRemaining === 0) {
-      console.log('[CARDS] No more cards remaining!');
-      setNoMoreCards(true);
-    }
-    
-    // Your existing swipe left logic
-    handleSwipe(cardIndex, false);
-  };
-
-  const onSwipedRight = (cardIndex) => {
-    console.log(`[CARDS] Card swiped RIGHT, index: ${cardIndex}`);
-    const currentRemaining = items.length - (cardIndex + 1);
-    console.log(`[CARDS] Cards remaining: ${currentRemaining}`);
-    setCardsRemaining(currentRemaining);
-    
-    if (currentRemaining === 0) {
-      console.log('[CARDS] No more cards remaining!');
-      setNoMoreCards(true);
-    }
-    
-    // Your existing swipe right logic
-    handleSwipe(cardIndex, true);
-  };
+  const onSwipedRight = (cardIndex) => handleSwipe(cardIndex, true);
+  const onSwipedLeft = (cardIndex) => handleSwipe(cardIndex, false);
 
   const onSwipedAll = () => {
-    console.log('[CARDS] onSwipedAll triggered!');
-    setNoMoreCards(true);
-    setCardsRemaining(0);
-    // Your existing onSwipedAll logic
+    // Clear any existing match data when all cards are swiped
+    setShowMatchModal(false);
+    setMatchData(null);
+    setMatchedJob(null);
   };
 
   const handleJobPress = (item) => {
@@ -1018,29 +572,187 @@ export default function HomeScreen({ navigation }) {
     navigation.navigate('Main', { screen: 'Settings' });
   };
 
-  const handleCardPress = (cardIndex) => {
-    console.log('Card pressed:', cardIndex);
-    console.log('Current card state:', cardStates);
-    
-    setCardStates(prevState => ({
-      ...prevState,
-      isExpanded: !prevState.isExpanded
-    }));
-  };
+  const renderCard = (item) => {
+    // Add debugging logs
+    console.log('Rendering card for item:', {
+      id: item.id,
+      overview: item.job_overview,
+      availability: item.availability,
+      requiredSkills: item.requiredSkills
+    });
 
-  const handleSwipedCard = (cardIndex) => {
-    console.log(`[CARDS] Card swiped, index: ${cardIndex}, remaining: ${items.length - (cardIndex + 1)}`);
-    setCardsRemaining(items.length - (cardIndex + 1));
-    
-    // If this was the last card
-    if (cardIndex === items.length - 1) {
-      console.log('[CARDS] Last card swiped, no more cards!');
-      setNoMoreCards(true);
-    }
-  };
+    // Calculate weekly hours from job_attributes availability
+    const calculateTotalHours = (availability) => {
+      if (!availability) return 0;
+      
+      let totalHours = 0;
+      Object.values(availability).forEach(day => {
+        if (day.slots && Array.isArray(day.slots)) {
+          day.slots.forEach(slot => {
+            if (!slot.startTime || !slot.endTime) return;
+            
+            const [startH, startM] = slot.startTime.split(':').map(Number);
+            const [endH, endM] = slot.endTime.split(':').map(Number);
+            
+            const startMinutes = startH * 60 + startM;
+            const endMinutes = endH * 60 + endM;
+            
+            totalHours += (endMinutes - startMinutes) / 60;
+          });
+        }
+      });
+      
+      return totalHours;
+    };
 
-  const renderCard = (item, cardIndex) => {
-    return <JobCard item={item} currentUser={currentUser} getTravelTimes={getTravelTimes} />;
+    const weeklyHours = calculateWeeklyHours(item.availability);
+    console.log('Weekly hours calculated:', weeklyHours);
+    console.log('Item salary range:', item.salaryRange || item.estPayRange || {min: item.estPayRangeMin, max: item.estPayRangeMax});
+
+    const payRange = {
+      min: item.estPayRangeMin || 0,
+      max: item.estPayRangeMax || 0
+    };
+    console.log('Pay range:', payRange);
+
+    const estimatedWeeklyPayMin = Math.round(weeklyHours * payRange.min);
+    const estimatedWeeklyPayMax = Math.round(weeklyHours * payRange.max);
+
+    console.log('Estimated weekly pay:', {min: estimatedWeeklyPayMin, max: estimatedWeeklyPayMax});
+
+    const renderAvailabilitySlots = (dayData) => {
+      if (!dayData.slots || !Array.isArray(dayData.slots)) return null;
+      
+      return dayData.slots.map((slot, slotIndex) => (
+        <View 
+          key={`${slotIndex}`} 
+          style={[
+            styles.availabilityBubble,
+            hasMatch && styles.availabilityBubbleMatch
+          ]}
+        >
+          <Text style={[
+            styles.value, 
+            styles.scheduleText,
+            hasMatch && styles.scheduleTextMatch
+          ]}>
+            {slot.startTime} - {slot.endTime}
+          </Text>
+        </View>
+      ));
+    };
+
+    console.log('Availability data:', JSON.stringify(item.availability, null, 2));
+
+    return (
+      <TouchableOpacity 
+        style={styles.card}
+        // onPress={() => handleJobPress(item)}
+        activeOpacity={0.8}
+      >
+        <LinearGradient
+          colors={['#1e3a8a', '#1e40af']}
+          style={styles.cardGradient}
+        >
+          <View style={styles.contentCard}>
+            {/* Job Title and Company */}
+            <View style={styles.titleContainer}>
+              <Text style={styles.jobTitle}>{item.jobTitle || 'No Title'}</Text>
+              <View style={styles.companyBadge}>
+                <Text style={styles.companyName}>{item.companyName || 'Company'}</Text>
+              </View>
+            </View>
+
+            {/* Overview */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Overview</Text>
+              <Text style={styles.overviewText}>
+                {item.job_overview || 'No overview available'}
+              </Text>
+            </View>
+
+            {/* Pay and Hours Grid */}
+            <View style={styles.gridContainer}>
+              <View style={styles.gridItem}>
+                <Text style={styles.gridLabel}>Pay Range</Text>
+                <Text style={styles.gridValue}>
+                  ${item.salaryRange?.min || 'N/A'} - ${item.salaryRange?.max || 'N/A'}/hr
+                </Text>
+              </View>
+              <View style={styles.gridItem}>
+                <Text style={styles.gridLabel}>Est. Weekly Hours</Text>
+                <Text style={styles.gridValue}>
+                  {calculateWeeklyHours(item.availability)} hours
+                </Text>
+              </View>
+            </View>
+
+            {/* Weekly Pay Estimate */}
+            <View style={styles.weeklyPayContainer}>
+              <Text style={styles.weeklyPayLabel}>Est. Weekly Pay</Text>
+              <Text style={styles.weeklyPayValue}>
+                ${estimatedWeeklyPayMin} - ${estimatedWeeklyPayMax}
+              </Text>
+            </View>
+
+            {/* Skills */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Required Skills</Text>
+              <View style={styles.skillsContainer}>
+                {item.requiredSkills && Array.isArray(item.requiredSkills) ? (
+                  item.requiredSkills.map((skill, index) => (
+                    <View key={index} style={styles.skillBubble}>
+                      <Text style={styles.skillText}>
+                        {typeof skill === 'object' ? `${skill.name || ''} • ${skill.yearsOfExperience || 0}yr` : skill}
+                      </Text>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.noSkillsText}>No required skills specified</Text>
+                )}
+              </View>
+            </View>
+
+            {/* Availability */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Required Availability</Text>
+              <View style={styles.availabilityContainer}>
+                {Object.entries(item.availability || {}).map(([day, dayData]) => {
+                  // Handle both array format and object format with slots
+                  const slots = Array.isArray(dayData) ? dayData : (dayData.slots || []);
+                  if (slots.length === 0) return null;
+                  
+                  return (
+                    <View key={day} style={styles.dayContainer}>
+                      <View style={[styles.dayChip, styles.dayChipAvailable]}>
+                        <Text style={[styles.dayText, styles.dayTextAvailable]}>
+                          {day}
+                        </Text>
+                      </View>
+                      <View style={styles.timeSlotsContainer}>
+                        {slots.map((slot, index) => (
+                          <Text key={index} style={styles.timeSlot}>
+                            {slot.startTime} - {slot.endTime}
+                          </Text>
+                        ))}
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+
+            {/* Distance */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Distance</Text>
+              <Text style={styles.distanceText}>
+                {item.distance != null ? `${item.distance} miles away` : 'Distance unavailable'}
+              </Text>
+            </View>
+          </View>
+        </LinearGradient>
+      </TouchableOpacity>
+    );
   };
 
   const renderAvailabilitySection = (item) => {
@@ -1086,14 +798,6 @@ export default function HomeScreen({ navigation }) {
     console.log("isLoading:", isLoading);
   }, [items, isLoading]);
 
-  useEffect(() => {
-    if (items && items.length >= 0) {
-      console.log(`[CARDS] Items array updated, length: ${items.length}`);
-      setCardsRemaining(items.length);
-      setNoMoreCards(items.length === 0);
-    }
-  }, [items]);
-
   if (!fontsLoaded) {
     return <ActivityIndicator />;
   }
@@ -1131,45 +835,19 @@ export default function HomeScreen({ navigation }) {
         <View style={styles.loaderContainer}>
           <ActivityIndicator size="large" color="#0000ff" />
         </View>
-      ) : noMoreCards ? (
-        <View style={styles.emptyStateContainer}>
-          <Text style={styles.emptyStateText}>No more profiles to show</Text>
-          <Text style={styles.emptyStateSubText}>Check back later for new matches</Text>
-          <TouchableOpacity 
-            style={styles.refreshButton}
-            onPress={() => {
-              console.log('[CARDS] Refresh button pressed');
-              setIsLoading(true);
-              
-              // Reset states
-              setNoMoreCards(false);
-              setCardsRemaining(0);
-              
-              // Fetch new cards
-              fetchItems();
-            }}
-          >
-            <Text style={styles.refreshButtonText}>Refresh</Text>
-          </TouchableOpacity>
+      ) : items.length === 0 ? (
+        <View style={styles.noItemsContainer}>
+          <EmptyStateLoader />
         </View>
       ) : (
         <Swiper
           ref={swiperRef}
           cards={items}
-          renderCard={(item) => (
-            <JobCard
-              item={item}
-              currentUser={currentUser}
-              onSwipe={handleSwipe}
-              getTravelTimes={getTravelTimes}
-            />
-          )}
-          onTapCard={(cardIndex) => {}}
-          onTapCardDelay={0}
-          tapToNext={false}
-          onSwipedLeft={onSwipedLeft}
-          onSwipedRight={onSwipedRight}
+          renderCard={renderCard}
+          onSwipedRight={(cardIndex) => handleSwipe(cardIndex, true)}
+          onSwipedLeft={(cardIndex) => handleSwipe(cardIndex, false)}
           onSwipedAll={onSwipedAll}
+          cardIndex={0}
           backgroundColor={'#f0f0f0'}
           stackSize={3}
           stackSeparation={15}
@@ -1230,8 +908,8 @@ export default function HomeScreen({ navigation }) {
           matchData={matchData}
         >
           <View style={styles.skillsContainer}>
-            {matchedJob.skills?.length > 0 ? (
-              renderSkills(matchedJob.skills)
+            {matchedJob.requiredSkills?.length > 0 ? (
+              renderSkills(matchedJob.requiredSkills)
             ) : (
               <Text style={styles.noSkillsText}>No required skills specified</Text>
             )}
@@ -1286,7 +964,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   section: {
-    marginBottom: 16,
+    marginBottom: 20,
   },
   sectionTitle: {
     fontSize: 16,
@@ -1348,10 +1026,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   distanceText: {
-    fontSize: 14,
-    fontWeight: '500',
+    fontSize: 16,
+    fontWeight: '600',
     color: '#1f2937',
-    marginBottom: 8,
   },
   loadingContainer: {
     flex: 1,
@@ -1366,20 +1043,13 @@ const styles = StyleSheet.create({
   },
   noItemsContainer: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  noItemsText: {
-    marginTop: 20,
-    fontSize: 18,
-    color: '#666',
-    textAlign: 'center',
+    backgroundColor: '#ffffff',
   },
   loaderContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#ffffff',
   },
   errorContainer: {
     flex: 1,
@@ -1506,202 +1176,5 @@ const styles = StyleSheet.create({
   },
   dayTextUnavailable: {
     color: '#991b1b',
-  },
-  locationInfoContainer: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 12,
-    padding: 12,
-  },
-  travelTimesContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 4,
-  },
-  travelTimeItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  travelTimeText: {
-    fontSize: 12,
-    color: '#64748b',
-  },
-  analysisContainer: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 12,
-    padding: 16,
-  },
-  scoreContainer: {
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  scoreText: {
-    fontSize: 14,
-    color: '#64748b',
-    marginBottom: 4,
-  },
-  scoreValue: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#1e40af',
-  },
-  prosConsContainer: {
-    marginBottom: 16,
-  },
-  prosContainer: {
-    marginBottom: 8,
-  },
-  consContainer: {
-    marginBottom: 8,
-  },
-  proBubble: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f0fdf4',
-    borderRadius: 8,
-    padding: 8,
-  },
-  conBubble: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fef2f2',
-    borderRadius: 8,
-    padding: 8,
-  },
-  proText: {
-    marginLeft: 8,
-    color: '#166534',
-    flex: 1,
-  },
-  conText: {
-    marginLeft: 8,
-    color: '#991b1b',
-    flex: 1,
-  },
-  summaryText: {
-    fontSize: 14,
-    color: '#1f2937',
-    lineHeight: 20,
-  },
-  noAnalysisText: {
-    color: '#6b7280',
-    fontSize: 14,
-    fontStyle: 'italic',
-  },
-  categoryTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 8,
-    color: '#1f2937',
-  },
-  analysisContainer: {
-    gap: 16,
-  },
-  prosContainer: {
-    gap: 8,
-  },
-  consContainer: {
-    gap: 8,
-  },
-  proBubble: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f0fdf4',
-    borderRadius: 8,
-    padding: 12,
-  },
-  conBubble: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fef2f2',
-    borderRadius: 8,
-    padding: 12,
-  },
-  proText: {
-    marginLeft: 8,
-    color: '#166534',
-    flex: 1,
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  conText: {
-    marginLeft: 8,
-    color: '#991b1b',
-    flex: 1,
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  summaryText: {
-    fontSize: 14,
-    color: '#4b5563',
-    lineHeight: 20,
-    marginTop: 8,
-    fontStyle: 'italic',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 20,
-    padding: 20,
-    width: '90%',
-    maxHeight: '80%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#1f2937',
-  },
-  modalScroll: {
-    maxHeight: '90%',
-  },
-  hintText: {
-    fontSize: 12,
-    color: '#6b7280',
-    fontStyle: 'italic',
-    textAlign: 'center',
-    marginTop: 8,
-  },
-  emptyStateContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-    backgroundColor: '#f5f5f5',
-  },
-  emptyStateText: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  emptyStateSubText: {
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-  refreshButton: {
-    backgroundColor: '#1e3a8a',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  refreshButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '500',
   },
 });
