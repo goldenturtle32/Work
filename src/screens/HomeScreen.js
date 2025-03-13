@@ -21,6 +21,8 @@ import DotLoader from '../components/Loader';
 import { getFirestore, collection, query, where, getDocs } from 'firebase/firestore';
 import EmptyStateLoader from '../components/loaders/EmptyStateLoader';
 import { getDistance } from 'geolib';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import TutorialOverlay from '../components/TutorialOverlay';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -757,7 +759,7 @@ const renderLocationInfo = async (jobLocation, jobAvailability) => {
   );
 };
 
-export default function HomeScreen({ navigation }) {
+export default function HomeScreen({ navigation, route }) {
   const [items, setItems] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -774,6 +776,9 @@ export default function HomeScreen({ navigation }) {
   const [cardsRemaining, setCardsRemaining] = useState(0);
   const [noMoreCards, setNoMoreCards] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [swipedCardIds, setSwipedCardIds] = useState([]);
+  const [swipeKey, setSwipeKey] = useState(0);
+  const [showTutorial, setShowTutorial] = useState(false);
 
   let [fontsLoaded] = useFonts({
     LibreBodoni_400Regular,
@@ -822,6 +827,11 @@ export default function HomeScreen({ navigation }) {
   useEffect(() => {
     const fetchData = async () => {
       try {
+        // Load previously swiped card IDs from AsyncStorage
+        const storedSwipedIds = await AsyncStorage.getItem('swipedCardIds');
+        const previouslySwipedIds = storedSwipedIds ? JSON.parse(storedSwipedIds) : [];
+        setSwipedCardIds(previouslySwipedIds);
+        
         if (!auth.currentUser) {
           setIsLoading(false);
           return;
@@ -838,7 +848,7 @@ export default function HomeScreen({ navigation }) {
         }
 
         const userData = userDoc.data();
-        setCurrentUser(userData); // Set the currentUser state
+        setCurrentUser(userData);
 
         // Get all jobs
         const jobsSnapshot = await db.collection('job_attributes').get();
@@ -855,8 +865,20 @@ export default function HomeScreen({ navigation }) {
           })
         );
 
-        jobsWithScores.sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));
-        setItems(jobsWithScores);
+        // Filter out previously swiped cards
+        const filteredJobs = jobsWithScores.filter(job => 
+          !previouslySwipedIds.includes(job.id)
+        );
+
+        filteredJobs.sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));
+        
+        setItems(filteredJobs);
+        setCardsRemaining(filteredJobs.length);
+        setNoMoreCards(filteredJobs.length === 0);
+        
+        // Add this line to force Swiper to reset
+        setSwipeKey(prevKey => prevKey + 1);
+        
         setIsLoading(false);
       } catch (error) {
         console.error('Error fetching data:', error);
@@ -866,6 +888,16 @@ export default function HomeScreen({ navigation }) {
     };
 
     fetchData();
+    
+    // Add a focus listener for screen navigation
+    const unsubscribeFocus = navigation.addListener('focus', () => {
+      console.log('[HOME] Screen focused, refreshing card data');
+      fetchData();
+    });
+    
+    return () => {
+      unsubscribeFocus();
+    };
   }, []);
 
   useEffect(() => {
@@ -910,6 +942,13 @@ export default function HomeScreen({ navigation }) {
     const itemId = currentUser.role === 'worker' ? item.id : item.uid;
 
     try {
+      // Add the card ID to swiped list
+      const newSwipedIds = [...swipedCardIds, item.id];
+      setSwipedCardIds(newSwipedIds);
+      
+      // Store in AsyncStorage
+      await AsyncStorage.setItem('swipedCardIds', JSON.stringify(newSwipedIds));
+      
       const userJobPrefData = new UserJobPreference({
         userId: currentUserUid,
         role: currentUser.role,
@@ -1094,6 +1133,55 @@ export default function HomeScreen({ navigation }) {
     }
   }, [items]);
 
+  // Check for new users on mount and focus
+  useEffect(() => {
+    console.log("[TUTORIAL] HomeScreen mounted, checking tutorial status");
+    checkForFirstTimeUser();
+    
+    // Also check when screen comes into focus
+    const unsubscribe = navigation.addListener('focus', () => {
+      console.log("[TUTORIAL] HomeScreen focused, checking tutorial status");
+      checkForFirstTimeUser();
+    });
+    
+    return unsubscribe;
+  }, [navigation]);
+  
+  const checkForFirstTimeUser = async () => {
+    try {
+      // Get the tutorial status
+      const tutorialShown = await AsyncStorage.getItem('workerTutorialShown');
+      console.log("[TUTORIAL] Tutorial previously shown:", tutorialShown);
+      
+      if (tutorialShown !== 'true') {
+        console.log("[TUTORIAL] First time user detected, showing tutorial");
+        setShowTutorial(true);
+      } else {
+        console.log("[TUTORIAL] User has seen tutorial before, not showing");
+      }
+    } catch (error) {
+      console.error('[TUTORIAL] Error checking tutorial status:', error);
+    }
+  };
+  
+  // Force showing tutorial for testing
+  const forceTutorial = async () => {
+    await AsyncStorage.removeItem('workerTutorialShown');
+    setShowTutorial(true);
+    console.log("[TUTORIAL] Tutorial forcibly reset and shown");
+  };
+
+  // Handle tutorial completion
+  const handleTutorialComplete = async () => {
+    try {
+      console.log("[TUTORIAL] Tutorial completed, saving status");
+      await AsyncStorage.setItem('workerTutorialShown', 'true');
+      setShowTutorial(false);
+    } catch (error) {
+      console.error('[TUTORIAL] Error saving tutorial status:', error);
+    }
+  };
+
   if (!fontsLoaded) {
     return <ActivityIndicator />;
   }
@@ -1154,6 +1242,7 @@ export default function HomeScreen({ navigation }) {
         </View>
       ) : (
         <Swiper
+          key={`swiper-${swipeKey}`}
           ref={swiperRef}
           cards={items}
           renderCard={(item) => (
@@ -1238,6 +1327,18 @@ export default function HomeScreen({ navigation }) {
           </View>
         </NewMatchModal>
       )}
+
+      {showTutorial && (
+        <TutorialOverlay onComplete={handleTutorialComplete} />
+      )}
+
+      {/* Add this hidden button for testing */}
+      <TouchableOpacity 
+        style={[styles.debugButton, { display: __DEV__ ? 'flex' : 'none' }]} 
+        onPress={forceTutorial}
+      >
+        <Text style={styles.debugButtonText}>Show Tutorial</Text>
+      </TouchableOpacity>
     </KeyboardAvoidingView>
   );
 }
@@ -1703,5 +1804,18 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: '500',
+  },
+  debugButton: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    padding: 8,
+    borderRadius: 5,
+    zIndex: 1000,
+  },
+  debugButtonText: {
+    color: 'white',
+    fontSize: 10,
   },
 });

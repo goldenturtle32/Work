@@ -4,6 +4,17 @@ try {
 } catch (error) {
   console.log('Firebase messaging not available, using mock');
   messaging = require('../mock/firebase-messaging').default;
+  
+  // Add AuthorizationStatus enum to the mock if it doesn't exist
+  if (!messaging.AuthorizationStatus) {
+    messaging.AuthorizationStatus = {
+      NOT_DETERMINED: -1,
+      DENIED: 0,
+      AUTHORIZED: 1,
+      PROVISIONAL: 2,
+      EPHEMERAL: 3
+    };
+  }
 }
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -20,13 +31,18 @@ class NotificationService {
   async init() {
     // Request permission for iOS devices
     if (Platform.OS === 'ios') {
-      const authStatus = await messaging().requestPermission();
-      const enabled =
-        authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
-        authStatus === messaging.AuthorizationStatus.PROVISIONAL;
-      
-      if (!enabled) {
-        console.log('Notification permission not granted');
+      try {
+        const authStatus = await messaging().requestPermission();
+        const enabled =
+          authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+          authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+        
+        if (!enabled) {
+          console.log('Notification permission not granted');
+          return false;
+        }
+      } catch (error) {
+        console.error('Error requesting notification permission:', error);
         return false;
       }
     }

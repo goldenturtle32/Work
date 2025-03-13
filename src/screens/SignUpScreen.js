@@ -15,6 +15,7 @@ import { auth, db } from '../firebase';
 import firebase from 'firebase/compat/app';
 import { Ionicons } from '@expo/vector-icons';
 import { doc, setDoc } from 'firebase/firestore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Card component
 const Card = ({ children }) => (
@@ -173,6 +174,14 @@ export default function SignUpScreen({ navigation }) {
 
       console.log('Created user with role:', role);
       console.log('User documents created with email:', email);
+
+      // Clear tutorial flags to ensure new users see the tutorial
+      console.log("[TUTORIAL] New user created, clearing tutorial flags");
+      if (role === 'worker') {
+        await AsyncStorage.removeItem('workerTutorialShown');
+      } else if (role === 'employer') {
+        await AsyncStorage.removeItem('employerTutorialShown');
+      }
 
       navigation.navigate('BasicInfo', { 
         userId: uid,

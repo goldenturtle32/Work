@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, Dimensions, TouchableOpacity, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Modal } from 'react-native';
+import { View, Text, StyleSheet, Dimensions, TouchableOpacity, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Modal, StatusBar } from 'react-native';
 import Swiper from 'react-native-deck-swiper';
 import { db, auth, firebase } from '../firebase';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,6 +21,8 @@ import DotLoader from '../components/Loader';
 import { getFirestore, collection, query, where, getDocs, deleteDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import EmptyStateLoader from '../components/loaders/EmptyStateLoader';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import JobTutorialOverlay from '../components/JobTutorialOverlay';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -802,9 +804,29 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
   },
+  tabBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 10,
+    backgroundColor: '#ffffff',
+  },
+  debugButton: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    padding: 8,
+    borderRadius: 5,
+    zIndex: 1000,
+  },
+  debugButtonText: {
+    color: 'white',
+    fontSize: 10,
+  },
 });
 
-export default function JobHomeScreen({ navigation }) {
+const JobHomeScreen = ({ navigation }) => {
   const [items, setItems] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -817,6 +839,9 @@ export default function JobHomeScreen({ navigation }) {
   const [cardsRemaining, setCardsRemaining] = useState(0);
   const [noMoreCards, setNoMoreCards] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [swipeKey, setSwipeKey] = useState(0);
+  const [swipedWorkerIds, setSwipedWorkerIds] = useState([]);
+  const [showTutorial, setShowTutorial] = useState(false);
 
   let [fontsLoaded] = useFonts({
     LibreBodoni_400Regular,
@@ -852,114 +877,148 @@ export default function JobHomeScreen({ navigation }) {
     return <JobCard item={item} currentUser={currentUser} />;
   };
 
-  useEffect(() => {
-    const fetchUserData = async () => {
-      try {
-        if (!auth.currentUser) return;
+  const fetchUserData = async () => {
+    try {
+      if (!auth.currentUser) return;
+      
+      // Load previously swiped worker IDs from AsyncStorage
+      const storedSwipedIds = await AsyncStorage.getItem('swipedWorkerIds');
+      const previouslySwipedIds = storedSwipedIds ? JSON.parse(storedSwipedIds) : [];
+      setSwipedWorkerIds(previouslySwipedIds);
+      
+      console.log(`[JOB_CARDS] Previously swiped workers: ${previouslySwipedIds.length}`);
+      
+      // Fetch employer document from 'job_attributes'.
+      const employerDoc = await db
+        .collection('job_attributes')
+        .doc(auth.currentUser.uid)
+        .get();
 
-        // Fetch employer document from 'job_attributes'.
-        const employerDoc = await db
-          .collection('job_attributes')
-          .doc(auth.currentUser.uid)
-          .get();
+      if (!employerDoc.exists) {
+        console.error("No employer doc found in 'job_attributes'.");
+        return;
+      }
 
-        if (!employerDoc.exists) {
-          console.error("No employer doc found in 'job_attributes'.");
-          return;
+      const employerDocData = employerDoc.data();
+
+      // Build an in-memory 'selectedJobs' array from our known fields: jobTitle, industry,
+      // jobTypePrefs (which we'll treat as "skills").
+      const employerSelectedJobs = [
+        {
+          title: employerDocData.jobTitle || '',
+          industry: employerDocData.industry || '',
+          skills: Array.isArray(employerDocData.jobTypePrefs)
+            ? employerDocData.jobTypePrefs.map((pref) => ({
+                name: pref || '',
+                yearsOfExperience: 0, 
+              }))
+            : []
         }
+      ];
 
-        const employerDocData = employerDoc.data();
+      const employerData = {
+        selectedJobs: employerSelectedJobs,
+        location: employerDocData.location,
+        availability: employerDocData.availability,
+        locationPreference: employerDocData.locationPreference || 50000,
+        job_overview: employerDocData.job_overview || '',
+      };
 
-        // Build an in-memory 'selectedJobs' array from our known fields: jobTitle, industry,
-        // jobTypePrefs (which we'll treat as "skills").
-        const employerSelectedJobs = [
-          {
-            title: employerDocData.jobTitle || '',
-            industry: employerDocData.industry || '',
-            skills: Array.isArray(employerDocData.jobTypePrefs)
-              ? employerDocData.jobTypePrefs.map((pref) => ({
-                  name: pref || '',
-                  yearsOfExperience: 0, 
-                }))
-              : []
-          }
-        ];
+      setCurrentUser(employerData);
 
-        const employerData = {
-          selectedJobs: employerSelectedJobs,
-          location: employerDocData.location,
-          availability: employerDocData.availability,
-          locationPreference: employerDocData.locationPreference || 50000,
-          job_overview: employerDocData.job_overview || '',
-        };
+      // Next, fetch your workers from 'user_attributes'...
+      const userAttributesRef = db.collection('user_attributes');
+      const allUsersSnapshot = await userAttributesRef.get();
 
-        setCurrentUser(employerData);
+      const candidatePromises = allUsersSnapshot.docs.map(async (docSnapshot) => {
+        const candidateData = docSnapshot.data();
 
-        // Next, fetch your workers from 'user_attributes'...
-        const userAttributesRef = db.collection('user_attributes');
-        const allUsersSnapshot = await userAttributesRef.get();
+        // For the worker, do the same approach.
+        // If they do NOT have selectedJobs, build one from jobTitle/industry/jobTypePrefs:
+        const candidateSelectedJobs = Array.isArray(candidateData.selectedJobs) &&
+          candidateData.selectedJobs.length > 0
+            ? candidateData.selectedJobs
+            : [
+                {
+                  title: candidateData.jobTitle || '',
+                  industry: candidateData.industry || '',
+                  skills: Array.isArray(candidateData.jobTypePrefs)
+                    ? candidateData.jobTypePrefs.map((pref) => ({
+                        name: pref || '',
+                        yearsOfExperience: 0,
+                      }))
+                    : []
+                }
+              ];
 
-        const candidatePromises = allUsersSnapshot.docs.map(async (docSnapshot) => {
-          const candidateData = docSnapshot.data();
-
-          // For the worker, do the same approach.
-          // If they do NOT have selectedJobs, build one from jobTitle/industry/jobTypePrefs:
-          const candidateSelectedJobs = Array.isArray(candidateData.selectedJobs) &&
-            candidateData.selectedJobs.length > 0
-              ? candidateData.selectedJobs
-              : [
-                  {
-                    title: candidateData.jobTitle || '',
-                    industry: candidateData.industry || '',
-                    skills: Array.isArray(candidateData.jobTypePrefs)
-                      ? candidateData.jobTypePrefs.map((pref) => ({
-                          name: pref || '',
-                          yearsOfExperience: 0,
-                        }))
-                      : []
-                  }
-                ];
-
-          const userObj = new User({
-            id: docSnapshot.id,
-            uid: docSnapshot.id,
-            name: candidateData.name,
-            user_overview: candidateData.user_overview,
-            selectedJobs: candidateSelectedJobs,
-            availability: candidateData.availability,
-            location: candidateData.location
-          });
-
-          if (candidateData.location && employerData.location) {
-            userObj.distance = calculateDistance(
-              employerData.location.latitude,
-              employerData.location.longitude,
-              candidateData.location.latitude,
-              candidateData.location.longitude
-            );
-          }
-
-          // Calculate the match score from your backend
-          userObj.matchScore = await calculateMatchScore(employerData, {
-            selectedJobs: userObj.selectedJobs,
-            location: userObj.location,
-            availability: userObj.availability,
-            name: userObj.name,
-          });
-
-          return userObj;
+        const userObj = new User({
+          id: docSnapshot.id,
+          uid: docSnapshot.id,
+          name: candidateData.name,
+          user_overview: candidateData.user_overview,
+          selectedJobs: candidateSelectedJobs,
+          availability: candidateData.availability,
+          location: candidateData.location
         });
 
-        const candidatesData = await Promise.all(candidatePromises);
-        candidatesData.sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));
+        if (candidateData.location && employerData.location) {
+          userObj.distance = calculateDistance(
+            employerData.location.latitude,
+            employerData.location.longitude,
+            candidateData.location.latitude,
+            candidateData.location.longitude
+          );
+        }
 
-        setItems(candidatesData);
-      } catch (error) {
-        console.error('Error fetching user data:', error);
-      }
-    };
+        // Calculate the match score from your backend
+        userObj.matchScore = await calculateMatchScore(employerData, {
+          selectedJobs: userObj.selectedJobs,
+          location: userObj.location,
+          availability: userObj.availability,
+          name: userObj.name,
+        });
 
+        return userObj;
+      });
+
+      const candidatesData = await Promise.all(candidatePromises);
+
+      // Filter out previously swiped workers
+      const filteredCandidates = candidatesData.filter(
+        candidate => !previouslySwipedIds.includes(candidate.uid)
+      );
+      
+      console.log(`[JOB_CARDS] Filtered candidates: ${filteredCandidates.length} of ${candidatesData.length}`);
+      
+      filteredCandidates.sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));
+      
+      setItems(filteredCandidates);
+      setCardsRemaining(filteredCandidates.length);
+      setNoMoreCards(filteredCandidates.length === 0);
+      
+      // Add this line to force Swiper to reset
+      setSwipeKey(prevKey => prevKey + 1);
+      
+      setIsLoading(false);
+    } catch (error) {
+      console.error('Error fetching user data:', error);
+      setError(error.message);
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchUserData();
+    
+    // Add a focus listener to refresh data when screen is focused
+    const unsubscribeFocus = navigation.addListener('focus', () => {
+      console.log('[JOB_HOME] Screen focused, refreshing card data');
+      fetchUserData();
+    });
+    
+    return () => {
+      unsubscribeFocus();
+    };
   }, []);
 
   const handleSwipe = async (cardIndex, interested) => {
@@ -968,6 +1027,13 @@ export default function JobHomeScreen({ navigation }) {
     const itemId = item.uid;
 
     try {
+      // Add worker to swiped list
+      const newSwipedIds = [...swipedWorkerIds, itemId];
+      setSwipedWorkerIds(newSwipedIds);
+      
+      // Store in AsyncStorage
+      await AsyncStorage.setItem('swipedWorkerIds', JSON.stringify(newSwipedIds));
+      
       const userJobPrefData = new UserJobPreference({
         userId: currentUserUid,
         role: 'employer',
@@ -1043,6 +1109,67 @@ export default function JobHomeScreen({ navigation }) {
     setItems([]); 
   };
 
+  const onRefreshPress = () => {
+    console.log('[JOB_CARDS] Refresh button pressed');
+    setIsLoading(true);
+    setNoMoreCards(false);
+    
+    // Clear swiped IDs if you want to see all profiles again
+    AsyncStorage.removeItem('swipedWorkerIds');
+    setSwipedWorkerIds([]);
+    
+    fetchUserData();
+  };
+
+  // Check for first time users
+  useEffect(() => {
+    console.log("[TUTORIAL] JobHomeScreen mounted, checking tutorial status");
+    checkForFirstTimeUser();
+    
+    // Also check when screen comes into focus
+    const unsubscribe = navigation.addListener('focus', () => {
+      console.log("[TUTORIAL] JobHomeScreen focused, checking tutorial status");
+      checkForFirstTimeUser();
+    });
+    
+    return unsubscribe;
+  }, [navigation]);
+  
+  const checkForFirstTimeUser = async () => {
+    try {
+      // Get the tutorial status
+      const tutorialComplete = await AsyncStorage.getItem('jobTutorialComplete');
+      console.log("[TUTORIAL] Tutorial previously completed:", tutorialComplete);
+      
+      if (tutorialComplete !== 'true') {
+        console.log("[TUTORIAL] First time user detected, showing tutorial");
+        setShowTutorial(true);
+      } else {
+        console.log("[TUTORIAL] User has seen tutorial before, not showing");
+      }
+    } catch (error) {
+      console.error('[TUTORIAL] Error checking tutorial status:', error);
+    }
+  };
+  
+  // Force showing tutorial for testing (in dev mode)
+  const forceTutorial = async () => {
+    await AsyncStorage.removeItem('jobTutorialComplete');
+    setShowTutorial(true);
+    console.log("[TUTORIAL] Tutorial forcibly reset and shown");
+  };
+
+  // Handle tutorial completion
+  const handleTutorialComplete = async () => {
+    try {
+      console.log("[TUTORIAL] Tutorial completed, saving status");
+      await AsyncStorage.setItem('jobTutorialComplete', 'true');
+      setShowTutorial(false);
+    } catch (error) {
+      console.error('[TUTORIAL] Error saving tutorial status:', error);
+    }
+  };
+
   if (!fontsLoaded) {
     return <ActivityIndicator style={{ transform: [{ scale: 1.4 }] }} />;
   }
@@ -1081,12 +1208,7 @@ export default function JobHomeScreen({ navigation }) {
         <Text style={styles.emptyStateSubText}>Check back later for new matches</Text>
         <TouchableOpacity 
           style={styles.refreshButton}
-          onPress={() => {
-            console.log('[JOB_CARDS] Refresh button pressed');
-            setIsLoading(true);
-            setNoMoreCards(false);
-            fetchUserData();
-          }}
+          onPress={onRefreshPress}
         >
           <Text style={styles.refreshButtonText}>Refresh</Text>
         </TouchableOpacity>
@@ -1096,114 +1218,140 @@ export default function JobHomeScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-      {isLoading ? (
-        <View style={styles.loaderContainer}>
-          <ActivityIndicator 
-            color="#0000ff" 
-            style={{ transform: [{ scale: 1.4 }] }}
-          />
-          <Text style={styles.loadingText}>Loading...</Text>
-        </View>
-      ) : error ? (
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={() => {
-            setIsLoading(true);
-            setError(null);
-          }}>
-            <Text style={styles.retryButtonText}>Retry</Text>
-          </TouchableOpacity>
-        </View>
-      ) : !items.length || noMoreCards ? (
-        <View style={styles.noItemsContainer}>
-          <EmptyStateLoader />
-          <Text style={styles.emptyStateText}>No more profiles to show</Text>
-          <Text style={styles.emptyStateSubText}>Check back later for new matches</Text>
-          <TouchableOpacity 
-            style={styles.refreshButton}
-            onPress={() => {
-              console.log('[JOB_CARDS] Refresh button pressed');
-              setIsLoading(true);
-              setNoMoreCards(false);
-              fetchUserData();
-            }}
-          >
-            <Text style={styles.refreshButtonText}>Refresh</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <Swiper
-          ref={swiperRef}
-          cards={items}
-          renderCard={renderCard}
-          onSwipedLeft={onSwipedLeft}
-          onSwipedRight={onSwipedRight}
-          onSwipedAll={onSwipedAll}
-          cardIndex={0}
-          backgroundColor={'#f1f5f9'}
-          stackSize={3}
-          cardVerticalMargin={20}
-          cardHorizontalMargin={10}
-          animateOverlayLabelsOpacity
-          animateCardOpacity
-          disableTopSwipe
-          disableBottomSwipe
-          overlayLabels={{
-            left: {
-              title: 'NOPE',
-              style: {
-                label: {
-                  backgroundColor: '#ff0000',
-                  color: '#ffffff',
-                  fontSize: 24
-                },
-                wrapper: {
-                  flexDirection: 'column',
-                  alignItems: 'flex-end',
-                  justifyContent: 'flex-start',
-                  marginTop: 20,
-                  marginLeft: -20
-                }
-              }
-            },
-            right: {
-              title: 'LIKE',
-              style: {
-                label: {
-                  backgroundColor: '#00ff00',
-                  color: '#ffffff',
-                  fontSize: 24
-                },
-                wrapper: {
-                  flexDirection: 'column',
-                  alignItems: 'flex-start',
-                  justifyContent: 'flex-start',
-                  marginTop: 20,
-                  marginLeft: 20
-                }
-              }
-            }
-          }}
-        />
-      )}
+      <StatusBar style="light" />
       
-      {/* Match Modal */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={showMatchModal}
-        onRequestClose={() => setShowMatchModal(false)}
-      >
-        <NewMatchModal 
+      <View style={{ flex: 1 }}>
+        {isLoading ? (
+          <View style={styles.loaderContainer}>
+            <ActivityIndicator 
+              color="#0000ff" 
+              style={{ transform: [{ scale: 1.4 }] }}
+            />
+            <Text style={styles.loadingText}>Loading...</Text>
+          </View>
+        ) : error ? (
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>{error}</Text>
+            <TouchableOpacity style={styles.retryButton} onPress={() => {
+              setIsLoading(true);
+              setError(null);
+            }}>
+              <Text style={styles.retryButtonText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        ) : !items.length || noMoreCards ? (
+          <View style={styles.noItemsContainer}>
+            <EmptyStateLoader />
+            <Text style={styles.emptyStateText}>No more profiles to show</Text>
+            <Text style={styles.emptyStateSubText}>Check back later for new matches</Text>
+            <TouchableOpacity 
+              style={styles.refreshButton}
+              onPress={onRefreshPress}
+            >
+              <Text style={styles.refreshButtonText}>Refresh</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <Swiper
+            key={`job-swiper-${swipeKey}`}
+            ref={swiperRef}
+            cards={items}
+            renderCard={renderCard}
+            onSwiped={(cardIndex) => {
+              const newRemaining = items.length - (cardIndex + 1);
+              setCardsRemaining(newRemaining);
+              
+              if (newRemaining === 0) {
+                setNoMoreCards(true);
+              }
+            }}
+            onSwipedLeft={onSwipedLeft}
+            onSwipedRight={onSwipedRight}
+            onSwipedAll={onSwipedAll}
+            cardIndex={0}
+            backgroundColor={'#f1f5f9'}
+            stackSize={3}
+            cardVerticalMargin={20}
+            cardHorizontalMargin={10}
+            animateOverlayLabelsOpacity
+            animateCardOpacity
+            disableTopSwipe
+            disableBottomSwipe
+            overlayLabels={{
+              left: {
+                title: 'NOPE',
+                style: {
+                  label: {
+                    backgroundColor: '#ff0000',
+                    color: '#ffffff',
+                    fontSize: 24
+                  },
+                  wrapper: {
+                    flexDirection: 'column',
+                    alignItems: 'flex-end',
+                    justifyContent: 'flex-start',
+                    marginTop: 20,
+                    marginLeft: -20
+                  }
+                }
+              },
+              right: {
+                title: 'LIKE',
+                style: {
+                  label: {
+                    backgroundColor: '#00ff00',
+                    color: '#ffffff',
+                    fontSize: 24
+                  },
+                  wrapper: {
+                    flexDirection: 'column',
+                    alignItems: 'flex-start',
+                    justifyContent: 'flex-start',
+                    marginTop: 20,
+                    marginLeft: 20
+                  }
+                }
+              }
+            }}
+          />
+        )}
+        
+        <Modal
+          animationType="slide"
+          transparent={true}
           visible={showMatchModal}
-          onClose={() => {
-            setShowMatchModal(false);
-            setMatchData(null);
-          }}
-          jobData={matchedJob}
-          matchData={matchData}
-        />
-      </Modal>
+          onRequestClose={() => setShowMatchModal(false)}
+        >
+          <NewMatchModal 
+            visible={showMatchModal}
+            onClose={() => {
+              setShowMatchModal(false);
+              setMatchData(null);
+            }}
+            jobData={matchedJob}
+            matchData={matchData}
+          />
+        </Modal>
+        
+        {showTutorial && (
+          <JobTutorialOverlay onComplete={handleTutorialComplete} />
+        )}
+        
+        {__DEV__ && (
+          <TouchableOpacity 
+            style={styles.debugButton} 
+            onPress={forceTutorial}
+          >
+            <Text style={styles.debugButtonText}>Show Tutorial</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+      
+      <View style={styles.tabBar}>
+        {/* ... tab buttons ... */}
+      </View>
     </View>
   );
-} 
+};
+
+export default JobHomeScreen; 
