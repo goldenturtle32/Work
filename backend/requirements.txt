@@ -1,0 +1,10 @@
+flask
+flask-cors
+openai
+python-dotenv
+pytrends
+pandas
+serpapi
+spacy
+googlemaps
+firebase-admin 

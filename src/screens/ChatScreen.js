@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import {
   TouchableWithoutFeedback,
   DatePickerIOS,
   Clipboard,
+  ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePickerModal from "react-native-modal-datetime-picker";
@@ -35,8 +36,129 @@ import { formatPhoneNumber } from '../utils/phoneFormatter';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Calendar from 'expo-calendar';
 
+// Add the same getBackendUrl function from UserOverviewScreen.js
+const getBackendUrl = () => {
+  if (Platform.OS === 'android') {
+    return 'http://10.0.2.2:5000';  // Android Emulator
+  } else if (Platform.OS === 'ios') {
+    if (Platform.isPad || Platform.isTV) {
+      return 'http://localhost:5000';  // iOS Simulator
+    } else {
+      // For physical iOS devices, use your computer's local IP address
+      return 'http://192.168.0.100:5000';  // Your computer's actual IP
+    }
+  }
+  return 'http://localhost:5000';  // Default fallback
+};
 
-const BACKEND_URL = 'http://127.0.0.1:5000';
+const BACKEND_URL = getBackendUrl();
+
+// Add this console log to help debug
+console.log('Chat using BACKEND_URL:', BACKEND_URL);
+
+// Add this function after your imports but before the component
+const createCalendarEvent = async (interviewDetails) => {
+  try {
+    // Check for calendar permissions first
+    const { status } = await Calendar.requestCalendarPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission Required', 'Calendar access is needed to add this interview to your calendar');
+      return false;
+    }
+    
+    // Get default calendar
+    const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+    const defaultCalendar = calendars.find(
+      (cal) => cal.isPrimary && cal.allowsModifications
+    ) || calendars[0];
+    
+    if (!defaultCalendar) {
+      Alert.alert('Error', 'No available calendar found on your device');
+      return false;
+    }
+    
+    // Parse the interview time slot
+    const timeSlot = interviewDetails.timeSlots[0]; // Use the first time slot
+    if (!timeSlot) {
+      Alert.alert('Error', 'No time slot information found for this interview');
+      return false;
+    }
+    
+    const dateStr = timeSlot.date;
+    const startTimeStr = timeSlot.startTime;
+    const endTimeStr = timeSlot.endTime || timeSlot.startTime; // Fallback if no end time
+    
+    // Parse date and times
+    const [year, month, day] = dateStr.split('-').map(num => parseInt(num, 10));
+    
+    // Parse start time
+    let startHour = 9, startMinute = 0;
+    const startTimeParts = startTimeStr.match(/(\d+):(\d+)\s*([AP]M)?/i);
+    if (startTimeParts) {
+      startHour = parseInt(startTimeParts[1], 10);
+      startMinute = parseInt(startTimeParts[2], 10);
+      // Handle PM
+      if (startTimeParts[3] && startTimeParts[3].toUpperCase() === 'PM' && startHour < 12) {
+        startHour += 12;
+      }
+      // Handle 12 AM
+      if (startTimeParts[3] && startTimeParts[3].toUpperCase() === 'AM' && startHour === 12) {
+        startHour = 0;
+      }
+    }
+    
+    // Parse end time
+    let endHour = startHour + 1, endMinute = startMinute;
+    const endTimeParts = endTimeStr.match(/(\d+):(\d+)\s*([AP]M)?/i);
+    if (endTimeParts) {
+      endHour = parseInt(endTimeParts[1], 10);
+      endMinute = parseInt(endTimeParts[2], 10);
+      // Handle PM
+      if (endTimeParts[3] && endTimeParts[3].toUpperCase() === 'PM' && endHour < 12) {
+        endHour += 12;
+      }
+      // Handle 12 AM
+      if (endTimeParts[3] && endTimeParts[3].toUpperCase() === 'AM' && endHour === 12) {
+        endHour = 0;
+      }
+    }
+    
+    // Create start and end dates
+    const startDate = new Date(year, month - 1, day, startHour, startMinute);
+    const endDate = new Date(year, month - 1, day, endHour, endMinute);
+    
+    // Ensure dates are valid
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+      Alert.alert('Error', 'Invalid date or time format');
+      return false;
+    }
+    
+    // Get event title and description
+    const title = `Interview for ${interviewDetails.jobTitle || 'Position'}`;
+    const notes = `Job interview with ${interviewDetails.company || 'Employer'}`;
+    
+    // Create the event
+    const eventId = await Calendar.createEventAsync(defaultCalendar.id, {
+      title,
+      startDate,
+      endDate,
+      notes,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      alarms: [{ relativeOffset: -60 }] // 1 hour reminder
+    });
+    
+    if (eventId) {
+      Alert.alert('Success', 'Interview added to your calendar!');
+      return true;
+    } else {
+      throw new Error('Failed to create calendar event');
+    }
+  } catch (error) {
+    console.error('Error adding to calendar:', error);
+    Alert.alert('Error', 'Failed to add interview to calendar: ' + error.message);
+    return false;
+  }
+};
 
 export default function ChatScreen({ route, navigation }) {
   const { matchId, role, jobTitle, company } = route.params;
@@ -106,7 +228,8 @@ export default function ChatScreen({ route, navigation }) {
   const [jobDescription, setJobDescription] = useState('');
 
   const isEmployer = role === 'employer';
-  const otherUserId = matchId?.split('_')[isEmployer ? 1 : 0];
+  // Corrected to account for matchId format: workerId_employerId
+  const otherUserId = matchId?.split('_')[isEmployer ? 0 : 1];
 
   // Add a debug function
   const addDebugMessage = (message) => {
@@ -141,8 +264,28 @@ export default function ChatScreen({ route, navigation }) {
     return () => unsubscribe();
   }, [matchId]);
 
+  // Replace the useEffect that depends on messages with one that depends on role
+  // This ensures we get the correct suggestions based on role when the component mounts
   useEffect(() => {
-    generateSuggestions();
+    // Only generate suggestions when role is definitely available
+    if (role) {
+      console.log(`Initializing suggestions with role: ${role}`);
+      // Set initial suggestions based on role while API call is in progress
+      setSuggestions(getStaticSuggestions());
+      // Then fetch from API
+      generateSuggestions();
+    }
+  }, [role]); // Only depend on role, not messages
+
+  // Add a separate useEffect for message updates, but with a delay
+  useEffect(() => {
+    if (messages.length > 0) {
+      // Use a debounce to avoid too many API calls
+      const timer = setTimeout(() => {
+        generateSuggestions();
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
   }, [messages]);
 
   useEffect(() => {
@@ -152,27 +295,62 @@ export default function ChatScreen({ route, navigation }) {
       setIsLoading(true);
       try {
         const currentUserId = auth.currentUser.uid;
-        let query;
+        let pendingQuery, acceptedQuery;
         
         if (role === 'worker') {
-          query = db.collection('interviews')
+          pendingQuery = db.collection('interviews')
             .where('workerId', '==', currentUserId)
             .where('status', '==', 'pending');
+            
+          acceptedQuery = db.collection('interviews')
+            .where('workerId', '==', currentUserId)
+            .where('status', '==', 'accepted');
         } else {
-          query = db.collection('interviews')
+          pendingQuery = db.collection('interviews')
             .where('matchId', '==', matchId)
             .where('status', '==', 'pending');
+            
+          acceptedQuery = db.collection('interviews')
+            .where('matchId', '==', matchId)
+            .where('status', '==', 'accepted');
         }
         
-        const snapshot = await query.get();
-        console.log(`Found ${snapshot.docs.length} pending interviews`);
+        // Get both pending and accepted interviews
+        const pendingSnapshot = await pendingQuery.get();
+        const acceptedSnapshot = await acceptedQuery.get();
         
-        if (snapshot.docs.length > 0) {
-          const interviews = snapshot.docs.map(doc => ({
+        console.log(`Found ${pendingSnapshot.docs.length} pending interviews`);
+        console.log(`Found ${acceptedSnapshot.docs.length} accepted interviews`);
+        
+        // Combine both results
+        const allInterviews = [
+          ...pendingSnapshot.docs.map(doc => ({
             id: doc.id,
             ...doc.data()
-          }));
-          setPendingInterview(interviews[0]);
+          })),
+          ...acceptedSnapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }))
+        ];
+        
+        if (allInterviews.length > 0) {
+          // Filter out interviews that have already passed
+          const activeInterviews = allInterviews.filter(interview => !isInterviewCompleted(interview));
+          
+          if (activeInterviews.length > 0) {
+            console.log(`Found ${activeInterviews.length} active interviews`);
+            // Sort by status - show pending first, then accepted
+            activeInterviews.sort((a, b) => {
+              if (a.status === 'pending' && b.status !== 'pending') return -1;
+              if (a.status !== 'pending' && b.status === 'pending') return 1;
+              return 0;
+            });
+            setPendingInterview(activeInterviews[0]);
+          } else {
+            console.log('All interviews have passed');
+            setPendingInterview(null);
+          }
         }
       } catch (error) {
         console.error('Error fetching interviews:', error);
@@ -188,63 +366,113 @@ export default function ChatScreen({ route, navigation }) {
     // Only set up listeners when component mounts, not on every render
     console.log('Setting up interview listeners');
     
-    let interviewQuery;
-    const currentUserId = auth.currentUser.uid;
+    let unsubscribeInterviews = () => {};
     
-    if (role === 'worker') {
-      // For workers - look for interviews where they are the worker
-      interviewQuery = db.collection('interviews')
-        .where('workerId', '==', currentUserId)
-        .where('status', '==', 'pending');
-      console.log(`Setting up worker interview listener for workerId: ${currentUserId}`);
-    } else {
-      // For employers - look for interviews in this match
-      interviewQuery = db.collection('interviews')
-        .where('matchId', '==', matchId)
-        .where('status', '==', 'pending');
-      console.log(`Setting up employer interview listener for matchId: ${matchId}`);
-    }
-    
-    // Set up the listener
-    const unsubscribeInterviews = interviewQuery.onSnapshot(snapshot => {
-      console.log(`Interview listener received ${snapshot.docs.length} interviews`);
+    try {
+      let interviewQuery;
+      const currentUserId = auth.currentUser.uid;
       
-      if (snapshot.docs.length > 0) {
-        // Get the most recent interview
-        const interviews = snapshot.docs
-          .map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }))
-          .sort((a, b) => {
-            // Sort by creation time descending (newest first)
-            const aTime = a.createdAt?.seconds || 0;
-            const bTime = b.createdAt?.seconds || 0;
-            return bTime - aTime;
-          });
-        
-        const mostRecentInterview = interviews[0];
-        console.log('Found most recent interview:', JSON.stringify(mostRecentInterview));
-        
-        // Check if this is a new interview (different from current state)
-        if (!pendingInterview || pendingInterview.id !== mostRecentInterview.id) {
-          console.log('Setting new pending interview state');
-          setPendingInterview(mostRecentInterview);
-        }
+      if (role === 'worker') {
+        // For workers - look for interviews where they are the worker
+        interviewQuery = db.collection('interviews')
+          .where('workerId', '==', currentUserId)
+          .where('status', '==', 'pending')
+          .limit(5); // Limit to avoid large datasets
+        console.log(`Setting up worker interview listener for workerId: ${currentUserId}`);
       } else {
-        console.log('No pending interviews found, clearing state');
-        setPendingInterview(null);
+        // For employers - look for interviews in this match
+        interviewQuery = db.collection('interviews')
+          .where('matchId', '==', matchId)
+          .where('status', '==', 'pending')
+          .limit(5); // Limit to avoid large datasets
+        console.log(`Setting up employer interview listener for matchId: ${matchId}`);
       }
-    }, error => {
-      console.error('Error in interview listener:', error);
-    });
+      
+      // Set up the listener with error handling
+      unsubscribeInterviews = interviewQuery.onSnapshot(snapshot => {
+        console.log(`Interview listener received ${snapshot.docs.length} interviews`);
+        
+        if (snapshot.docs.length > 0) {
+          // Get the most recent interview
+          const interviews = snapshot.docs
+            .map(doc => ({
+              id: doc.id,
+              ...doc.data()
+            }))
+            .sort((a, b) => {
+              // Sort by creation time descending (newest first)
+              const aTime = a.createdAt?.seconds || 0;
+              const bTime = b.createdAt?.seconds || 0;
+              return bTime - aTime;
+            });
+          
+          const mostRecentInterview = interviews[0];
+          console.log('Found most recent interview:', JSON.stringify(mostRecentInterview));
+          
+          // Check if this is a new interview (different from current state)
+          if (!pendingInterview || pendingInterview.id !== mostRecentInterview.id) {
+            console.log('Setting new pending interview state');
+            setPendingInterview(mostRecentInterview);
+          }
+        } else {
+          console.log('No pending interviews found, clearing state');
+          setPendingInterview(null);
+        }
+      }, error => {
+        console.error('Error in interview listener:', error);
+        // Handle the error gracefully - don't crash the UI
+        if (error.code === 'failed-precondition') {
+          console.log('Missing index error - using alternative query approach');
+          // Try a simpler query as fallback
+          const simpleQuery = db.collection('interviews')
+            .where('status', '==', 'pending')
+            .limit(10);
+            
+          unsubscribeInterviews(); // Clean up the previous listener
+          
+          unsubscribeInterviews = simpleQuery.onSnapshot(snapshot => {
+            // Filter the results client-side
+            const relevantInterviews = snapshot.docs
+              .map(doc => ({
+                id: doc.id,
+                ...doc.data()
+              }))
+              .filter(interview => {
+                if (role === 'worker') {
+                  return interview.workerId === currentUserId;
+                } else {
+                  return interview.matchId === matchId;
+                }
+              })
+              .sort((a, b) => {
+                const aTime = a.createdAt?.seconds || 0;
+                const bTime = b.createdAt?.seconds || 0;
+                return bTime - aTime;
+              });
+            
+            if (relevantInterviews.length > 0) {
+              setPendingInterview(relevantInterviews[0]);
+            } else {
+              setPendingInterview(null);
+            }
+          }, secondError => {
+            console.error('Error in fallback interview listener:', secondError);
+            // Give up and just not show interview data
+          });
+        }
+      });
+    } catch (setupError) {
+      console.error('Error setting up interview listener:', setupError);
+    }
     
     // Clean up listener on unmount
     return () => {
       console.log('Cleaning up interview listener');
-      unsubscribeInterviews();
+      if (typeof unsubscribeInterviews === 'function') {
+        unsubscribeInterviews();
+      }
     };
-  }, [matchId, role]); // Only re-run if matchId or role changes
+  }, [matchId, role]);
 
   useEffect(() => {
     if (!isEmployer && matchId) {
@@ -261,58 +489,113 @@ export default function ChatScreen({ route, navigation }) {
     }
   }, [matchId, isEmployer]);
 
-  // Modify the generateSuggestions function to work without NetInfo
+  // Add this function to fetch worker job data
+  const fetchWorkerJobData = async (workerId) => {
+    console.log('Fetching worker job data for:', workerId);
+    try {
+      const workerDoc = await db.collection('user_attributes')
+        .where('uid', '==', workerId)
+        .limit(1)
+        .get();
+      
+      if (workerDoc.empty) {
+        console.log('No worker document found');
+        return null;
+      }
+      
+      const workerData = workerDoc.docs[0].data();
+      const selectedJobs = workerData.selectedJobs || [];
+      console.log(`Found ${selectedJobs.length} jobs for worker`);
+      
+      return selectedJobs;
+    } catch (error) {
+      console.error('Error fetching worker job data:', error);
+      return null;
+    }
+  };
+
+  // Update the generateSuggestions function to use the correct endpoint
   const generateSuggestions = async () => {
     console.log('Generating suggestions...');
+    console.log(`Current role: ${role}`); // Log the current role
     setIsRefreshing(true);
     
     try {
-      // Skip network check since NetInfo is not available
-      // Just try the fetch directly with error handling
+      // Get backend URL (same as your working components)
+      const backendUrl = getBackendUrl();
       
-      // Try to fetch suggestions from API with a timeout
+      // Create the base payload
+      const payload = {
+        role: role, // Use the role from route.params
+        jobTitle: jobTitle || 'position', // Use the jobTitle from route.params with fallback
+        company: company || 'company', // Use the company from route.params with fallback
+        recentMessages: messages.slice(0, 10).map(msg => msg.text)
+      };
+      
+      // If we're an employer, fetch and add worker job data
+      if (role === 'employer' && otherUserId) {
+        console.log('Employer role detected, fetching worker data for:', otherUserId);
+        const workerJobs = await fetchWorkerJobData(otherUserId);
+        
+        if (workerJobs && workerJobs.length > 0) {
+          payload.workerJobs = workerJobs;
+          console.log('Added worker jobs to payload:', workerJobs.length);
+        } else {
+          console.log('No worker jobs found');
+        }
+      }
+      
+      console.log(`Requesting suggestions with payload:`, JSON.stringify(payload));
+      console.log(`Using endpoint: ${backendUrl}/generate-chat-suggestions`);
+      
+      // Create a timeout to abort the fetch if it takes too long
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
       
       try {
-        const response = await fetch('https://YOUR_API_URL/suggestions', {
+        const response = await fetch(`${backendUrl}/generate-chat-suggestions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            matchId: matchId,
-            role: role,
-            messages: messages.map(msg => ({
-              text: msg.text,
-              sender: msg.sender
-            })).slice(-10) // Send last 10 messages for context
-          }),
+          body: JSON.stringify(payload),
           signal: controller.signal
         });
         
         clearTimeout(timeoutId);
         
         if (!response.ok) {
-          throw new Error(`API returned status ${response.status}`);
+          // Try to get more detailed error information
+          try {
+            const errorData = await response.json();
+            console.error('Error response from server:', errorData);
+            throw new Error(`Server error (${response.status}): ${errorData.error || 'Unknown error'}`);
+          } catch (jsonError) {
+            // If we can't parse the error as JSON, just use the status
+            throw new Error(`Server responded with ${response.status}`);
+          }
         }
         
         const data = await response.json();
-        console.log('Suggestions received:', data);
-        setSuggestions(data.suggestions || []);
+        console.log('Received suggestions:', data);
+        
+        if (data.suggestions && data.suggestions.length > 0) {
+          setSuggestions(data.suggestions);
+        } else {
+          console.log('No suggestions in response, using static suggestions');
+          setSuggestions(getStaticSuggestions());
+        }
       } catch (fetchError) {
         console.error('Fetch error:', fetchError);
-        throw fetchError; // Re-throw to be caught by outer catch
+        // If fetch failed, use static suggestions
+        console.log('Using static suggestions due to fetch error');
+        setSuggestions(getStaticSuggestions());
+      } finally {
+        clearTimeout(timeoutId);
       }
     } catch (error) {
-      console.error('Error getting suggestions:', error);
-      // Use fallback suggestions
-      setSuggestions([
-        "What experience do you have in this field?",
-        "Could you tell me about your availability?",
-        "What are your salary expectations?",
-        "Do you have any questions about the role?"
-      ]);
+      console.error('Error in generateSuggestions:', error);
+      setSuggestions(getStaticSuggestions());
     } finally {
       setIsRefreshing(false);
     }
@@ -334,6 +617,14 @@ export default function ChatScreen({ route, navigation }) {
         "Tell me about your biggest professional achievement"
       ];
     }
+  };
+
+  // Fix the refresh suggestions function
+  const handleRefreshSuggestions = () => {
+    console.log('Manually refreshing suggestions');
+    // Use static suggestions since API isn't working
+    setSuggestions(getStaticSuggestions());
+    setIsRefreshing(false);
   };
 
   const sendSuggestion = (suggestionText) => {
@@ -515,8 +806,8 @@ export default function ChatScreen({ route, navigation }) {
       return null;
     }
     
-    // The workerId is the ID that is NOT the employerId
-    const workerId = parts[0] === employerId ? parts[1] : parts[0];
+    // The workerId is always the first part in workerId_employerId format
+    const workerId = parts[0];
     console.log('Extracted workerId:', workerId);
     return workerId;
   };
@@ -1014,39 +1305,46 @@ export default function ChatScreen({ route, navigation }) {
   // Helper function to complete the interview acceptance process
   const completeInterviewAcceptance = async (interviewId, phoneNumber) => {
     try {
-      // Update interview status
+      // Get the selected time slot
+      const selectedSlot = selectedTimeSlot;
+      if (!selectedSlot) {
+        Alert.alert('Error', 'Please select a time slot');
+        return;
+      }
+      
+      // Update the interview in Firestore
       await db.collection('interviews').doc(interviewId).update({
         status: 'accepted',
-        acceptedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        workerPhone: phoneNumber
+        selectedTimeSlot: selectedSlot,
+        phoneNumber: phoneNumber,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        addedToCalendar: false // Initialize the flag to false
       });
       
-      // Get interview data for the notification
-      const interviewDoc = await db.collection('interviews').doc(interviewId).get();
-      const interviewData = interviewDoc.data();
-      
-      // Add a system message to the chat
+      // Add a message to the chat
       await db.collection('chats')
-        .doc(interviewData.matchId)
+        .doc(matchId)
         .collection('messages')
         .add({
-          text: `Interview accepted for ${interviewData.timeSlots[0].date} at ${interviewData.timeSlots[0].startTime}. Worker's phone: ${phoneNumber}`,
-          sender: 'system',
-          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-          isNotification: true
+          text: `I've accepted the interview for ${selectedSlot.date} from ${selectedSlot.startTime} to ${selectedSlot.endTime}.`,
+          sender: role,
+          timestamp: firebase.firestore.FieldValue.serverTimestamp()
         });
       
-      // Update local state
-      setPendingInterview({
-        ...interviewData,
-        id: interviewId,
-        status: 'accepted'
-      });
+      // Close the modal and reset state
+      setShowPhoneNumberModal(false);
+      setSelectedTimeSlot(null);
+      setPhoneNumberForInterview('');
+      setSelectedInterviewId(null);
       
-      Alert.alert('Success', 'Interview accepted. The employer has been notified.');
+      // Refresh interviews to update the UI
+      refreshInterviews();
+      
+      // Show success message
+      Alert.alert('Success', 'Interview accepted!');
     } catch (error) {
-      console.error('Error completing interview acceptance:', error);
-      Alert.alert('Error', 'Failed to complete interview acceptance: ' + error.message);
+      console.error('Error accepting interview:', error);
+      Alert.alert('Error', 'Failed to accept interview. Please try again.');
     }
   };
 
@@ -1418,7 +1716,7 @@ export default function ChatScreen({ route, navigation }) {
               </>
             )}
             
-            {pendingInterview.status === 'accepted' && (
+            {pendingInterview.status === 'accepted' && !pendingInterview.addedToCalendar && (
               <TouchableOpacity
                 style={[styles.interviewButton, styles.calendarButton]}
                 onPress={() => addToCalendar(pendingInterview)}
@@ -2010,7 +2308,15 @@ export default function ChatScreen({ route, navigation }) {
   // Update the render section of your component to handle this banner display
   // Add this where you want the banner to appear (just once)
   const renderInterviewBanner = () => {
-    if (!shouldRenderBanner || !pendingInterview) return null;
+    // Don't render the banner if it shouldn't be rendered, there's no pending interview,
+    // if the interview time has passed, or if there are no time slots
+    if (!shouldRenderBanner || 
+        !pendingInterview || 
+        isInterviewCompleted(pendingInterview) ||
+        !pendingInterview.timeSlots || 
+        pendingInterview.timeSlots.length === 0) {
+      return null;
+    }
     
     return (
       <View style={styles.interviewContainer}>
@@ -2022,24 +2328,18 @@ export default function ChatScreen({ route, navigation }) {
               color={pendingInterview.status === 'pending' ? "#1e3a8a" : "#10b981"} 
             />
             <View style={styles.interviewBannerTextContainer}>
-              {pendingInterview.timeSlots && pendingInterview.timeSlots.length > 0 ? (
-                <View>
-                  <Text style={styles.interviewBannerTitle}>
-                    {pendingInterview.status === 'pending' 
-                      ? 'Interview Request:' 
-                      : 'Scheduled Interview:'}
-                  </Text>
-                  {pendingInterview.timeSlots.map((slot, index) => (
-                    <Text key={index} style={styles.interviewBannerDetails}>
-                      {slot.date} from {slot.startTime} to {slot.endTime}
-                    </Text>
-                  ))}
-                </View>
-              ) : (
-                <Text style={styles.interviewBannerDetails}>
-                  Interview details not available
+              <View>
+                <Text style={styles.interviewBannerTitle}>
+                  {pendingInterview.status === 'pending' 
+                    ? 'Interview Request:' 
+                    : 'Scheduled Interview:'}
                 </Text>
-              )}
+                {pendingInterview.timeSlots.map((slot, index) => (
+                  <Text key={index} style={styles.interviewBannerDetails}>
+                    {slot.date} from {slot.startTime} to {slot.endTime}
+                  </Text>
+                ))}
+              </View>
             </View>
           </View>
           
@@ -2063,7 +2363,7 @@ export default function ChatScreen({ route, navigation }) {
               </>
             )}
             
-            {pendingInterview.status === 'accepted' && (
+            {pendingInterview.status === 'accepted' && !pendingInterview.addedToCalendar && (
               <TouchableOpacity
                 style={[styles.interviewButton, styles.calendarButton]}
                 onPress={() => addToCalendar(pendingInterview)}
@@ -2081,6 +2381,17 @@ export default function ChatScreen({ route, navigation }) {
     try {
       const eventId = await createCalendarEvent(interview);
       if (eventId) {
+        // Update the interview in Firestore to mark it as added to calendar
+        await db.collection('interviews').doc(interview.id).update({
+          addedToCalendar: true
+        });
+        
+        // Update the local state to reflect this change
+        setPendingInterview({
+          ...pendingInterview,
+          addedToCalendar: true
+        });
+        
         Alert.alert('Success', 'Interview added to your calendar');
       } else {
         Alert.alert('Error', 'Failed to add interview to calendar');
@@ -2208,27 +2519,62 @@ export default function ChatScreen({ route, navigation }) {
     setIsLoading(true);
     try {
       const currentUserId = auth.currentUser.uid;
-      let query;
+      let pendingQuery, acceptedQuery;
       
       if (role === 'worker') {
-        query = db.collection('interviews')
+        pendingQuery = db.collection('interviews')
           .where('workerId', '==', currentUserId)
           .where('status', '==', 'pending');
+          
+        acceptedQuery = db.collection('interviews')
+          .where('workerId', '==', currentUserId)
+          .where('status', '==', 'accepted');
       } else {
-        query = db.collection('interviews')
+        pendingQuery = db.collection('interviews')
           .where('matchId', '==', matchId)
           .where('status', '==', 'pending');
+          
+        acceptedQuery = db.collection('interviews')
+          .where('matchId', '==', matchId)
+          .where('status', '==', 'accepted');
       }
       
-      const snapshot = await query.get();
-      console.log(`Refresh found ${snapshot.docs.length} pending interviews`);
+      // Get both pending and accepted interviews
+      const pendingSnapshot = await pendingQuery.get();
+      const acceptedSnapshot = await acceptedQuery.get();
       
-      if (snapshot.docs.length > 0) {
-        const interviews = snapshot.docs.map(doc => ({
+      console.log(`Refresh found ${pendingSnapshot.docs.length} pending interviews`);
+      console.log(`Refresh found ${acceptedSnapshot.docs.length} accepted interviews`);
+      
+      // Combine both results
+      const allInterviews = [
+        ...pendingSnapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data()
-        }));
-        setPendingInterview(interviews[0]);
+        })),
+        ...acceptedSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }))
+      ];
+      
+      if (allInterviews.length > 0) {
+        // Filter out interviews that have already passed
+        const activeInterviews = allInterviews.filter(interview => !isInterviewCompleted(interview));
+        
+        if (activeInterviews.length > 0) {
+          console.log(`Found ${activeInterviews.length} active interviews after refresh`);
+          // Sort by status - show pending first, then accepted
+          activeInterviews.sort((a, b) => {
+            if (a.status === 'pending' && b.status !== 'pending') return -1;
+            if (a.status !== 'pending' && b.status === 'pending') return 1;
+            return 0;
+          });
+          setPendingInterview(activeInterviews[0]);
+        } else {
+          console.log('All interviews have passed');
+          setPendingInterview(null);
+        }
       } else {
         setPendingInterview(null);
       }
@@ -2635,6 +2981,127 @@ export default function ChatScreen({ route, navigation }) {
     );
   };
 
+  const handleSendMessage = async (messageText) => {
+    try {
+      // Create a new message
+      const newMessage = {
+        id: Date.now().toString(),
+        text: messageText,
+        timestamp: new Date().toISOString(),
+        user: currentUser.uid,
+        role: 'user',
+      };
+
+      // Add to messages state immediately for UI responsiveness
+      setMessages(prevMessages => [...prevMessages, newMessage]);
+      
+      console.log(`Sending message to backend: ${messageText}`);
+      console.log(`Using endpoint: ${BACKEND_URL}/get-suggestions`);
+      
+      // Add a test request first to check connectivity
+      try {
+        console.log('Testing backend connection...');
+        const testResponse = await fetch(`${BACKEND_URL}/test-backend`, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json'
+          },
+          timeout: 5000
+        });
+        const testData = await testResponse.json();
+        console.log('Backend test response:', testData);
+      } catch (testError) {
+        console.error('Backend test failed:', testError);
+        // Continue with the main request even if the test fails
+      }
+
+      // Make the main request with a timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+      try {
+        const response = await fetch(`${BACKEND_URL}/get-suggestions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({
+            message: messageText,
+            userId: currentUser.uid,
+            // Add any other data needed by the backend
+          }),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        console.log('Received response from backend:', data);
+        
+        if (data.success) {
+          // Create and add the bot response
+          const botResponse = {
+            id: Date.now().toString() + '-response',
+            text: data.response || "I received your message!",
+            timestamp: new Date().toISOString(),
+            user: 'system',
+            role: 'assistant',
+          };
+          
+          setMessages(prevMessages => [...prevMessages, botResponse]);
+        } else {
+          console.error('API Error:', data.error);
+          throw new Error(data.error || 'Unknown error');
+        }
+      } catch (fetchError) {
+        console.error('Fetch error:', fetchError);
+        
+        // Add a fallback response
+        const errorResponse = {
+          id: Date.now().toString() + '-error',
+          text: "Sorry, I couldn't connect to the server right now. Please try again later.",
+          timestamp: new Date().toISOString(),
+          user: 'system',
+          role: 'assistant',
+        };
+        
+        setMessages(prevMessages => [...prevMessages, errorResponse]);
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (error) {
+      console.error('Error in message handling:', error);
+      Alert.alert('Error', 'Failed to send message. Please try again.');
+    }
+  };
+
+  // Add a useEffect to check if the interview time has passed and hide the banner
+  useEffect(() => {
+    if (pendingInterview) {
+      // Check if the interview has completed
+      if (isInterviewCompleted(pendingInterview)) {
+        console.log('Interview time has passed, hiding banner');
+        setPendingInterview(null);
+      }
+      
+      // Set up an interval to periodically check if the interview time has passed
+      const intervalId = setInterval(() => {
+        if (pendingInterview && isInterviewCompleted(pendingInterview)) {
+          console.log('Interview time has passed (interval check), hiding banner');
+          setPendingInterview(null);
+          clearInterval(intervalId);
+        }
+      }, 60000); // Check every minute
+      
+      return () => clearInterval(intervalId);
+    }
+  }, [pendingInterview]);
+
   return (
     <KeyboardAvoidingView 
       style={styles.container}
@@ -2662,14 +3129,15 @@ export default function ChatScreen({ route, navigation }) {
           ))}
         </ScrollView>
         <TouchableOpacity 
-          style={[
-            styles.refreshButton,
-            { opacity: isRefreshing ? 0.6 : 1 }
-          ]}
-          onPress={refreshInterviews}
+          style={styles.refreshButton}
+          onPress={handleRefreshSuggestions}
           disabled={isRefreshing}
         >
-          <Ionicons name="refresh" size={20} color="#1976D2" />
+          <Ionicons 
+            name="refresh" 
+            size={20} 
+            color={isRefreshing ? "#cccccc" : "#2563eb"} 
+          />
         </TouchableOpacity>
       </View>
 
@@ -3078,9 +3546,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   refreshButton: {
-    padding: 10,
-    backgroundColor: '#FFFFFF',
+    padding: 8,
     borderRadius: 20,
+    backgroundColor: '#f0f9ff',
+    marginLeft: 8,
+    alignSelf: 'center',
   },
   scheduleButton: {
     backgroundColor: '#007AFF',

@@ -323,14 +323,84 @@ def generate_chat_suggestions():
         job_title = data['jobTitle']
         company = data['company']
         recent_messages = data.get('recentMessages', [])
-
+        worker_jobs = data.get('workerJobs', [])  # Get worker jobs data from request
+        
+        print(f"DEBUG - Generate Chat Suggestions - Role: {role}")
+        print(f"DEBUG - Worker Jobs Data: {len(worker_jobs) if worker_jobs else 0} jobs")
+        
+        # Skip personalization if we're generating for the worker side
+        # or if no worker jobs data is provided
+        personalized_context = ""
+        job_titles = []
+        industries = []
+        skills = []
+        
+        if role == 'employer' and worker_jobs:
+            try:
+                # Extract job titles, industries, and skills from the worker jobs data
+                for job in worker_jobs:
+                    if job.get('title'):
+                        job_titles.append(job['title'])
+                    if job.get('industry'):
+                        industries.append(job['industry'])
+                    for skill in job.get('skills', []):
+                        if isinstance(skill, dict) and skill.get('name'):
+                            skills.append(skill['name'])
+                
+                # Create personalization context
+                if job_titles or industries or skills:
+                    personalized_context = f"""
+                    Worker profile information:
+                    - Previous job titles: {', '.join(job_titles) if job_titles else 'None'}
+                    - Industries: {', '.join(industries) if industries else 'None'}
+                    - Skills: {', '.join(skills[:5]) if skills else 'None'}
+                    
+                    Use this information to create personalized suggestion questions that reference the worker's background.
+                    For example, ask about their experience with specific skills or in specific roles.
+                    Make the suggestions sound natural and conversational, not like you're reading from their resume.
+                    """
+                    print(f"Generated personalized context based on {len(job_titles)} job titles and {len(skills)} skills")
+            except Exception as e:
+                print(f"Error processing worker jobs data: {str(e)}")
+                print(f"Traceback: {traceback.format_exc()}")
+        
         try:
             # Add timestamp to force variation
             current_time = datetime.now().strftime("%H:%M:%S")
             
-            messages = [
-                {"role": "system", "content": "You are a helpful assistant generating unique chat suggestions. Never repeat previous suggestions."},
-                {"role": "user", "content": f"""Generate 3 completely new, different questions/messages for a {role} chatting about a {job_title} position at {company}.
+            # Setup the system prompt
+            system_content = "You are a helpful assistant generating unique chat suggestions. Never repeat previous suggestions."
+            
+            if personalized_context:
+                system_content += personalized_context
+            
+            # Create a more specific prompt based on role
+            if role == 'employer':
+                user_content = f"""Generate 3 completely new, different questions/messages for an employer chatting with a potential worker about a {job_title} position at {company}.
+                Current time: {current_time}
+                Recent messages in the chat: {recent_messages}
+                
+                The suggestions should be:
+                - Completely different from any previous suggestions
+                - Natural and conversational
+                - Relevant to the context
+                - Professional but friendly
+                - Specific to the role/company
+                - Cover different aspects (e.g., experience, skills, work style)
+                """
+                
+                # Add personalized content if we have worker data
+                if job_titles or skills:
+                    user_content += f"""
+                    IMPORTANT: Personalize at least 2 suggestions based on the worker's background:
+                    - Previous roles: {', '.join(job_titles) if job_titles else 'None'}
+                    - Skills: {', '.join(skills[:5]) if skills else 'None'}
+                    
+                    For example, ask how their experience as a {job_titles[0] if job_titles else 'professional'} relates to this role,
+                    or how they've used their {skills[0] if skills else 'skills'} in previous positions.
+                    """
+            else:
+                user_content = f"""Generate 3 completely new, different questions/messages for a worker chatting about a {job_title} position at {company}.
                 Current time: {current_time}
                 Recent messages in the chat: {recent_messages}
                 
@@ -341,8 +411,13 @@ def generate_chat_suggestions():
                 - Professional but friendly
                 - Specific to the role/company
                 - Cover different aspects (e.g., culture, responsibilities, growth)
-                
-                Return only a JSON array of 3 unique strings."""}
+                """
+            
+            user_content += "\nReturn only a JSON array of 3 unique strings."
+            
+            messages = [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content}
             ]
             
             response = client.chat.completions.create(
@@ -358,7 +433,7 @@ def generate_chat_suggestions():
             
             # Ensure we have exactly 3 suggestions
             if not suggestions or len(suggestions) < 3:
-                fallback = get_fallback_suggestions(role)
+                fallback = get_fallback_suggestions(role, job_titles=job_titles if job_titles else None)
                 suggestions = (suggestions or []) + fallback
             
             # Randomize order
@@ -371,7 +446,8 @@ def generate_chat_suggestions():
             
         except Exception as e:
             print(f"Error generating suggestions: {e}")
-            suggestions = get_fallback_suggestions(role)
+            # Generate fallback suggestions, possibly with personalization
+            suggestions = get_fallback_suggestions(role, job_titles=job_titles)
             random.shuffle(suggestions)
             return jsonify({
                 "success": True,
@@ -379,41 +455,58 @@ def generate_chat_suggestions():
             })
             
     except Exception as e:
+        print(f"Error in generate-chat-suggestions: {str(e)}")
         return jsonify({
             "success": False,
             "error": f"Error: {str(e)}"
         }), 500
 
-def get_fallback_suggestions(role):
-    """Get role-specific fallback suggestions"""
-    worker_suggestions = [
-        "What opportunities for professional development are available?",
-        "Could you describe the team culture?",
-        "What does success look like in this role?",
-        "What are the biggest challenges in this position?",
-        "How would you describe the work-life balance?",
-        "What's the typical career progression for this role?",
-        "Can you tell me about the onboarding process?",
-        "What technologies or tools does the team use?",
-        "How does the team handle project deadlines?",
-        "What's your favorite part about working here?"
-    ]
-    
-    employer_suggestions = [
-        "What interests you most about this position?",
-        "Could you describe your ideal work environment?",
-        "What are your career goals?",
-        "How do you handle challenging situations?",
-        "What's your approach to problem-solving?",
-        "Could you share an example of a successful project?",
-        "What motivates you in your work?",
-        "How do you stay updated in your field?",
-        "What's your preferred management style?",
-        "What questions do you have about the role?"
-    ]
-    
-    suggestions = worker_suggestions if role == 'worker' else employer_suggestions
-    return random.sample(suggestions, 3)
+def get_fallback_suggestions(role, job_titles=None):
+    """Get role-specific fallback suggestions, with personalization if possible"""
+    if role == 'worker':
+        worker_suggestions = [
+            "What opportunities for professional development are available?",
+            "Could you describe the team culture?",
+            "What does success look like in this role?",
+            "What are the biggest challenges in this position?",
+            "How would you describe the work-life balance?",
+            "What's the typical career progression for this role?",
+            "Can you tell me about the onboarding process?",
+            "What technologies or tools does the team use?",
+            "How does the team handle project deadlines?",
+            "What's your favorite part about working here?"
+        ]
+        return random.sample(worker_suggestions, 3)
+    else:
+        # Employer suggestions, possibly personalized
+        default_employer_suggestions = [
+            "What interests you most about this position?",
+            "Could you describe your ideal work environment?",
+            "What are your career goals?",
+            "How do you handle challenging situations?",
+            "What's your approach to problem-solving?",
+            "Could you share an example of a successful project?",
+            "What motivates you in your work?",
+            "How do you stay updated in your field?",
+            "What's your preferred management style?",
+            "What questions do you have about the role?"
+        ]
+        
+        # If we have job titles, add some personalized suggestions
+        personalized_suggestions = []
+        if job_titles:
+            for title in job_titles[:2]:  # Use up to 2 job titles
+                personalized_suggestions.extend([
+                    f"I see you've worked as a {title}. How do those skills transfer to this position?",
+                    f"What aspects of your experience as a {title} would be most relevant here?",
+                    f"How did your time as a {title} prepare you for this role?",
+                    f"What challenges did you face as a {title} and how did you overcome them?",
+                    f"What accomplishments are you most proud of from your time as a {title}?"
+                ])
+        
+        # Combine and return
+        all_suggestions = personalized_suggestions + default_employer_suggestions
+        return random.sample(all_suggestions, 3)
 
 @app.route('/generate-overview-questions', methods=['POST', 'OPTIONS'])
 def generate_overview_questions():
